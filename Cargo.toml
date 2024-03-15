@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+  "hnsw",
+  "brute_force",
+]
