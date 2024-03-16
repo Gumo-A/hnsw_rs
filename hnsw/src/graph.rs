@@ -16,7 +16,7 @@ impl Graph {
     }
 
     pub fn add_edge(&mut self, node_a: i32, node_b: i32) {
-        if (node_a == node_b) && !self.self_connexions {
+        if (node_a == node_b) & !self.self_connexions {
             return ();
         }
         let a_neighbors = self
