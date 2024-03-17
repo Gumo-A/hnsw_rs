@@ -9,6 +9,12 @@ pub struct Graph {
 }
 
 impl Graph {
+    pub fn new() -> Self {
+        Graph {
+            nodes: HashMap::new(),
+            self_connexions: false,
+        }
+    }
     pub fn add_node(&mut self, node_id: i32, vector: Array<f32, Dim<[usize; 1]>>) {
         if !self.nodes.contains_key(&node_id) {
             self.nodes
