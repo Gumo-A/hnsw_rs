@@ -10,8 +10,47 @@ mod tests {
     use graph::Graph;
     use helpers::data::load_bf_data;
     use helpers::glove::load_glove_array;
+    use hnsw::HNSW;
     use ndarray::{Array1, Array2};
     use rand::Rng;
+
+    #[test]
+    fn hnsw_construction() {
+        let _index: HNSW = HNSW::new(12);
+        let _index: HNSW = HNSW::from_params(12, Some(9), None, None, None);
+        let _index: HNSW = HNSW::from_params(12, None, Some(18), None, None);
+        let _index: HNSW = HNSW::from_params(12, None, None, Some(0.25), None);
+        let _index: HNSW = HNSW::from_params(12, None, None, None, Some(100));
+        let _index: HNSW = HNSW::from_params(12, Some(9), Some(18), Some(0.25), Some(100));
+    }
+
+    #[test]
+    fn hnsw_insert() {
+        let mut rng = rand::thread_rng();
+        let mut index: HNSW = HNSW::new(12);
+        let n: usize = 100;
+
+        for i in 0..n {
+            // let vector = (0..100).map(|_| rng.gen::<f32>()).collect();
+            let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
+            index.insert(i.try_into().unwrap(), vector);
+        }
+
+        let already_in_index = 0;
+        let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
+        index.insert(already_in_index, vector);
+
+        assert_eq!(index.node_ids.len(), n);
+    }
+
+    #[test]
+    fn hnsw_distance_caching() {
+        let mut index: HNSW = HNSW::new(12);
+        index.cache_distance(0, 1, 0.5);
+        index.cache_distance(1, 0, 0.5);
+        assert_eq!(index.dist_cache.len(), 1);
+        assert_eq!(*index.dist_cache.get(&(0, 1)).unwrap(), 0.5);
+    }
 
     #[test]
     fn check_brute_force() {
