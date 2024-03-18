@@ -31,7 +31,6 @@ mod tests {
         let n: usize = 100;
 
         for i in 0..n {
-            // let vector = (0..100).map(|_| rng.gen::<f32>()).collect();
             let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
             index.insert(i.try_into().unwrap(), vector);
         }

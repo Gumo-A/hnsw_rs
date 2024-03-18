@@ -74,22 +74,137 @@ impl HNSW {
             self.layers.push(Graph::new());
             max_layer_nb += 1;
         }
-        max_layer_nb as i32
+        max_layer_nb
     }
 
     fn step_1(
-        &self,
+        &mut self,
         node_id: i32,
-        vector: Array<f32, Dim<[usize; 1]>>,
-        ep: HashSet<i32>,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        mut ep: HashSet<i32>,
         max_layer_nb: i32,
         current_layer_number: i32,
     ) -> HashSet<i32> {
-        let mut w: HashSet<i32> = HashSet::new();
-        for layer_number in (current_layer_number - 1..max_layer_nb + 1).rev() {
-            w = self.search_layer(layer_number, node_id, &vector, &ep, 1);
+        for layer_number in (current_layer_number + 1..max_layer_nb + 1).rev() {
+            ep = self.search_layer(layer_number, node_id, vector, &ep, 1);
         }
-        w
+        ep
+    }
+
+    fn step_2(
+        &mut self,
+        node_id: i32,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        mut ep: HashSet<i32>,
+        current_layer_number: i32,
+    ) {
+        for layer_nb in (0..current_layer_number + 1).rev() {
+            self.layers[layer_nb as usize].add_node(node_id, vector.clone());
+            if self.layers[layer_nb as usize].nodes.len() == 1 {
+                continue;
+            }
+
+            ep = self.search_layer(layer_nb, node_id, &vector, &ep, self.ef_cons);
+
+            let neighbors_to_connect =
+                self.select_heuristic(layer_nb, node_id, vector, &ep, false, true);
+            for neighbor in neighbors_to_connect.iter() {
+                self.layers[layer_nb as usize].add_edge(node_id, *neighbor);
+            }
+            self.prune_connexions(layer_nb, neighbors_to_connect);
+        }
+    }
+
+    fn prune_connexions(&mut self, layer_nb: i32, connexions_made: HashSet<i32>) {
+        for neighbor in connexions_made.iter() {
+            if ((layer_nb == 0) & (self.layers[layer_nb as usize].degree(*neighbor) > self.mmax0))
+                | ((layer_nb > 0) & (self.layers[layer_nb as usize].degree(*neighbor) > self.mmax))
+            {
+                let limit = if layer_nb == 0 { self.mmax0 } else { self.mmax };
+
+                let neighbor_vec = self.layers[layer_nb as usize].node(*neighbor).1.clone();
+                let old_neighbors = self.layers[layer_nb as usize].neighbors(*neighbor).clone();
+                let new_neighbors = self.select_heuristic(
+                    layer_nb,
+                    *neighbor,
+                    &neighbor_vec,
+                    &old_neighbors,
+                    true,
+                    false,
+                );
+
+                for old_neighbor in old_neighbors.iter() {
+                    self.layers[layer_nb as usize].remove_edge(*neighbor, *old_neighbor);
+                }
+                for (idx, new_neighbor) in new_neighbors.iter().enumerate() {
+                    self.layers[layer_nb as usize].add_edge(*neighbor, *new_neighbor);
+                    if idx == limit as usize {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn select_heuristic(
+        &mut self,
+        layer_nb: i32,
+        node_id: i32,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        candidates: &HashSet<i32>,
+        extend_cands: bool,
+        keep_pruned: bool,
+    ) -> HashSet<i32> {
+        let mut candidates = candidates.clone();
+        let mut selected = HashSet::new();
+        let mut pruned_selected: HashSet<i32> = HashSet::new();
+
+        if extend_cands {
+            for cand in candidates.clone().iter() {
+                for neighbor in self.layers[layer_nb as usize].neighbors(*cand) {
+                    if *neighbor != node_id {
+                        candidates.insert(*neighbor);
+                    }
+                }
+            }
+        }
+
+        while (candidates.len() > 0) & (selected.len() < self.m as usize) {
+            let (e, dist_e) =
+                self.get_nearest(layer_nb as usize, &candidates, vector, node_id, false);
+            candidates.remove(&e);
+
+            if selected.len() == 0 {
+                selected.insert(e);
+                continue;
+            }
+
+            let e_vector = self.layers[layer_nb as usize].node(e).1.clone();
+            let (_, dist_from_r) =
+                self.get_nearest(layer_nb as usize, &selected, &e_vector, e, false);
+
+            if dist_e < dist_from_r {
+                selected.insert(e);
+            } else {
+                pruned_selected.insert(e);
+            }
+
+            if keep_pruned {
+                while (pruned_selected.len() > 0) & (selected.len() < self.m as usize) {
+                    let (e, _) = self.get_nearest(
+                        layer_nb as usize,
+                        &pruned_selected,
+                        vector,
+                        node_id,
+                        false,
+                    );
+                    pruned_selected.remove(&e);
+                    selected.insert(e);
+                }
+            }
+        }
+
+        return selected;
     }
 
     pub fn insert(&mut self, node_id: i32, mut vector: Array<f32, Dim<[usize; 1]>>) {
@@ -111,11 +226,13 @@ impl HNSW {
         let max_layer_nb = self.define_new_layers(current_layer_nb, node_id);
 
         let mut ep = HashSet::from([self.ep]);
-        ep = self.step_1(node_id, vector, ep, max_layer_nb, current_layer_nb);
+        ep = self.step_1(node_id, &vector, ep, max_layer_nb, current_layer_nb);
+        self.step_2(node_id, &vector, ep, current_layer_nb);
+        self.node_ids.insert(node_id);
     }
 
     fn search_layer(
-        &self,
+        &mut self,
         layer_nb: i32,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
@@ -134,22 +251,21 @@ impl HNSW {
                 self.get_nearest(layer_nb, &candidates, &vector, node_id, false);
             candidates.remove(&candidate);
 
-            let (furthest, f2q_dist) =
-                self.get_nearest(layer_nb, &selected, &vector, node_id, true);
+            let (_, f2q_dist) = self.get_nearest(layer_nb, &selected, &vector, node_id, true);
 
             if cand2query_dist > f2q_dist {
                 break;
             }
 
-            for neighbor in self.layers[layer_nb].neighbors(candidate).iter() {
+            for neighbor in self.layers[layer_nb].neighbors(candidate).clone().iter() {
                 if !visited.contains(neighbor) {
                     visited.insert(*neighbor);
-                    let neighbor_vec = &self.layers[layer_nb].node(*neighbor).1;
+                    let neighbor_vec = self.layers[layer_nb].node(*neighbor).1.clone();
 
                     let (furthest, f2q_dist) =
                         self.get_nearest(layer_nb, &selected, &vector, node_id, true);
 
-                    let n2q_dist = v2v_dist(&vector, neighbor_vec);
+                    let n2q_dist = v2v_dist(&vector, &neighbor_vec);
 
                     if (n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(*neighbor);
@@ -167,7 +283,7 @@ impl HNSW {
     }
 
     fn get_nearest(
-        &self,
+        &mut self,
         layer_nb: usize,
         candidates: &HashSet<i32>,
         vector: &Array<f32, Dim<[usize; 1]>>,
@@ -176,9 +292,10 @@ impl HNSW {
     ) -> (i32, f32) {
         let mut cand_dists: Vec<(i32, f32)> = Vec::new();
         for cand in candidates.iter() {
-            let cand_vec = &self.layers[layer_nb].node(*cand).1;
+            let cand_vec = &self.layers[layer_nb].node(*cand).1.clone();
             // TODO: cache dist and use cached dists
-            cand_dists.push((*cand, v2v_dist(vector, cand_vec)));
+            let dist: f32 = self.get_dist(node_id, *cand, vector, cand_vec);
+            cand_dists.push((*cand, dist));
         }
         cand_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
@@ -186,6 +303,23 @@ impl HNSW {
             return *cand_dists.last().unwrap();
         } else {
             return cand_dists[0];
+        }
+    }
+
+    fn get_dist(
+        &mut self,
+        node_a: i32,
+        node_b: i32,
+        a_vec: &Array<f32, Dim<[usize; 1]>>,
+        b_vec: &Array<f32, Dim<[usize; 1]>>,
+    ) -> f32 {
+        let key = (node_a.min(node_b), node_a.max(node_b));
+        if self.dist_cache.contains_key(&key) {
+            return *self.dist_cache.get(&key).unwrap();
+        } else {
+            let dist = v2v_dist(a_vec, b_vec);
+            self.dist_cache.insert(key, dist);
+            dist
         }
     }
 }

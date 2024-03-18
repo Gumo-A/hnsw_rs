@@ -72,6 +72,14 @@ impl Graph {
         // .to_owned()
     }
 
+    pub fn degree(&self, node_id: i32) -> i32 {
+        self.nodes
+            .get(&node_id)
+            .expect("Could not get the neighbors of {node_id}")
+            .0
+            .len() as i32
+    }
+
     pub fn order(&self) -> usize {
         self.nodes.len()
     }
