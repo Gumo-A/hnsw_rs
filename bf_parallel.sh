@@ -1,8 +1,8 @@
 (trap 'kill 0' SIGINT; \
- /home/gamal/rust/hnsw_rs/target/release/brute_force 100 400000 6 0 & \
- /home/gamal/rust/hnsw_rs/target/release/brute_force 100 400000 6 1 & \
- /home/gamal/rust/hnsw_rs/target/release/brute_force 100 400000 6 2 & \
- /home/gamal/rust/hnsw_rs/target/release/brute_force 100 400000 6 3 & \
- /home/gamal/rust/hnsw_rs/target/release/brute_force 100 400000 6 4 & \
- /home/gamal/rust/hnsw_rs/target/release/brute_force 100 400000 6 5 & \
+ ./target/release/brute_force $1 $2 6 0 & \
+ ./target/release/brute_force $1 $2 6 1 & \
+ ./target/release/brute_force $1 $2 6 2 & \
+ ./target/release/brute_force $1 $2 6 3 & \
+ ./target/release/brute_force $1 $2 6 4 & \
+ ./target/release/brute_force $1 $2 6 5 & \
  wait)

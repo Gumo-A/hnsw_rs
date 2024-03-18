@@ -67,6 +67,33 @@ impl HNSW {
             .insert((node_a.min(node_b), node_a.max(node_b)), distance);
     }
 
+    pub fn ann_by_vector(
+        &mut self,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        n: i32,
+        ef: i32,
+    ) -> Vec<i32> {
+        let mut ep = HashSet::from([self.ep]);
+        let nb_layer = self.layers.len();
+
+        for layer_nb in (0..nb_layer).rev() {
+            ep = self.search_layer(layer_nb as i32, -1, vector, &ep, 1);
+        }
+
+        let neighbors = self.search_layer(0, -1, vector, &ep, ef);
+        let mut nearest_neighbors: Vec<(i32, f32)> = Vec::new();
+
+        for neighbor in neighbors.iter() {
+            let neighbor_vec = &self.layers[0].node(*neighbor).1.clone();
+            let dist: f32 = self.get_dist(-1, *neighbor, vector, neighbor_vec);
+            nearest_neighbors.push((*neighbor, dist));
+        }
+        nearest_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        let anns: Vec<i32> = Vec::from_iter(nearest_neighbors.iter().map(|x| x.0));
+        anns[0..n as usize].to_vec()
+    }
+
     fn define_new_layers(&mut self, current_layer_nb: i32, node_id: i32) -> i32 {
         let mut max_layer_nb: i32 = (self.layers.len() - 1).try_into().unwrap();
         while current_layer_nb > max_layer_nb {
@@ -208,6 +235,9 @@ impl HNSW {
     }
 
     pub fn insert(&mut self, node_id: i32, mut vector: Array<f32, Dim<[usize; 1]>>) {
+        if node_id < 0 {
+            return;
+        } // TODO: report the node is not being added because id is negative
         if (self.layers.len() == 0) & (self.node_ids.is_empty()) {
             self.node_ids.insert(node_id);
             self.layers.push(Graph::new());
@@ -293,7 +323,6 @@ impl HNSW {
         let mut cand_dists: Vec<(i32, f32)> = Vec::new();
         for cand in candidates.iter() {
             let cand_vec = &self.layers[layer_nb].node(*cand).1.clone();
-            // TODO: cache dist and use cached dists
             let dist: f32 = self.get_dist(node_id, *cand, vector, cand_vec);
             cand_dists.push((*cand, dist));
         }
@@ -318,7 +347,9 @@ impl HNSW {
             return *self.dist_cache.get(&key).unwrap();
         } else {
             let dist = v2v_dist(a_vec, b_vec);
-            self.dist_cache.insert(key, dist);
+            if (key.0 > 0) & (key.1 > 0) {
+                self.dist_cache.insert(key, dist);
+            }
             dist
         }
     }
