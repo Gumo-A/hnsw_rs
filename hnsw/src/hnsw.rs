@@ -91,7 +91,7 @@ impl HNSW {
         nearest_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
         let anns: Vec<i32> = Vec::from_iter(nearest_neighbors.iter().map(|x| x.0));
-        anns[0..n as usize].to_vec()
+        anns[1..1 + n as usize].to_vec()
     }
 
     fn define_new_layers(&mut self, current_layer_nb: i32, node_id: i32) -> i32 {
