@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use crate::graph::Graph;
 use crate::helpers::distance::{norm_vector, v2v_dist};
 use ndarray::{Array, Dim};
+use rand::rngs::StdRng;
 use rand::Rng;
+use rand::SeedableRng;
 
 pub struct HNSW {
     m: i32,
@@ -15,6 +17,7 @@ pub struct HNSW {
     pub node_ids: HashSet<i32>,
     ep: i32,
     pub layers: Vec<Graph>,
+    rng: rand::rngs::StdRng,
 }
 
 impl HNSW {
@@ -29,6 +32,8 @@ impl HNSW {
             dist_cache: HashMap::new(),
             ep: -1,
             layers: vec![],
+            rng: StdRng::seed_from_u64(0),
+            // rng: rand::thread_rng(),
         }
     }
 
@@ -49,6 +54,8 @@ impl HNSW {
             dist_cache: HashMap::new(),
             ep: -1,
             layers: vec![],
+            rng: StdRng::seed_from_u64(0),
+            // rng: rand::thread_rng(),
         }
     }
 
@@ -59,7 +66,25 @@ impl HNSW {
         println!("ml = {}", self.ml);
         println!("ef_cons = {}", self.ef_cons);
         println!("Nb. layers = {}", self.layers.len());
-        println!("Nb. of nodes = {}", self.node_ids.len())
+        println!("Nb. of nodes = {}", self.node_ids.len());
+        // for (idx, layer) in self.layers.iter().enumerate() {
+        //     println!("NB. nodes in layer {idx}: {}", layer.order());
+        //     let mut nodes_alone = 0;
+        //     for (node, _) in layer.nodes.iter() {
+        //         nodes_alone += if layer.degree(*node) == 0 { 1 } else { 0 };
+        //     }
+        //     println!("Nodes with degree 0 in layer {idx} = {nodes_alone}")
+        // }
+        let nodes: Vec<&i32> = self
+            .layers
+            .last()
+            .unwrap()
+            .nodes
+            .iter()
+            .map(|x| x.0)
+            .collect();
+        println!("Nodes of last layer {nodes:?}");
+        println!("ep: {:?}", self.ep);
     }
 
     pub fn cache_distance(&mut self, node_a: i32, node_b: i32, distance: f32) {
@@ -76,16 +101,21 @@ impl HNSW {
         let mut ep = HashSet::from([self.ep]);
         let nb_layer = self.layers.len();
 
+        // println!("{:?}", ep);
         for layer_nb in (0..nb_layer).rev() {
             ep = self.search_layer(layer_nb as i32, -1, vector, &ep, 1);
+            // println!("{:?}", ep);
         }
+        // for e in ep.iter() {
+        // println!("{:?}", self.layers[0].neighbors(*e));
+        // }
 
         let neighbors = self.search_layer(0, -1, vector, &ep, ef);
         let mut nearest_neighbors: Vec<(i32, f32)> = Vec::new();
 
         for neighbor in neighbors.iter() {
             let neighbor_vec = &self.layers[0].node(*neighbor).1.clone();
-            let dist: f32 = self.get_dist(-1, *neighbor, vector, neighbor_vec);
+            let dist: f32 = self.get_dist(-1, -2, vector, neighbor_vec);
             nearest_neighbors.push((*neighbor, dist));
         }
         nearest_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -96,10 +126,12 @@ impl HNSW {
 
     fn define_new_layers(&mut self, current_layer_nb: i32, node_id: i32) -> i32 {
         let mut max_layer_nb: i32 = (self.layers.len() - 1).try_into().unwrap();
-        while current_layer_nb > max_layer_nb {
+        if current_layer_nb > max_layer_nb {
             self.ep = node_id;
-            self.layers.push(Graph::new());
-            max_layer_nb += 1;
+            while current_layer_nb > max_layer_nb {
+                self.layers.push(Graph::new());
+                max_layer_nb += 1;
+            }
         }
         max_layer_nb
     }
@@ -113,6 +145,9 @@ impl HNSW {
         current_layer_number: i32,
     ) -> HashSet<i32> {
         for layer_number in (current_layer_number + 1..max_layer_nb + 1).rev() {
+            if self.layers[layer_number as usize].order() == 0 {
+                continue;
+            }
             ep = self.search_layer(layer_number, node_id, vector, &ep, 1);
         }
         ep
@@ -127,18 +162,16 @@ impl HNSW {
     ) {
         for layer_nb in (0..current_layer_number + 1).rev() {
             self.layers[layer_nb as usize].add_node(node_id, vector.clone());
-            if self.layers[layer_nb as usize].nodes.len() == 1 {
-                continue;
-            }
 
             ep = self.search_layer(layer_nb, node_id, &vector, &ep, self.ef_cons);
 
             let neighbors_to_connect =
-                self.select_heuristic(layer_nb, node_id, vector, &ep, false, true);
+                self.select_heuristic(layer_nb, node_id, vector, &ep, self.m, false, true);
+
             for neighbor in neighbors_to_connect.iter() {
                 self.layers[layer_nb as usize].add_edge(node_id, *neighbor);
             }
-            self.prune_connexions(layer_nb, neighbors_to_connect);
+            // self.prune_connexions(layer_nb, neighbors_to_connect);
         }
     }
 
@@ -156,8 +189,9 @@ impl HNSW {
                     *neighbor,
                     &neighbor_vec,
                     &old_neighbors,
-                    true,
+                    limit,
                     false,
+                    true,
                 );
 
                 for old_neighbor in old_neighbors.iter() {
@@ -165,7 +199,7 @@ impl HNSW {
                 }
                 for (idx, new_neighbor) in new_neighbors.iter().enumerate() {
                     self.layers[layer_nb as usize].add_edge(*neighbor, *new_neighbor);
-                    if idx == limit as usize {
+                    if idx + 1 == limit as usize {
                         break;
                     }
                 }
@@ -179,24 +213,25 @@ impl HNSW {
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
         candidates: &HashSet<i32>,
+        m: i32,
         extend_cands: bool,
         keep_pruned: bool,
     ) -> HashSet<i32> {
         let mut candidates = candidates.clone();
         let mut selected = HashSet::new();
-        let mut pruned_selected: HashSet<i32> = HashSet::new();
 
         if extend_cands {
             for cand in candidates.clone().iter() {
                 for neighbor in self.layers[layer_nb as usize].neighbors(*cand) {
-                    if *neighbor != node_id {
+                    if !candidates.contains(neighbor) {
                         candidates.insert(*neighbor);
                     }
                 }
             }
         }
+        let mut pruned_selected: HashSet<i32> = HashSet::new();
 
-        while (candidates.len() > 0) & (selected.len() < self.m as usize) {
+        while (candidates.len() > 0) & (selected.len() < m as usize) {
             let (e, dist_e) =
                 self.get_nearest(layer_nb as usize, &candidates, vector, node_id, false);
             candidates.remove(&e);
@@ -217,7 +252,7 @@ impl HNSW {
             }
 
             if keep_pruned {
-                while (pruned_selected.len() > 0) & (selected.len() < self.m as usize) {
+                while (pruned_selected.len() > 0) & (selected.len() < m as usize) {
                     let (e, _) = self.get_nearest(
                         layer_nb as usize,
                         &pruned_selected,
@@ -234,25 +269,32 @@ impl HNSW {
         return selected;
     }
 
-    pub fn insert(&mut self, node_id: i32, mut vector: Array<f32, Dim<[usize; 1]>>) {
+    pub fn insert(&mut self, node_id: i32, vector: Array<f32, Dim<[usize; 1]>>) {
         if node_id < 0 {
             return;
         } // TODO: report the node is not being added because id is negative
         if (self.layers.len() == 0) & (self.node_ids.is_empty()) {
             self.node_ids.insert(node_id);
-            self.layers.push(Graph::new());
-            self.layers[0].add_node(node_id, vector);
+
+            // TODO: This is a cheap way to make the index work
+            // but there is a problem linked to the addition of new layers.
+            // If during insertion, I insert a new layer on top of the ones before,
+            // (re-asaigning the entry point to the inserted node)
+            // The results are all wrong.
+            for lyr_nb in 0..10 {
+                self.layers.push(Graph::new());
+                self.layers[lyr_nb].add_node(node_id, vector.clone());
+            }
+
             self.ep = node_id;
             return;
         } else if self.node_ids.contains(&node_id) {
             return;
         }
 
-        let mut rng = rand::thread_rng();
-
-        vector = norm_vector(vector);
+        // vector = norm_vector(vector);
         let current_layer_nb: i32 =
-            (-rng.gen::<f32>().log(std::f32::consts::E) * self.ml).floor() as i32;
+            (-self.rng.gen::<f32>().log(std::f32::consts::E) * self.ml).floor() as i32;
         let max_layer_nb = self.define_new_layers(current_layer_nb, node_id);
 
         let mut ep = HashSet::from([self.ep]);
@@ -295,7 +337,7 @@ impl HNSW {
                     let (furthest, f2q_dist) =
                         self.get_nearest(layer_nb, &selected, &vector, node_id, true);
 
-                    let n2q_dist = v2v_dist(&vector, &neighbor_vec);
+                    let n2q_dist = self.get_dist(node_id, *neighbor, &vector, &neighbor_vec);
 
                     if (n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(*neighbor);
@@ -331,7 +373,7 @@ impl HNSW {
         if reverse {
             return *cand_dists.last().unwrap();
         } else {
-            return cand_dists[0];
+            return *cand_dists.first().unwrap();
         }
     }
 
@@ -344,10 +386,11 @@ impl HNSW {
     ) -> f32 {
         let key = (node_a.min(node_b), node_a.max(node_b));
         if self.dist_cache.contains_key(&key) {
+            // if false {
             return *self.dist_cache.get(&key).unwrap();
         } else {
             let dist = v2v_dist(a_vec, b_vec);
-            if (key.0 > 0) & (key.1 > 0) {
+            if (key.0 >= 0) & (key.1 >= 0) {
                 self.dist_cache.insert(key, dist);
             }
             dist

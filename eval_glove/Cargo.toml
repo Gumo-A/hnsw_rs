@@ -9,3 +9,4 @@ edition = "2021"
 hnsw = { path = "../hnsw"}
 indicatif = "0.17.8"
 ndarray = "0.15.6"
+rand = "0.8.5"

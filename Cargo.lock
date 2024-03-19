@@ -50,6 +50,7 @@ dependencies = [
  "hnsw",
  "indicatif",
  "ndarray",
+ "rand",
 ]
 
 [[package]]

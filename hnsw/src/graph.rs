@@ -27,6 +27,7 @@ impl Graph {
         if (!self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b))
             | ((node_a == node_b) & !self.self_connexions)
         {
+            println!("didnt add edge");
             return ();
         }
         let a_neighbors = self
