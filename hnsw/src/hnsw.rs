@@ -1,9 +1,11 @@
 use ndarray::{Array, Dim};
 use nohash_hasher::BuildNoHashHasher;
-use rand::rngs::StdRng;
+// use rand::rngs::StdRng;
 use rand::Rng;
-use rand::SeedableRng;
+// use rand::SeedableRng;
 use std::collections::{HashMap, HashSet};
+use std::fs::{create_dir, File};
+use std::io::{BufWriter, Write};
 
 use crate::graph::Graph;
 use crate::helpers::distance::v2v_dist;
@@ -15,11 +17,12 @@ pub struct HNSW {
     mmax0: i32,
     ml: f32,
     ef_cons: i32,
+    ep: i32,
     pub dist_cache: HashMap<(i32, i32), f32>,
     pub node_ids: HashSet<i32, BuildNoHashHasher<i32>>,
-    ep: i32,
     pub layers: HashMap<i32, Graph, BuildNoHashHasher<i32>>,
-    rng: rand::rngs::StdRng,
+    rng: rand::rngs::ThreadRng,
+    // rng: rand::rngs::StdRng,
 }
 
 impl HNSW {
@@ -35,7 +38,8 @@ impl HNSW {
             dist_cache: HashMap::new(),
             ep: -1,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
-            rng: StdRng::seed_from_u64(0),
+            rng: rand::thread_rng(),
+            // rng: StdRng::seed_from_u64(0),
         }
     }
 
@@ -58,7 +62,8 @@ impl HNSW {
             dist_cache: HashMap::new(),
             ep: -1,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
-            rng: StdRng::seed_from_u64(0),
+            rng: rand::thread_rng(),
+            // rng: StdRng::seed_from_u64(0),
         }
     }
 
@@ -480,5 +485,15 @@ impl HNSW {
             }
             dist
         }
+    }
+
+    pub fn save(&self, path: &str) -> std::io::Result<()> {
+        // TODO: serialize params, vectors, node ids and edges
+        // Either in multiple files or in a single file.
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer(&mut writer, &self.node_ids)?;
+        writer.flush()?;
+        Ok(())
     }
 }
