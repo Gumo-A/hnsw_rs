@@ -8,9 +8,6 @@ use hnsw::hnsw::HNSW;
 use ndarray::s;
 
 use indicatif::{ProgressBar, ProgressStyle};
-use rand::rngs::StdRng;
-use rand::Rng;
-use rand::SeedableRng;
 
 fn main() {
     let (dim, lim) = parse_args();
@@ -20,53 +17,38 @@ fn main() {
         let bar = ProgressBar::new(lim.try_into().unwrap());
         bar.set_style(
             ProgressStyle::with_template(
-                "{msg} {wide_bar} {human_pos}/{human_len} {percent}% [ ETA: {eta} : Elapsed: {elapsed} ] {per_sec}",
+                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
             )
             .unwrap(),
         );
         bar.set_message(format!("Inserting Embeddings"));
-        let mut index = HNSW::new(36);
+        let mut index = HNSW::new(20, 36);
 
         for idx in 0..lim {
             bar.inc(1);
             let vector = embeddings.slice(s![idx, ..]).clone().to_owned();
             index.insert(idx as i32, vector);
         }
+        index.remove_unused();
 
         index.print_params();
 
         let bf_data = load_bf_data(dim, lim).unwrap();
 
-        // let n = 900;
-        // let vector = embeddings.slice(s![n, ..]);
-        // let example_bf: Vec<String> = bf_data
-        //     .get(&n)
-        //     .unwrap()
-        //     .iter()
-        //     .map(|x| words[x.0].clone())
-        //     .collect();
-        // let anns = index.ann_by_vector(&vector.to_owned(), 10, 36);
-        // let example_ann: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
-        // let trues_ids: Vec<usize> = bf_data.get(&n).unwrap().iter().map(|x| x.0).collect();
-        // println!("{:?}", trues_ids);
-        // println!("{:?}", anns);
-        // println!("{:?}", example_bf);
-        // println!("{:?}", example_ann);
-
-        // for (i, idx) in bf_data.keys().enumerate() {
-        //     if i > 10 {
-        //         break;
-        //     }
-        //     let vector = embeddings.slice(s![*idx, ..]);
-        //     let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
-        //     println!("ANNs of {}", words[*idx]);
-        //     for ann in anns.iter() {
-        //         println!("{}", words[*ann as usize]);
-        //     }
-        // }
+        for (i, idx) in bf_data.keys().enumerate() {
+            if i > 3 {
+                break;
+            }
+            let vector = embeddings.slice(s![*idx, ..]);
+            let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
+            println!("ANNs of {}", words[*idx]);
+            let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
+            println!("{:?}", anns_words);
+        }
 
         for ef in [11, 18, 24, 36].iter() {
-            let bar = ProgressBar::new(lim.try_into().unwrap());
+            let sample_size: usize = 1000;
+            let bar = ProgressBar::new(sample_size as u64);
             bar.set_style(
                 ProgressStyle::with_template(
                     "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
@@ -76,7 +58,10 @@ fn main() {
             bar.set_message(format!("Finding ANNs ef={ef}"));
 
             let mut recall_10: HashMap<i32, f32> = HashMap::new();
-            for idx in bf_data.keys() {
+            for (i, idx) in bf_data.keys().enumerate() {
+                if i > sample_size {
+                    break;
+                }
                 bar.inc(1);
                 let vector = embeddings.slice(s![*idx, ..]);
                 let anns = index.ann_by_vector(&vector.to_owned(), 10, *ef);
@@ -94,13 +79,12 @@ fn main() {
                 }
                 recall_10.insert(*idx as i32, (hits as f32) / 10.0);
             }
-            assert_eq!(recall_10.len(), lim);
             let mut avg_recall = 0.0;
             for (_, recall) in recall_10.iter() {
                 avg_recall += recall;
             }
-            avg_recall /= lim as f32;
-            println!("Average recall was {avg_recall}");
+            avg_recall /= sample_size as f32;
+            println!("Recall@10 {avg_recall}");
         }
     }
 }

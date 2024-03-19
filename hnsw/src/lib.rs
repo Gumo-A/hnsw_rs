@@ -16,18 +16,18 @@ mod tests {
 
     #[test]
     fn hnsw_construction() {
-        let _index: HNSW = HNSW::new(12);
-        let _index: HNSW = HNSW::from_params(12, Some(9), None, None, None);
-        let _index: HNSW = HNSW::from_params(12, None, Some(18), None, None);
-        let _index: HNSW = HNSW::from_params(12, None, None, Some(0.25), None);
-        let _index: HNSW = HNSW::from_params(12, None, None, None, Some(100));
-        let _index: HNSW = HNSW::from_params(12, Some(9), Some(18), Some(0.25), Some(100));
+        let _index: HNSW = HNSW::new(3, 12);
+        let _index: HNSW = HNSW::from_params(3, 12, Some(9), None, None, None);
+        let _index: HNSW = HNSW::from_params(3, 12, None, Some(18), None, None);
+        let _index: HNSW = HNSW::from_params(3, 12, None, None, Some(0.25), None);
+        let _index: HNSW = HNSW::from_params(3, 12, None, None, None, Some(100));
+        let _index: HNSW = HNSW::from_params(3, 12, Some(9), Some(18), Some(0.25), Some(100));
     }
 
     #[test]
     fn hnsw_insert() {
         let mut rng = rand::thread_rng();
-        let mut index: HNSW = HNSW::new(12);
+        let mut index: HNSW = HNSW::new(3, 12);
         let n: usize = 100;
 
         for i in 0..n {
@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn hnsw_distance_caching() {
-        let mut index: HNSW = HNSW::new(12);
+        let mut index: HNSW = HNSW::new(3, 12);
         index.cache_distance(0, 1, 0.5);
         index.cache_distance(1, 0, 0.5);
         assert_eq!(index.dist_cache.len(), 1);
