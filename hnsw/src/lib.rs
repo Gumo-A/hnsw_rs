@@ -56,7 +56,7 @@ mod tests {
     #[test]
     fn hnsw_serialization() -> std::io::Result<()> {
         let index_path = "/home/gamal/indices/tests/test_hnsw";
-        let index = HNSW::new(10, 12, Some(100));
+        let index = HNSW::new(25, 42, Some(100));
 
         let mut rng = rand::thread_rng();
         let mut index: HNSW = HNSW::new(3, 12, None);

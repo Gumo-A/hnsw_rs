@@ -5,7 +5,7 @@ use rand::Rng;
 // use rand::SeedableRng;
 use std::collections::{HashMap, HashSet};
 use std::fs::{create_dir_all, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 
 use crate::graph::Graph;
 use crate::helpers::distance::v2v_dist;
@@ -531,31 +531,45 @@ impl HNSW {
     pub fn load(path: &str) -> std::io::Result<Self> {
         let paths = std::fs::read_dir(path)?;
 
+        let mut params: HashMap<String, f32> = HashMap::new();
+        let mut node_ids: HashSet<i32, BuildNoHashHasher<i32>> =
+            HashSet::with_hasher(BuildNoHashHasher::default());
+        let mut layers: HashMap<i32, Graph, BuildNoHashHasher<i32>> =
+            HashMap::with_hasher(BuildNoHashHasher::default());
+
         // TODO
-        // for file_path in paths {
-        //     let file_name: DirEntry = file_path?;
-        //     let file = File::open(file_name.path())?;
-        //     let reader = BufReader::new(file);
+        for file_path in paths {
+            let file_name = file_path?;
+            let file = File::open(file_name.path())?;
+            let reader = BufReader::new(file);
 
-        //     // if file_name.file_name()
-
-        //     let split_data: HashMap<usize, Vec<(usize, f32)>> = serde_json::from_reader(reader)?;
-        //     for key in split_data.keys().into_iter() {
-        //         bf_data.insert(*key, split_data.get(key).unwrap().clone());
-        //     }
-        // }
+            if file_name.file_name().to_str().unwrap().contains("params") {
+                let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
+                for (key, val) in content.iter() {
+                    params.insert(String::from(key), *val);
+                }
+            } else if file_name.file_name().to_str().unwrap().contains("node_ids") {
+                let content: HashSet<i32> = serde_json::from_reader(reader)?;
+                for val in content.iter() {
+                    node_ids.insert(*val);
+                }
+            } else if file_name.file_name().to_str().unwrap().contains("layer") {
+                // TODO: with regex crate
+                // let layer_nb: u8 =
+            }
+        }
 
         Ok(Self {
             max_layers: 0,
-            m: 0,
-            mmax: 0,
-            mmax0: 0,
-            ml: 0.0,
-            ef_cons: 0,
-            ep: 0,
+            m: *params.get("m").unwrap() as i32,
+            mmax: *params.get("mmax").unwrap() as i32,
+            mmax0: *params.get("mmax0").unwrap() as i32,
+            ml: *params.get("ml").unwrap() as f32,
+            ef_cons: *params.get("ef_cons").unwrap() as i32,
+            ep: *params.get("ep").unwrap() as i32,
             dist_cache: HashMap::new(),
-            node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
-            layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            node_ids,
+            layers,
             rng: rand::thread_rng(),
         })
     }
