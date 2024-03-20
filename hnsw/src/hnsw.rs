@@ -26,14 +26,14 @@ pub struct HNSW {
 }
 
 impl HNSW {
-    pub fn new(max_layers: i32, m: i32) -> Self {
+    pub fn new(max_layers: i32, m: i32, ef_cons: Option<i32>) -> Self {
         Self {
             max_layers,
             m,
             mmax: m + m / 2,
             mmax0: m * 2,
             ml: 1.0 / (m as f32).log(std::f32::consts::E),
-            ef_cons: m * 2,
+            ef_cons: ef_cons.unwrap_or(m * 2),
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             dist_cache: HashMap::new(),
             ep: -1,

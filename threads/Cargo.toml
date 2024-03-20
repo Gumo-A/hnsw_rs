@@ -1,12 +1,8 @@
 [package]
-name = "brute_force"
+name = "threads"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-hnsw = { path = "../hnsw"}
-indicatif = "0.17.8"
-ndarray = { version = "0.15.6" }
-serde_json = "1.0.114"

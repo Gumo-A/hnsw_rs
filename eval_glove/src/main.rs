@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use hnsw::helpers::args::parse_args;
+use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::HNSW;
@@ -10,7 +10,7 @@ use ndarray::s;
 use indicatif::{ProgressBar, ProgressStyle};
 
 fn main() {
-    let (dim, lim) = parse_args();
+    let (dim, lim, m, ef_cons) = parse_args_eval();
     let (words, embeddings) = load_glove_array(dim as i32, lim as i32, true, 0).unwrap();
 
     for _ in 0..1 {
@@ -22,7 +22,8 @@ fn main() {
             .unwrap(),
         );
         bar.set_message(format!("Inserting Embeddings"));
-        let mut index = HNSW::new(20, 36);
+        let mut index = HNSW::new(20, m, Some(ef_cons));
+        index.print_params();
 
         for idx in 0..lim {
             bar.inc(1);

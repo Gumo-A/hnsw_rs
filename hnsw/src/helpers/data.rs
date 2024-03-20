@@ -3,10 +3,10 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Result};
 
-pub fn split_vector(vector: Vec<i32>, nb_splits: usize, split_to_compute: usize) -> Vec<i32> {
+pub fn split_vector(vector: Vec<i32>, nb_splits: u8, split_to_compute: u8) -> Vec<i32> {
     let mut split_vector: Vec<Vec<i32>> = Vec::new();
 
-    let per_split = vector.len() / nb_splits;
+    let per_split = vector.len() / nb_splits as usize;
 
     let mut buffer = 0;
     for idx in (0..nb_splits).into_iter() {
@@ -25,7 +25,7 @@ pub fn split_vector(vector: Vec<i32>, nb_splits: usize, split_to_compute: usize)
 
     assert!(sum_lens == vector.len(), "sum: {sum_lens}");
 
-    split_vector[split_to_compute].to_owned()
+    split_vector[split_to_compute as usize].to_owned()
 }
 
 pub fn load_bf_data(dim: usize, lim: usize) -> Result<HashMap<usize, Vec<(usize, f32)>>> {

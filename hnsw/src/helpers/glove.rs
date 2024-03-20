@@ -60,9 +60,9 @@ pub fn load_glove_array(
 
 pub fn brute_force_nns(
     nb_of_nn: i32,
-    embeddings: Array2<f32>,
+    embeddings: &Array2<f32>,
     indices: Vec<i32>,
-    pros_nb: usize,
+    pros_nb: u8,
 ) -> HashMap<usize, Vec<(usize, f32)>> {
     let bar = if pros_nb != 0 {
         let bar = ProgressBar::hidden();
@@ -71,7 +71,7 @@ pub fn brute_force_nns(
         let bar = ProgressBar::new(indices.len().try_into().unwrap());
         bar.set_style(
             ProgressStyle::with_template(
-                "{msg} {wide_bar} {human_pos}/{human_len} {percent}% [ ETA: {eta} : Elapsed: {elapsed} ] {per_sec}",
+                "{msg} {wide_bar} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec}",
             )
             .unwrap(),
         );

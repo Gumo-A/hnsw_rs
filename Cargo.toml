@@ -2,5 +2,5 @@
 resolver = "2"
 members = [
   "hnsw",
-  "brute_force", "eval_glove",
+  "brute_force", "eval_glove", "threads",
 ]
