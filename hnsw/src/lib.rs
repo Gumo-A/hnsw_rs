@@ -16,7 +16,7 @@ mod tests {
 
     #[test]
     fn hnsw_construction() {
-        let _index: HNSW = HNSW::new(3, 12);
+        let _index: HNSW = HNSW::new(3, 12, None);
         let _index: HNSW = HNSW::from_params(3, 12, Some(9), None, None, None);
         let _index: HNSW = HNSW::from_params(3, 12, None, Some(18), None, None);
         let _index: HNSW = HNSW::from_params(3, 12, None, None, Some(0.25), None);
@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn hnsw_insert() {
         let mut rng = rand::thread_rng();
-        let mut index: HNSW = HNSW::new(3, 12);
+        let mut index: HNSW = HNSW::new(3, 12, None);
         let n: usize = 100;
 
         for i in 0..n {
@@ -38,17 +38,64 @@ mod tests {
         let already_in_index = 0;
         let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
         index.insert(already_in_index, vector);
+        println!("{}", index.node_ids.len());
 
         assert_eq!(index.node_ids.len(), n);
+        // assert!(index.node_ids.len() > 0);
     }
 
     #[test]
     fn hnsw_distance_caching() {
-        let mut index: HNSW = HNSW::new(3, 12);
+        let mut index: HNSW = HNSW::new(3, 12, None);
         index.cache_distance(0, 1, 0.5);
         index.cache_distance(1, 0, 0.5);
         assert_eq!(index.dist_cache.len(), 1);
         assert_eq!(*index.dist_cache.get(&(0, 1)).unwrap(), 0.5);
+    }
+
+    #[test]
+    fn hnsw_serialization() -> std::io::Result<()> {
+        let index_path = "/home/gamal/indices/tests/test_hnsw";
+        let index = HNSW::new(10, 12, Some(100));
+
+        let mut rng = rand::thread_rng();
+        let mut index: HNSW = HNSW::new(3, 12, None);
+        let n = 100;
+
+        for i in 0..n {
+            let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
+            index.insert(i.try_into().unwrap(), vector);
+        }
+
+        let nb_lyrs_before = index.layers.len();
+
+        index.save(index_path);
+
+        let index = HNSW::load(index_path).expect("There was a problem loading the index.");
+
+        assert_eq!(100, index.node_ids.len());
+        assert_eq!(nb_lyrs_before, index.layers.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn hnsw_save() -> std::io::Result<()> {
+        let index_path = "/home/gamal/indices/tests/test_hnsw";
+        let index = HNSW::new(10, 12, Some(100));
+
+        let mut rng = rand::thread_rng();
+        let mut index: HNSW = HNSW::new(3, 12, None);
+        let n = 100;
+
+        for i in 0..n {
+            let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
+            index.insert(i.try_into().unwrap(), vector);
+        }
+
+        index.save(index_path)?;
+
+        Ok(())
     }
 
     #[test]

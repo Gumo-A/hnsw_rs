@@ -4,7 +4,7 @@ use nohash_hasher::BuildNoHashHasher;
 use rand::Rng;
 // use rand::SeedableRng;
 use std::collections::{HashMap, HashSet};
-use std::fs::{create_dir, File};
+use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
 
 use crate::graph::Graph;
@@ -19,6 +19,7 @@ pub struct HNSW {
     ef_cons: i32,
     ep: i32,
     pub dist_cache: HashMap<(i32, i32), f32>,
+    // pub dist_cache: HashMap<(i32, i32), f32, BuildNoHashHasher<i32>>,
     pub node_ids: HashSet<i32, BuildNoHashHasher<i32>>,
     pub layers: HashMap<i32, Graph, BuildNoHashHasher<i32>>,
     rng: rand::rngs::ThreadRng,
@@ -35,6 +36,7 @@ impl HNSW {
             ml: 1.0 / (m as f32).log(std::f32::consts::E),
             ef_cons: ef_cons.unwrap_or(m * 2),
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
+            // dist_cache: HashMap::with_hasher(BuildNoHashHasher::default()),
             dist_cache: HashMap::new(),
             ep: -1,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
@@ -59,6 +61,7 @@ impl HNSW {
             ml: ml.unwrap_or(1.0 / (m as f32).log(std::f32::consts::E)),
             ef_cons: ef_cons.unwrap_or(m * 2),
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
+            // dist_cache: HashMap::with_hasher(BuildNoHashHasher::default()),
             dist_cache: HashMap::new(),
             ep: -1,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
@@ -487,13 +490,73 @@ impl HNSW {
         }
     }
 
-    pub fn save(&self, path: &str) -> std::io::Result<()> {
-        // TODO: serialize params, vectors, node ids and edges
-        // Either in multiple files or in a single file.
-        let file = File::create(path)?;
-        let mut writer = BufWriter::new(file);
+    pub fn save(&self, index_dir: &str) -> std::io::Result<()> {
+        let path = std::path::Path::new(index_dir);
+        create_dir_all(path)?;
+
+        let nodes_file = File::create(path.join("node_ids.json"))?;
+        let mut writer = BufWriter::new(nodes_file);
         serde_json::to_writer(&mut writer, &self.node_ids)?;
         writer.flush()?;
+
+        let params_file = File::create(path.join("params.json"))?;
+        let mut writer = BufWriter::new(params_file);
+        let params: HashMap<&str, f32> = HashMap::from([
+            ("m", self.m as f32),
+            ("mmax", self.mmax as f32),
+            ("mmax0", self.mmax0 as f32),
+            ("ef_cons", self.ef_cons as f32),
+            ("ml", self.ml as f32),
+            ("ep", self.ep as f32),
+        ]);
+        serde_json::to_writer(&mut writer, &params)?;
+        writer.flush()?;
+
+        for layer_nb in 0..self.layers.len() {
+            let layer_file = File::create(path.join(format!("layer_{layer_nb}.json")))?;
+            let mut writer = BufWriter::new(layer_file);
+            let mut layer_data: HashMap<i32, (&HashSet<i32>, Vec<f32>)> = HashMap::new();
+            for (node_id, node_data) in self.layers.get(&(layer_nb as i32)).unwrap().nodes.iter() {
+                let neighbors: &HashSet<i32> = &node_data.0;
+                let vector: Vec<f32> = node_data.1.to_vec();
+                layer_data.insert(*node_id, (neighbors, vector));
+            }
+            serde_json::to_writer(&mut writer, &layer_data)?;
+            writer.flush()?;
+        }
+
         Ok(())
+    }
+
+    pub fn load(path: &str) -> std::io::Result<Self> {
+        let paths = std::fs::read_dir(path)?;
+
+        // TODO
+        // for file_path in paths {
+        //     let file_name: DirEntry = file_path?;
+        //     let file = File::open(file_name.path())?;
+        //     let reader = BufReader::new(file);
+
+        //     // if file_name.file_name()
+
+        //     let split_data: HashMap<usize, Vec<(usize, f32)>> = serde_json::from_reader(reader)?;
+        //     for key in split_data.keys().into_iter() {
+        //         bf_data.insert(*key, split_data.get(key).unwrap().clone());
+        //     }
+        // }
+
+        Ok(Self {
+            max_layers: 0,
+            m: 0,
+            mmax: 0,
+            mmax0: 0,
+            ml: 0.0,
+            ef_cons: 0,
+            ep: 0,
+            dist_cache: HashMap::new(),
+            node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
+            layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            rng: rand::thread_rng(),
+        })
     }
 }

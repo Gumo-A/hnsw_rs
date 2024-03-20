@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::fs;
-use std::fs::File;
+use std::fs::{self, ReadDir};
+use std::fs::{DirEntry, File};
 use std::io::{BufReader, Result};
 
 pub fn split_vector(vector: Vec<i32>, nb_splits: u8, split_to_compute: u8) -> Vec<i32> {
@@ -31,14 +31,14 @@ pub fn split_vector(vector: Vec<i32>, nb_splits: u8, split_to_compute: u8) -> Ve
 pub fn load_bf_data(dim: usize, lim: usize) -> Result<HashMap<usize, Vec<(usize, f32)>>> {
     let mut bf_data: HashMap<usize, Vec<(usize, f32)>> = HashMap::new();
 
-    let paths = fs::read_dir(format!(
+    let paths: ReadDir = fs::read_dir(format!(
         "/home/gamal/glove_dataset/bf_rust/dim{dim}_lim{lim}"
     ))
     .unwrap();
 
     for path in paths {
-        let file_name = path.unwrap().path();
-        let file = File::open(file_name)?;
+        let file_name: DirEntry = path?;
+        let file = File::open(file_name.path())?;
         let reader = BufReader::new(file);
         let split_data: HashMap<usize, Vec<(usize, f32)>> = serde_json::from_reader(reader)?;
         for key in split_data.keys().into_iter() {
