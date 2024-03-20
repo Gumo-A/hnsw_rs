@@ -10,7 +10,7 @@ use hnsw::helpers::args::parse_args_bf;
 use hnsw::helpers::data::split_vector;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
 
-fn main() -> std::io::Result<()> {
+fn main() {
     let (dim, lim, nb_threads) = parse_args_bf();
 
     // TODO: delete files in dir if dir exists.
@@ -52,6 +52,4 @@ fn main() -> std::io::Result<()> {
     for _ in 0..nb_threads {
         rx.recv().unwrap();
     }
-
-    Ok(())
 }
