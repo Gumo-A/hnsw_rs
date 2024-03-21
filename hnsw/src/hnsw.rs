@@ -117,14 +117,9 @@ impl HNSW {
         let mut ep = HashSet::from([self.ep]);
         let nb_layer = self.layers.len();
 
-        // println!("{:?}", ep);
         for layer_nb in (0..nb_layer).rev() {
             ep = self.search_layer(layer_nb as i32, -1, vector, &ep, 1);
-            // println!("{:?}", ep);
         }
-        // for e in ep.iter() {
-        // println!("{:?}", self.layers[0].neighbors(*e));
-        // }
 
         let neighbors = self.search_layer(0, -1, vector, &ep, ef);
         let mut nearest_neighbors: Vec<(i32, f32)> = Vec::new();
@@ -136,7 +131,6 @@ impl HNSW {
         }
         nearest_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        // let anns: Vec<i32> = Vec::from_iter(nearest_neighbors.iter().map(|x| x.0));
         let mut anns: Vec<i32> = Vec::new();
         for (idx, neighbor) in nearest_neighbors.iter().enumerate() {
             if idx == 0 {
@@ -149,24 +143,8 @@ impl HNSW {
             }
             anns.push(neighbor.0);
         }
-        // anns[1..1 + n as usize].to_vec()
         anns
     }
-
-    // fn define_new_layers(&mut self, current_layer_nb: i32, node_id: i32) -> i32 {
-    //     if current_layer_nb >= self.max_layers - 1 {
-    //         return self.max_layers - 1;
-    //     }
-    //     let mut max_layer_nb: i32 = (self.layers.len() - 1).try_into().unwrap();
-    //     if current_layer_nb > max_layer_nb {
-    //         self.ep = node_id;
-    //         while current_layer_nb > max_layer_nb {
-    //             max_layer_nb += 1;
-    //             self.layers.insert(max_layer_nb, Graph::new());
-    //         }
-    //     }
-    //     max_layer_nb
-    // }
 
     fn step_1(
         &mut self,
@@ -326,9 +304,10 @@ impl HNSW {
         return selected;
     }
 
-    pub fn insert(&mut self, node_id: i32, vector: &Array<f32, Dim<[usize; 1]>>) {
+    pub fn insert(&mut self, node_id: i32, vector: &Array<f32, Dim<[usize; 1]>>) -> bool {
         if node_id < 0 {
-            return;
+            println!("Cannot insert node with index {node_id}, ids must be positive integers.");
+            return false;
         } // TODO: report the node is not being added because id is negative
         if (self.layers.len() == 0) & (self.node_ids.is_empty()) {
             self.node_ids.insert(node_id);
@@ -346,16 +325,10 @@ impl HNSW {
                     .add_node(node_id, vector.clone());
             }
 
-            // self.layers.insert(0, Graph::new());
-            // self.layers
-            //     .get_mut(&0)
-            //     .unwrap()
-            //     .add_node(node_id, vector.clone());
-
             self.ep = node_id;
-            return;
+            return true;
         } else if self.node_ids.contains(&node_id) {
-            return;
+            return false;
         }
 
         // vector = norm_vector(vector);
@@ -371,10 +344,11 @@ impl HNSW {
         ep = self.step_1(node_id, &vector, ep, max_layer_nb as i32, current_layer_nb);
         self.step_2(node_id, &vector, ep, current_layer_nb);
         self.node_ids.insert(node_id);
+        true
     }
 
     pub fn remove_unused(&mut self) {
-        for lyr_nb in 0..self.max_layers {
+        for lyr_nb in 0..(self.layers.len() as i32) {
             if self.layers.contains_key(&lyr_nb) {
                 if self.layers.get(&lyr_nb).unwrap().order() == 1 {
                     self.layers.remove(&lyr_nb);

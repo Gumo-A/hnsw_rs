@@ -38,8 +38,8 @@ fn main() -> std::io::Result<()> {
 
     for idx in 0..lim {
         bar.inc(1);
-        index.insert(idx as i32, &embeddings.slice(s![idx, ..]).to_owned());
-        if idx % 10_000 == 0 {
+        let inserted = index.insert(idx as i32, &embeddings.slice(s![idx, ..]).to_owned());
+        if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
             println!("Checkpointing in {checkpoint_path}");
             // index.print_params();
             index.save(&checkpoint_path)?;
