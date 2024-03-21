@@ -1,11 +1,12 @@
 use ndarray::{Array, Dim};
 use nohash_hasher::BuildNoHashHasher;
-// use rand::rngs::StdRng;
 use rand::Rng;
+use regex::Regex;
+// use rand::rngs::StdRng;
 // use rand::SeedableRng;
 use std::collections::{HashMap, HashSet};
 use std::fs::{create_dir_all, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Write};
 
 use crate::graph::Graph;
 use crate::helpers::distance::v2v_dist;
@@ -22,12 +23,13 @@ pub struct HNSW {
     // pub dist_cache: HashMap<(i32, i32), f32, BuildNoHashHasher<i32>>,
     pub node_ids: HashSet<i32, BuildNoHashHasher<i32>>,
     pub layers: HashMap<i32, Graph, BuildNoHashHasher<i32>>,
+    dim: u32,
     rng: rand::rngs::ThreadRng,
     // rng: rand::rngs::StdRng,
 }
 
 impl HNSW {
-    pub fn new(max_layers: i32, m: i32, ef_cons: Option<i32>) -> Self {
+    pub fn new(max_layers: i32, m: i32, ef_cons: Option<i32>, dim: u32) -> Self {
         Self {
             max_layers,
             m,
@@ -40,6 +42,7 @@ impl HNSW {
             dist_cache: HashMap::new(),
             ep: -1,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            dim,
             rng: rand::thread_rng(),
             // rng: StdRng::seed_from_u64(0),
         }
@@ -52,6 +55,7 @@ impl HNSW {
         mmax0: Option<i32>,
         ml: Option<f32>,
         ef_cons: Option<i32>,
+        dim: u32,
     ) -> Self {
         Self {
             max_layers,
@@ -65,6 +69,7 @@ impl HNSW {
             dist_cache: HashMap::new(),
             ep: -1,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            dim,
             rng: rand::thread_rng(),
             // rng: StdRng::seed_from_u64(0),
         }
@@ -321,7 +326,7 @@ impl HNSW {
         return selected;
     }
 
-    pub fn insert(&mut self, node_id: i32, vector: Array<f32, Dim<[usize; 1]>>) {
+    pub fn insert(&mut self, node_id: i32, vector: &Array<f32, Dim<[usize; 1]>>) {
         if node_id < 0 {
             return;
         } // TODO: report the node is not being added because id is negative
@@ -508,6 +513,7 @@ impl HNSW {
             ("ef_cons", self.ef_cons as f32),
             ("ml", self.ml as f32),
             ("ep", self.ep as f32),
+            ("dim", self.dim as f32),
         ]);
         serde_json::to_writer(&mut writer, &params)?;
         writer.flush()?;
@@ -516,6 +522,7 @@ impl HNSW {
             let layer_file = File::create(path.join(format!("layer_{layer_nb}.json")))?;
             let mut writer = BufWriter::new(layer_file);
             let mut layer_data: HashMap<i32, (&HashSet<i32>, Vec<f32>)> = HashMap::new();
+
             for (node_id, node_data) in self.layers.get(&(layer_nb as i32)).unwrap().nodes.iter() {
                 let neighbors: &HashSet<i32> = &node_data.0;
                 let vector: Vec<f32> = node_data.1.to_vec();
@@ -529,33 +536,48 @@ impl HNSW {
     }
 
     pub fn load(path: &str) -> std::io::Result<Self> {
-        let paths = std::fs::read_dir(path)?;
-
         let mut params: HashMap<String, f32> = HashMap::new();
         let mut node_ids: HashSet<i32, BuildNoHashHasher<i32>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
         let mut layers: HashMap<i32, Graph, BuildNoHashHasher<i32>> =
             HashMap::with_hasher(BuildNoHashHasher::default());
 
-        // TODO
+        let paths = std::fs::read_dir(path)?;
         for file_path in paths {
             let file_name = file_path?;
             let file = File::open(file_name.path())?;
             let reader = BufReader::new(file);
-
             if file_name.file_name().to_str().unwrap().contains("params") {
                 let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
                 for (key, val) in content.iter() {
                     params.insert(String::from(key), *val);
                 }
-            } else if file_name.file_name().to_str().unwrap().contains("node_ids") {
+            }
+        }
+
+        let paths = std::fs::read_dir(path)?;
+        for file_path in paths {
+            let file_name = file_path?;
+            let file = File::open(file_name.path())?;
+            let reader = BufReader::new(file);
+
+            if file_name.file_name().to_str().unwrap().contains("node_ids") {
                 let content: HashSet<i32> = serde_json::from_reader(reader)?;
                 for val in content.iter() {
                     node_ids.insert(*val);
                 }
             } else if file_name.file_name().to_str().unwrap().contains("layer") {
-                // TODO: with regex crate
-                // let layer_nb: u8 =
+                let re = Regex::new(r"\d+").unwrap();
+                let layer_nb: u8 = re
+                    .find(file_name.file_name().to_str().unwrap())
+                    .unwrap()
+                    .as_str()
+                    .parse::<u8>()
+                    .expect("Could not parse u32 from file.");
+                let content: HashMap<i32, (HashSet<i32>, Vec<f32>)> =
+                    serde_json::from_reader(reader)?;
+                let graph = Graph::from_layer_data(*params.get("dim").unwrap() as u32, content);
+                layers.insert(layer_nb as i32, graph);
             }
         }
 
@@ -570,6 +592,7 @@ impl HNSW {
             dist_cache: HashMap::new(),
             node_ids,
             layers,
+            dim: *params.get("dim").unwrap() as u32,
             rng: rand::thread_rng(),
         })
     }

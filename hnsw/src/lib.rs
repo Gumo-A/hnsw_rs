@@ -16,28 +16,29 @@ mod tests {
 
     #[test]
     fn hnsw_construction() {
-        let _index: HNSW = HNSW::new(3, 12, None);
-        let _index: HNSW = HNSW::from_params(3, 12, Some(9), None, None, None);
-        let _index: HNSW = HNSW::from_params(3, 12, None, Some(18), None, None);
-        let _index: HNSW = HNSW::from_params(3, 12, None, None, Some(0.25), None);
-        let _index: HNSW = HNSW::from_params(3, 12, None, None, None, Some(100));
-        let _index: HNSW = HNSW::from_params(3, 12, Some(9), Some(18), Some(0.25), Some(100));
+        let _index: HNSW = HNSW::new(3, 12, None, 100);
+        let _index: HNSW = HNSW::from_params(3, 12, Some(9), None, None, None, 100);
+        let _index: HNSW = HNSW::from_params(3, 12, None, Some(18), None, None, 100);
+        let _index: HNSW = HNSW::from_params(3, 12, None, None, Some(0.25), None, 100);
+        let _index: HNSW = HNSW::from_params(3, 12, None, None, None, Some(100), 100);
+        let _index: HNSW = HNSW::from_params(3, 12, Some(9), Some(18), Some(0.25), Some(100), 100);
     }
 
     #[test]
     fn hnsw_insert() {
         let mut rng = rand::thread_rng();
-        let mut index: HNSW = HNSW::new(3, 12, None);
+        let dim = 100;
+        let mut index: HNSW = HNSW::new(3, 12, None, dim);
         let n: usize = 100;
 
         for i in 0..n {
-            let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), vector);
+            let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
+            index.insert(i.try_into().unwrap(), &vector);
         }
 
         let already_in_index = 0;
-        let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
-        index.insert(already_in_index, vector);
+        let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
+        index.insert(already_in_index, &vector);
         println!("{}", index.node_ids.len());
 
         assert_eq!(index.node_ids.len(), n);
@@ -46,7 +47,7 @@ mod tests {
 
     #[test]
     fn hnsw_distance_caching() {
-        let mut index: HNSW = HNSW::new(3, 12, None);
+        let mut index: HNSW = HNSW::new(3, 12, None, 100);
         index.cache_distance(0, 1, 0.5);
         index.cache_distance(1, 0, 0.5);
         assert_eq!(index.dist_cache.len(), 1);
@@ -54,22 +55,32 @@ mod tests {
     }
 
     #[test]
+    fn regex() {
+        let re = regex::Regex::new(r"\d+").unwrap();
+        let vals = ["layer_3.json", "layer_24.json", "layer_842.json"];
+        let tests = ["3", "24", "842"];
+        for i in vals.iter() {
+            let result = re.find(i).unwrap().as_str();
+            assert!(tests.contains(&result));
+            // println!("{}", result);
+        }
+    }
+
+    #[test]
     fn hnsw_serialization() -> std::io::Result<()> {
         let index_path = "/home/gamal/indices/tests/test_hnsw";
-        let index = HNSW::new(25, 42, Some(100));
-
         let mut rng = rand::thread_rng();
-        let mut index: HNSW = HNSW::new(3, 12, None);
+        let mut index: HNSW = HNSW::new(3, 12, None, 100);
         let n = 100;
 
         for i in 0..n {
             let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), vector);
+            index.insert(i.try_into().unwrap(), &vector);
         }
 
         let nb_lyrs_before = index.layers.len();
 
-        index.save(index_path);
+        index.save(index_path)?;
 
         let index = HNSW::load(index_path).expect("There was a problem loading the index.");
 
@@ -82,15 +93,13 @@ mod tests {
     #[test]
     fn hnsw_save() -> std::io::Result<()> {
         let index_path = "/home/gamal/indices/tests/test_hnsw";
-        let index = HNSW::new(10, 12, Some(100));
-
         let mut rng = rand::thread_rng();
-        let mut index: HNSW = HNSW::new(3, 12, None);
+        let mut index: HNSW = HNSW::new(3, 12, None, 100);
         let n = 100;
 
         for i in 0..n {
             let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), vector);
+            index.insert(i.try_into().unwrap(), &vector);
         }
 
         index.save(index_path)?;

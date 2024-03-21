@@ -15,6 +15,20 @@ impl Graph {
             self_connexions: false,
         }
     }
+    pub fn from_layer_data(dim: u32, data: HashMap<i32, (HashSet<i32>, Vec<f32>)>) -> Self {
+        let mut nodes = HashMap::new();
+        for (node_id, node_data) in data.iter() {
+            let vector = Array::from_shape_vec((dim as usize,), node_data.1.clone())
+                .expect("Could not load a vector.");
+            let neighbors = node_data.0.clone();
+            nodes.insert(*node_id, (neighbors, vector));
+        }
+
+        Self {
+            nodes,
+            self_connexions: false,
+        }
+    }
     pub fn add_node(&mut self, node_id: i32, vector: Array<f32, Dim<[usize; 1]>>) {
         if !self.nodes.contains_key(&node_id) {
             self.nodes
