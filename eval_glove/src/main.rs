@@ -11,22 +11,21 @@ use ndarray::s;
 use indicatif::{ProgressBar, ProgressStyle};
 
 fn main() -> std::io::Result<()> {
-    let (dim, lim, m, _ef_cons) = parse_args_eval();
+    let (dim, lim, m, _ef_cons) = match parse_args_eval() {
+        Ok(args) => args,
+        Err(_) => {
+            println!("Help: eval_glove");
+            println!("Expecting exactly 5 positional arguments:");
+            println!("dim[int] lim[int] m[int] ef_cons[int]");
+            return Ok(());
+        }
+    };
     let (words, embeddings) = load_glove_array(dim as i32, lim as i32, true, 0).unwrap();
     let bf_data = load_bf_data(dim, lim).unwrap();
 
-    let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}");
+    let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
     let mut copy_path = checkpoint_path.clone();
     copy_path.push_str("_copy");
-
-    let bar = ProgressBar::new(lim.try_into().unwrap());
-    bar.set_style(
-        ProgressStyle::with_template(
-            "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
-        )
-        .unwrap(),
-    );
-    bar.set_message(format!("Inserting Embeddings"));
 
     let mut index = if Path::new(&checkpoint_path).exists() {
         HNSW::load(&checkpoint_path)?
@@ -34,20 +33,27 @@ fn main() -> std::io::Result<()> {
         HNSW::new(20, m, None, dim as u32)
     };
 
-    index.print_params();
-
-    for idx in 0..lim {
-        bar.inc(1);
-        let inserted = index.insert(idx as i32, &embeddings.slice(s![idx, ..]).to_owned());
-        if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
-            println!("Checkpointing in {checkpoint_path}");
-            // index.print_params();
-            index.save(&checkpoint_path)?;
-            index.save(&copy_path)?;
+    if index.node_ids.len() != lim {
+        let bar = ProgressBar::new(lim.try_into().unwrap());
+        bar.set_style(
+            ProgressStyle::with_template(
+                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
+            )
+            .unwrap());
+        bar.set_message(format!("Inserting Embeddings"));
+        for idx in 0..lim {
+            bar.inc(1);
+            let inserted = index.insert(idx as i32, &embeddings.slice(s![idx, ..]).to_owned());
+            if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
+                println!("Checkpointing in {checkpoint_path}");
+                // index.print_params();
+                index.save(&checkpoint_path)?;
+                index.save(&copy_path)?;
+            }
         }
+        index.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str())?;
     }
     index.remove_unused();
-    index.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}").as_str())?;
 
     index.print_params();
 
@@ -62,7 +68,7 @@ fn main() -> std::io::Result<()> {
         println!("{:?}", anns_words);
     }
 
-    for ef in [11, 18, 24, 36].iter() {
+    for ef in (12..65).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(
@@ -80,7 +86,7 @@ fn main() -> std::io::Result<()> {
             }
             bar.inc(1);
             let vector = embeddings.slice(s![*idx, ..]);
-            let anns = index.ann_by_vector(&vector.to_owned(), 10, *ef);
+            let anns = index.ann_by_vector(&vector.to_owned(), 10, ef);
             let true_nns: Vec<i32> = bf_data
                 .get(idx)
                 .unwrap()

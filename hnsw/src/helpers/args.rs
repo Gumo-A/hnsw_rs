@@ -17,13 +17,19 @@ pub fn parse_args() -> (usize, usize) {
     (dim, lim)
 }
 
-pub fn parse_args_eval() -> (usize, usize, i32, i32) {
+pub fn parse_args_eval() -> Result<(usize, usize, i32, i32), ()> {
     let args: Vec<String> = env::args().collect();
+
+    if args.len() != 5 {
+        return Err(());
+    }
+
     let dim = args[1].parse::<usize>().expect("Could not parse dimention");
     let lim = args[2].parse::<usize>().expect("Could not parse limit");
     let m = args[3].parse::<i32>().expect("Could not parse M");
     let ef_cons = args[4]
         .parse::<i32>()
         .expect("Could not parse efConstruciton");
-    (dim, lim, m, ef_cons)
+
+    Ok((dim, lim, m, ef_cons))
 }
