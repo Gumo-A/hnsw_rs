@@ -14,7 +14,7 @@ fn main() {
     let (dim, lim, nb_threads) = parse_args_bf();
 
     // TODO: delete files in dir if dir exists.
-    let _ = create_dir(format!(
+    let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/bf_rust/dim{dim}_lim{lim}"
     ));
 
