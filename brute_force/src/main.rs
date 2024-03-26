@@ -1,4 +1,4 @@
-use std::fs::{create_dir, File};
+use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -10,8 +10,16 @@ use hnsw::helpers::args::parse_args_bf;
 use hnsw::helpers::data::split_vector;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
 
-fn main() {
-    let (dim, lim, nb_threads) = parse_args_bf();
+fn main() -> std::io::Result<()> {
+    let (dim, lim, nb_threads) = match parse_args_bf() {
+        Ok(args) => args,
+        Err(err) => {
+            println!("Help: brute_force");
+            println!("dim[int] limit[int] number_of_threads[int]");
+            println!("{}", err);
+            return Ok(());
+        }
+    };
 
     // TODO: delete files in dir if dir exists.
     let _ = create_dir_all(format!(
@@ -52,4 +60,6 @@ fn main() {
     for _ in 0..nb_threads {
         rx.recv().unwrap();
     }
+
+    Ok(())
 }

@@ -114,7 +114,8 @@ impl HNSW {
         n: i32,
         ef: i32,
     ) -> Vec<i32> {
-        let mut ep = HashSet::from([self.ep]);
+        let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
+        ep.insert(self.ep);
         let nb_layer = self.layers.len();
 
         for layer_nb in (0..nb_layer).rev() {
@@ -150,10 +151,10 @@ impl HNSW {
         &mut self,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        mut ep: HashSet<i32>,
+        mut ep: HashSet<i32, BuildNoHashHasher<i32>>,
         max_layer_nb: i32,
         current_layer_number: i32,
-    ) -> HashSet<i32> {
+    ) -> HashSet<i32, BuildNoHashHasher<i32>> {
         for layer_number in (current_layer_number + 1..max_layer_nb + 1).rev() {
             if self.layers.get(&layer_number).unwrap().order() == 0 {
                 continue;
@@ -167,7 +168,7 @@ impl HNSW {
         &mut self,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        mut ep: HashSet<i32>,
+        mut ep: HashSet<i32, BuildNoHashHasher<i32>>,
         current_layer_number: i32,
     ) {
         for layer_nb in (0..current_layer_number + 1).rev() {
@@ -191,7 +192,11 @@ impl HNSW {
         }
     }
 
-    fn prune_connexions(&mut self, layer_nb: i32, connexions_made: HashSet<i32>) {
+    fn prune_connexions(
+        &mut self,
+        layer_nb: i32,
+        connexions_made: HashSet<i32, BuildNoHashHasher<i32>>,
+    ) {
         for neighbor in connexions_made.iter() {
             if ((layer_nb == 0)
                 & (self.layers.get(&layer_nb).unwrap().degree(*neighbor) > self.mmax0))
@@ -247,13 +252,13 @@ impl HNSW {
         layer_nb: i32,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        candidates: &HashSet<i32>,
+        candidates: &HashSet<i32, BuildNoHashHasher<i32>>,
         m: i32,
         extend_cands: bool,
         keep_pruned: bool,
-    ) -> HashSet<i32> {
+    ) -> HashSet<i32, BuildNoHashHasher<i32>> {
         let mut candidates = candidates.clone();
-        let mut selected = HashSet::new();
+        let mut selected = HashSet::with_hasher(BuildNoHashHasher::default());
 
         if extend_cands {
             for cand in candidates.clone().iter() {
@@ -264,7 +269,8 @@ impl HNSW {
                 }
             }
         }
-        let mut pruned_selected: HashSet<i32> = HashSet::new();
+        let mut pruned_selected: HashSet<i32, BuildNoHashHasher<i32>> =
+            HashSet::with_hasher(BuildNoHashHasher::default());
 
         while (candidates.len() > 0) & (selected.len() < m as usize) {
             let (e, dist_e) =
@@ -340,7 +346,8 @@ impl HNSW {
             current_layer_nb = max_layer_nb as i32;
         }
 
-        let mut ep = HashSet::from([self.ep]);
+        let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
+        ep.insert(self.ep);
         ep = self.step_1(node_id, &vector, ep, max_layer_nb as i32, current_layer_nb);
         self.step_2(node_id, &vector, ep, current_layer_nb);
         self.node_ids.insert(node_id);
@@ -362,9 +369,9 @@ impl HNSW {
         layer_nb: i32,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        ep: &HashSet<i32>,
+        ep: &HashSet<i32, BuildNoHashHasher<i32>>,
         ef: i32,
-    ) -> HashSet<i32> {
+    ) -> HashSet<i32, BuildNoHashHasher<i32>> {
         let layer_nb = layer_nb as usize;
         let ef = ef as usize;
 
@@ -424,7 +431,7 @@ impl HNSW {
     fn get_nearest(
         &mut self,
         layer_nb: usize,
-        candidates: &HashSet<i32>,
+        candidates: &HashSet<i32, BuildNoHashHasher<i32>>,
         vector: &Array<f32, Dim<[usize; 1]>>,
         node_id: i32,
         reverse: bool,
@@ -495,10 +502,11 @@ impl HNSW {
         for layer_nb in 0..self.layers.len() {
             let layer_file = File::create(path.join(format!("layer_{layer_nb}.json")))?;
             let mut writer = BufWriter::new(layer_file);
-            let mut layer_data: HashMap<i32, (&HashSet<i32>, Vec<f32>)> = HashMap::new();
+            let mut layer_data: HashMap<i32, (&HashSet<i32, BuildNoHashHasher<i32>>, Vec<f32>)> =
+                HashMap::new();
 
             for (node_id, node_data) in self.layers.get(&(layer_nb as i32)).unwrap().nodes.iter() {
-                let neighbors: &HashSet<i32> = &node_data.0;
+                let neighbors: &HashSet<i32, BuildNoHashHasher<i32>> = &node_data.0;
                 let vector: Vec<f32> = node_data.1.to_vec();
                 layer_data.insert(*node_id, (neighbors, vector));
             }
@@ -536,7 +544,8 @@ impl HNSW {
             let reader = BufReader::new(file);
 
             if file_name.file_name().to_str().unwrap().contains("node_ids") {
-                let content: HashSet<i32> = serde_json::from_reader(reader)?;
+                let content: HashSet<i32, BuildNoHashHasher<i32>> =
+                    serde_json::from_reader(reader)?;
                 for val in content.iter() {
                     node_ids.insert(*val);
                 }
@@ -548,7 +557,7 @@ impl HNSW {
                     .as_str()
                     .parse::<u8>()
                     .expect("Could not parse u32 from file.");
-                let content: HashMap<i32, (HashSet<i32>, Vec<f32>)> =
+                let content: HashMap<i32, (HashSet<i32, BuildNoHashHasher<i32>>, Vec<f32>)> =
                     serde_json::from_reader(reader)?;
                 let graph = Graph::from_layer_data(*params.get("dim").unwrap() as u32, content);
                 layers.insert(layer_nb as i32, graph);

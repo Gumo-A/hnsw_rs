@@ -11,12 +11,12 @@ use ndarray::s;
 use indicatif::{ProgressBar, ProgressStyle};
 
 fn main() -> std::io::Result<()> {
-    let (dim, lim, m, _ef_cons) = match parse_args_eval() {
+    let (dim, lim, m) = match parse_args_eval() {
         Ok(args) => args,
-        Err(_) => {
+        Err(err) => {
             println!("Help: eval_glove");
-            println!("Expecting exactly 5 positional arguments:");
-            println!("dim[int] lim[int] m[int] ef_cons[int]");
+            println!("{}", err);
+            println!("dim[int] lim[int] m[int]");
             return Ok(());
         }
     };
@@ -30,7 +30,7 @@ fn main() -> std::io::Result<()> {
     let mut index = if Path::new(&checkpoint_path).exists() {
         HNSW::load(&checkpoint_path)?
     } else {
-        HNSW::new(20, m, None, dim as u32)
+        HNSW::from_params(20, m, None, None, None, None, dim as u32)
     };
 
     if index.node_ids.len() != lim {

@@ -1,10 +1,16 @@
 use crate::helpers::distance::norm_vector;
 use ndarray::{Array, Dim};
+use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
 pub struct Graph {
-    pub nodes: HashMap<i32, (HashSet<i32>, Array<f32, Dim<[usize; 1]>>)>,
-    // pub node_vectors: HashMap<i32, Array1<f32>>,
+    pub nodes: HashMap<
+        i32,
+        (
+            HashSet<i32, BuildNoHashHasher<i32>>,
+            Array<f32, Dim<[usize; 1]>>,
+        ),
+    >,
     pub self_connexions: bool,
 }
 
@@ -15,7 +21,10 @@ impl Graph {
             self_connexions: false,
         }
     }
-    pub fn from_layer_data(dim: u32, data: HashMap<i32, (HashSet<i32>, Vec<f32>)>) -> Self {
+    pub fn from_layer_data(
+        dim: u32,
+        data: HashMap<i32, (HashSet<i32, BuildNoHashHasher<i32>>, Vec<f32>)>,
+    ) -> Self {
         let mut nodes = HashMap::new();
         for (node_id, node_data) in data.iter() {
             let vector = Array::from_shape_vec((dim as usize,), node_data.1.clone())
@@ -31,9 +40,13 @@ impl Graph {
     }
     pub fn add_node(&mut self, node_id: i32, vector: Array<f32, Dim<[usize; 1]>>) {
         if !self.nodes.contains_key(&node_id) {
-            self.nodes
-                .insert(node_id, (HashSet::new(), norm_vector(vector)));
-            // self.node_vectors.insert(node_id, vector);
+            self.nodes.insert(
+                node_id,
+                (
+                    HashSet::with_hasher(BuildNoHashHasher::default()),
+                    norm_vector(vector),
+                ),
+            );
         }
     }
 
@@ -71,7 +84,7 @@ impl Graph {
         b_neighbors.0.remove(&node_a);
     }
 
-    pub fn neighbors(&self, node_id: i32) -> &HashSet<i32> {
+    pub fn neighbors(&self, node_id: i32) -> &HashSet<i32, BuildNoHashHasher<i32>> {
         &self
             .nodes
             .get(&node_id)
@@ -79,12 +92,16 @@ impl Graph {
             .0
     }
 
-    pub fn node(&self, node_id: i32) -> &(HashSet<i32>, Array<f32, Dim<[usize; 1]>>) {
+    pub fn node(
+        &self,
+        node_id: i32,
+    ) -> &(
+        HashSet<i32, BuildNoHashHasher<i32>>,
+        Array<f32, Dim<[usize; 1]>>,
+    ) {
         self.nodes
             .get(&node_id)
             .expect("Could not fetch node {node_id}")
-        // .clone()
-        // .to_owned()
     }
 
     pub fn degree(&self, node_id: i32) -> i32 {
