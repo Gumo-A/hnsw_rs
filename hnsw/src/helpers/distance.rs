@@ -23,7 +23,7 @@ pub fn get_nn_bf(
         .map(|x| (x.0, x.1.to_owned()))
         .collect();
     indices_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-    indices_distances[1..n + 1].to_vec()
+    indices_distances[1..(n + 1).min(b.dim().0)].to_vec()
 }
 
 pub fn norm_vector(vector: Array<f32, Dim<[usize; 1]>>) -> Array<f32, Dim<[usize; 1]>> {

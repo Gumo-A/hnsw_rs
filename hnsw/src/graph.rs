@@ -112,7 +112,7 @@ impl Graph {
             .len() as i32
     }
 
-    pub fn order(&self) -> usize {
+    pub fn nb_nodes(&self) -> usize {
         self.nodes.len()
     }
 }

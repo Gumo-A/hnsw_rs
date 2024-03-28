@@ -35,7 +35,7 @@ fn main() -> std::io::Result<()> {
 
     for i in 0..nb_threads {
         let tx = tx.clone();
-        let nb_nns = 10;
+        let nb_nns = lim;
 
         let embs = embeddings.clone();
         let indices: Vec<i32> = (0..lim).collect();

@@ -147,7 +147,7 @@ mod tests {
             g.add_node(*node, vector)
         }
 
-        assert_eq!(g.order(), n as usize);
+        assert_eq!(g.nb_nodes(), n as usize);
     }
 
     #[test]

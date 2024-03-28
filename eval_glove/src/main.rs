@@ -6,9 +6,10 @@ use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::HNSW;
 
-use ndarray::s;
+use ndarray::{s, Array2};
 
 use indicatif::{ProgressBar, ProgressStyle};
+use rand::Rng;
 
 fn main() -> std::io::Result<()> {
     let (dim, lim, m) = match parse_args_eval() {
@@ -32,9 +33,14 @@ fn main() -> std::io::Result<()> {
     } else {
         HNSW::from_params(20, m, None, None, None, None, dim as u32)
     };
+    let nb_nodes = index.node_ids.len();
+    println!("Loaded index with {} inserted nodes.", nb_nodes);
+    if nb_nodes > 0 {
+        estimate_recall(&mut index, &embeddings, &bf_data);
+    }
 
-    if index.node_ids.len() != lim {
-        let bar = ProgressBar::new(lim.try_into().unwrap());
+    if nb_nodes != lim {
+        let bar = ProgressBar::new((lim as usize - nb_nodes).try_into().unwrap());
         bar.set_style(
             ProgressStyle::with_template(
                 "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
@@ -42,10 +48,13 @@ fn main() -> std::io::Result<()> {
             .unwrap());
         bar.set_message(format!("Inserting Embeddings"));
         for idx in 0..lim {
-            bar.inc(1);
             let inserted = index.insert(idx as i32, &embeddings.slice(s![idx, ..]).to_owned());
-            if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
+            if inserted {
+                bar.inc(1);
+            }
+            if ((idx % 1_000 == 0) & (inserted)) | (idx == lim - 1) {
                 println!("Checkpointing in {checkpoint_path}");
+                estimate_recall(&mut index, &embeddings, &bf_data);
                 // index.print_params();
                 index.save(&checkpoint_path)?;
                 index.save(&copy_path)?;
@@ -68,8 +77,19 @@ fn main() -> std::io::Result<()> {
         println!("{:?}", anns_words);
     }
 
-    for ef in (12..65).step_by(12) {
-        let sample_size: usize = 1000;
+    estimate_recall(&mut index, &embeddings, &bf_data);
+    Ok(())
+}
+
+fn estimate_recall(
+    index: &mut HNSW,
+    embeddings: &Array2<f32>,
+    bf_data: &HashMap<usize, Vec<usize>>,
+) {
+    let mut rng = rand::thread_rng();
+    let max_idx = index.node_ids.iter().max().unwrap_or(&0).clone();
+    for ef in (12..37).step_by(12) {
+        let sample_size: i32 = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(
             ProgressStyle::with_template(
@@ -80,26 +100,26 @@ fn main() -> std::io::Result<()> {
         bar.set_message(format!("Finding ANNs ef={ef}"));
 
         let mut recall_10: HashMap<i32, f32> = HashMap::new();
-        for (i, idx) in bf_data.keys().enumerate() {
-            if i > sample_size {
-                break;
-            }
+        for _ in (0..sample_size).enumerate() {
             bar.inc(1);
-            let vector = embeddings.slice(s![*idx, ..]);
+
+            let idx = rng.gen_range(0..(index.node_ids.len()));
+            let vector = embeddings.slice(s![idx, ..]);
             let anns = index.ann_by_vector(&vector.to_owned(), 10, ef);
             let true_nns: Vec<i32> = bf_data
-                .get(idx)
+                .get(&idx)
                 .unwrap()
                 .iter()
-                .map(|x| x.0 as i32)
+                .map(|x| *x as i32)
+                .filter(|x| x <= &max_idx)
                 .collect();
             let mut hits = 0;
             for ann in anns.iter() {
-                if true_nns.contains(ann) {
+                if true_nns[..10].contains(ann) {
                     hits += 1;
                 }
             }
-            recall_10.insert(*idx as i32, (hits as f32) / 10.0);
+            recall_10.insert(idx as i32, (hits as f32) / 10.0);
         }
         let mut avg_recall = 0.0;
         for (_, recall) in recall_10.iter() {
@@ -108,5 +128,4 @@ fn main() -> std::io::Result<()> {
         avg_recall /= sample_size as f32;
         println!("Recall@10 {avg_recall}");
     }
-    Ok(())
 }
