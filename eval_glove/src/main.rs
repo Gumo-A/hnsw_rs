@@ -91,7 +91,7 @@ fn main() -> std::io::Result<()> {
                 .get(idx)
                 .unwrap()
                 .iter()
-                .map(|x| x.0 as i32)
+                .map(|x| *x as i32)
                 .collect();
             let mut hits = 0;
             for ann in anns.iter() {
