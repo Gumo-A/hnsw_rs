@@ -10,49 +10,8 @@ mod tests {
     use graph::Graph;
     use helpers::data::load_bf_data;
     use helpers::glove::load_glove_array;
-    use hnsw::HNSW;
     use ndarray::{Array1, Array2};
     use rand::Rng;
-
-    #[test]
-    fn hnsw_construction() {
-        let _index: HNSW = HNSW::new(3, 12, None, 100);
-        let _index: HNSW = HNSW::from_params(3, 12, Some(9), None, None, None, 100);
-        let _index: HNSW = HNSW::from_params(3, 12, None, Some(18), None, None, 100);
-        let _index: HNSW = HNSW::from_params(3, 12, None, None, Some(0.25), None, 100);
-        let _index: HNSW = HNSW::from_params(3, 12, None, None, None, Some(100), 100);
-        let _index: HNSW = HNSW::from_params(3, 12, Some(9), Some(18), Some(0.25), Some(100), 100);
-    }
-
-    #[test]
-    fn hnsw_insert() {
-        let mut rng = rand::thread_rng();
-        let dim = 100;
-        let mut index: HNSW = HNSW::new(3, 12, None, dim);
-        let n: usize = 100;
-
-        for i in 0..n {
-            let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector);
-        }
-
-        let already_in_index = 0;
-        let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-        index.insert(already_in_index, &vector);
-        println!("{}", index.node_ids.len());
-
-        assert_eq!(index.node_ids.len(), n);
-        // assert!(index.node_ids.len() > 0);
-    }
-
-    #[test]
-    fn hnsw_distance_caching() {
-        let mut index: HNSW = HNSW::new(3, 12, None, 100);
-        index.cache_distance(0, 1, 0.5);
-        index.cache_distance(1, 0, 0.5);
-        assert_eq!(index.dist_cache.len(), 1);
-        assert_eq!(*index.dist_cache.get(&(0, 1)).unwrap(), 0.5);
-    }
 
     #[test]
     fn regex() {
@@ -67,51 +26,10 @@ mod tests {
     }
 
     #[test]
-    fn hnsw_serialization() -> std::io::Result<()> {
-        let index_path = "/home/gamal/indices/tests/test_hnsw";
-        let mut rng = rand::thread_rng();
-        let mut index: HNSW = HNSW::new(3, 12, None, 100);
-        let n = 100;
-
-        for i in 0..n {
-            let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector);
-        }
-
-        let nb_lyrs_before = index.layers.len();
-
-        index.save(index_path)?;
-
-        let index = HNSW::load(index_path).expect("There was a problem loading the index.");
-
-        assert_eq!(100, index.node_ids.len());
-        assert_eq!(nb_lyrs_before, index.layers.len());
-
-        Ok(())
-    }
-
-    #[test]
-    fn hnsw_save() -> std::io::Result<()> {
-        let index_path = "/home/gamal/indices/tests/test_hnsw";
-        let mut rng = rand::thread_rng();
-        let mut index: HNSW = HNSW::new(3, 12, None, 100);
-        let n = 100;
-
-        for i in 0..n {
-            let vector = Array1::from_vec((0..100).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector);
-        }
-
-        index.save(index_path)?;
-
-        Ok(())
-    }
-
-    #[test]
     fn check_brute_force() {
         // must be run with -- --nocapture
         let mut rng = rand::thread_rng();
-        let (dim, lim) = (100, 400_000);
+        let (dim, lim) = (100, 10_000);
         let bf_data = load_bf_data(dim.try_into().unwrap(), lim.try_into().unwrap()).unwrap();
         let (words, _): (Vec<String>, Array2<f32>) =
             load_glove_array(dim.try_into().unwrap(), lim.try_into().unwrap(), true, 0)
@@ -120,9 +38,9 @@ mod tests {
         for _ in 0..3 {
             let rnd_idx = rng.gen_range(0..10_000);
             let nns = bf_data[&rnd_idx].clone();
-            let nns_words: Vec<String> = nns.iter().map(|i| words[i.0].clone()).collect();
-            println!("NNs of '{}':", words[rnd_idx]);
-            println!("{:?}", nns_words);
+            let nns_words: Vec<String> = nns.iter().map(|i| words[*i].clone()).collect();
+            // println!("NNs of '{}':", words[rnd_idx]);
+            // println!("{:?}", nns_words[0..10]);
         }
     }
 

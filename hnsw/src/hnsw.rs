@@ -28,7 +28,7 @@ pub struct HNSW {
     dim: u32,
     rng: rand::rngs::ThreadRng,
     // rng: rand::rngs::StdRng,
-    nb_threads: u8,
+    _nb_threads: u8,
 }
 
 impl HNSW {
@@ -47,7 +47,7 @@ impl HNSW {
             dim,
             rng: rand::thread_rng(),
             // rng: StdRng::seed_from_u64(0),
-            nb_threads: thread::available_parallelism().unwrap().get() as u8,
+            _nb_threads: thread::available_parallelism().unwrap().get() as u8,
         }
     }
 
@@ -74,7 +74,7 @@ impl HNSW {
             dim,
             rng: rand::thread_rng(),
             // rng: StdRng::seed_from_u64(0),
-            nb_threads: thread::available_parallelism().unwrap().get() as u8,
+            _nb_threads: thread::available_parallelism().unwrap().get() as u8,
         }
     }
 
@@ -143,14 +143,14 @@ impl HNSW {
     }
 
     fn step_1(
-        &mut self,
+        &self,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
         mut ep: Vec<i32>,
         max_layer_nb: i32,
         current_layer_number: i32,
     ) -> Vec<i32> {
-        let mut ep: Vec<i32> = Vec::from_iter(ep.iter().map(|x| *x));
+        // let mut ep: Vec<i32> = Vec::from_iter(ep.iter().map(|x| *x));
         for layer_number in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_number).unwrap();
             if layer.nb_nodes() == 0 {
@@ -165,7 +165,7 @@ impl HNSW {
         &mut self,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        mut ep: Vec<i32>,
+        ep: Vec<i32>,
         current_layer_number: i32,
     ) {
         let mut ep: Vec<i32> = Vec::from_iter(ep.iter().map(|x| *x));
@@ -234,7 +234,7 @@ impl HNSW {
     }
 
     fn select_heuristic(
-        &mut self,
+        &self,
         layer: &Graph,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
@@ -244,58 +244,57 @@ impl HNSW {
         keep_pruned: bool,
     ) -> Vec<i32> {
         let max_node_id = *layer.nodes.keys().max().unwrap_or(&0) as usize;
-        let mut selected: Vec<bool> = Vec::with_capacity(max_node_id);
-        let mut visited: Vec<bool> = Vec::with_capacity(max_node_id);
-        let mut candidates: Vec<bool> = Vec::with_capacity(max_node_id);
-        for _ in 0..max_node_id {
+        let mut selected: Vec<bool> = Vec::with_capacity(max_node_id + 1);
+        let mut candidates: Vec<bool> = Vec::with_capacity(max_node_id + 1);
+        let mut pruned_selected: Vec<bool> = Vec::with_capacity(max_node_id + 1);
+        for _ in 0..max_node_id + 1 {
             selected.push(false);
-            visited.push(false);
             candidates.push(false);
+            pruned_selected.push(false);
+        }
+        for idx in candidate_indices.iter() {
+            candidates[*idx as usize] = true;
         }
 
         if extend_cands {
-            for cand in candidates.clone().iter() {
-                for neighbor in self.layers.get(&layer_nb).unwrap().neighbors(*cand) {
-                    if !candidates[neighbor] {
-                        candidates.push(*neighbor);
+            for (idx, cand) in candidates.clone().iter().enumerate() {
+                if *cand {
+                    for neighbor in layer.neighbors(idx as i32) {
+                        if !candidates[*neighbor as usize] {
+                            candidates[*neighbor as usize] = true;
+                        }
                     }
                 }
             }
         }
-        let mut pruned_selected: HashSet<i32, BuildNoHashHasher<i32>> =
-            HashSet::with_hasher(BuildNoHashHasher::default());
 
-        while (candidates.len() > 0) & (selected.len() < m as usize) {
-            let (e, dist_e) =
-                self.get_nearest(layer_nb as usize, &candidates, vector, node_id, false);
-            candidates.remove(&e);
+        while (candidates.iter().filter(|x| **x).count() > 0)
+            & (selected.iter().filter(|x| **x).count() < m as usize)
+        {
+            let (e, dist_e) = self.get_nearest(layer, &candidates, vector, node_id, false);
+            candidates[e as usize] = false;
 
-            if selected.len() == 0 {
-                selected.insert(e);
+            if selected.iter().filter(|x| **x).count() == 0 {
+                selected[e as usize] = true;
                 continue;
             }
 
-            let e_vector = self.layers.get(&layer_nb).unwrap().node(e).1.clone();
-            let (_, dist_from_r) =
-                self.get_nearest(layer_nb as usize, &selected, &e_vector, e, false);
+            let e_vector = layer.node(e).1.clone();
+            let (_, dist_from_r) = self.get_nearest(layer, &selected, &e_vector, e, false);
 
             if dist_e < dist_from_r {
-                selected.insert(e);
+                selected[e as usize] = true;
             } else {
-                pruned_selected.insert(e);
+                pruned_selected[e as usize] = true;
             }
 
             if keep_pruned {
-                while (pruned_selected.len() > 0) & (selected.len() < m as usize) {
-                    let (e, _) = self.get_nearest(
-                        layer_nb as usize,
-                        &pruned_selected,
-                        vector,
-                        node_id,
-                        false,
-                    );
-                    pruned_selected.remove(&e);
-                    selected.insert(e);
+                while (pruned_selected.iter().filter(|x| **x).count() > 0)
+                    & (selected.iter().filter(|x| **x).count() < m as usize)
+                {
+                    let (e, _) = self.get_nearest(layer, &pruned_selected, vector, node_id, false);
+                    pruned_selected[e as usize] = false;
+                    selected[e as usize] = true;
                 }
             }
         }
@@ -369,7 +368,7 @@ impl HNSW {
     }
 
     fn search_layer(
-        &mut self,
+        &self,
         layer: &Graph,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
@@ -379,14 +378,10 @@ impl HNSW {
         let max_node_id = *layer.nodes.keys().max().unwrap_or(&0) as usize;
         let ef = ef as usize;
 
-        // let mut visited = ep.clone();
-        // let mut candidates = ep.clone();
-        // let mut selected = ep.clone();
-
-        let mut selected: Vec<bool> = Vec::with_capacity(max_node_id);
-        let mut visited: Vec<bool> = Vec::with_capacity(max_node_id);
-        let mut candidates: Vec<bool> = Vec::with_capacity(max_node_id);
-        for _ in 0..max_node_id {
+        let mut selected: Vec<bool> = Vec::with_capacity(max_node_id + 1);
+        let mut visited: Vec<bool> = Vec::with_capacity(max_node_id + 1);
+        let mut candidates: Vec<bool> = Vec::with_capacity(max_node_id + 1);
+        for _ in 0..max_node_id + 1 {
             selected.push(false);
             visited.push(false);
             candidates.push(false);
@@ -418,8 +413,7 @@ impl HNSW {
                     visited[neighbor] = true;
                     let neighbor_vec = layer.node(neighbor as i32).1.clone();
 
-                    let (furthest, f2q_dist) =
-                        self.get_nearest(layer, &selected, &vector, node_id, true);
+                    let (_, f2q_dist) = self.get_nearest(layer, &selected, &vector, node_id, true);
 
                     let n2q_dist = self.get_dist(node_id, neighbor as i32, &vector, &neighbor_vec);
 
@@ -427,7 +421,7 @@ impl HNSW {
                         candidates[neighbor] = true;
                         selected[neighbor] = true;
 
-                        if selected.len() > ef {
+                        if selected.iter().filter(|x| **x).count() > ef {
                             selected[neighbor] = false;
                         }
                     }
@@ -444,7 +438,7 @@ impl HNSW {
     }
 
     fn get_nearest(
-        &mut self,
+        &self,
         layer: &Graph,
         candidates: &Vec<bool>,
         vector: &Array<f32, Dim<[usize; 1]>>,
@@ -452,13 +446,11 @@ impl HNSW {
         reverse: bool,
     ) -> (i32, f32) {
         let mut cand_dists: Vec<(i32, f32)> = Vec::new();
-        for (idx, cand) in candidates.iter().enumerate() {
-            if *cand {
-                let i = idx as i32;
-                let cand_vec = &layer.node(i).1.clone();
-                let dist: f32 = self.get_dist(node_id, i, vector, cand_vec);
-                cand_dists.push((i, dist));
-            }
+        for (idx, _) in candidates.iter().enumerate().filter(|x| *x.1) {
+            let i = idx as i32;
+            let cand_vec = &layer.node(i).1.clone();
+            let dist: f32 = self.get_dist(node_id, i, vector, cand_vec);
+            cand_dists.push((i, dist));
         }
         cand_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
@@ -470,7 +462,7 @@ impl HNSW {
     }
 
     fn get_dist(
-        &mut self,
+        &self,
         node_a: i32,
         node_b: i32,
         a_vec: &Array<f32, Dim<[usize; 1]>>,
@@ -482,7 +474,7 @@ impl HNSW {
         } else {
             let dist = v2v_dist(a_vec, b_vec);
             if (key.0 >= 0) & (key.1 >= 0) {
-                self.dist_cache.insert(key, dist);
+                // self.dist_cache.insert(key, dist);
             }
             dist
         }
@@ -589,7 +581,7 @@ impl HNSW {
             layers,
             dim: *params.get("dim").unwrap() as u32,
             rng: rand::thread_rng(),
-            nb_threads: thread::available_parallelism().unwrap().get() as u8,
+            _nb_threads: thread::available_parallelism().unwrap().get() as u8,
         })
     }
 }
@@ -627,6 +619,27 @@ mod tests {
         let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
         index.insert(already_in_index, &vector);
         assert_eq!(index.node_ids.len(), n);
+    }
+
+    #[test]
+    fn ann() {
+        let mut rng = rand::thread_rng();
+        let dim = 100;
+        let mut index: HNSW = HNSW::new(3, 12, None, dim);
+        let n: usize = 100;
+
+        for i in 0..n {
+            let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
+            index.insert(i.try_into().unwrap(), &vector);
+        }
+
+        let n = 10;
+        let vector = index.layers.get(&0).unwrap().node(n).1.to_owned();
+        let anns = index.ann_by_vector(&vector, 10, 16);
+        println!("ANNs of {:?}", n);
+        for e in anns {
+            println!("{:?}", e);
+        }
     }
 
     #[test]
