@@ -1,3 +1,4 @@
+use rand::Rng;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -7,6 +8,7 @@ use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::HNSW;
 
 use ndarray::s;
+use ndarray::Array2;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -67,6 +69,8 @@ fn main() -> std::io::Result<()> {
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
     }
+    // estimate_recall(&mut index, &embeddings, &bf_data);
+    // return Ok(());
 
     for ef in (12..65).step_by(12) {
         let sample_size: usize = 1000;
@@ -95,7 +99,7 @@ fn main() -> std::io::Result<()> {
                 .collect();
             let mut hits = 0;
             for ann in anns.iter() {
-                if true_nns.contains(ann) {
+                if true_nns[..10].contains(ann) {
                     hits += 1;
                 }
             }
@@ -109,4 +113,53 @@ fn main() -> std::io::Result<()> {
         println!("Recall@10 {avg_recall}");
     }
     Ok(())
+}
+
+fn estimate_recall(
+    index: &mut HNSW,
+    embeddings: &Array2<f32>,
+    bf_data: &HashMap<usize, Vec<usize>>,
+) {
+    let mut rng = rand::thread_rng();
+    let max_idx = index.node_ids.iter().max().unwrap().clone();
+    for ef in (12..37).step_by(12) {
+        let sample_size: i32 = 1000;
+        let bar = ProgressBar::new(sample_size as u64);
+        bar.set_style(
+            ProgressStyle::with_template(
+                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
+            )
+            .unwrap(),
+        );
+        bar.set_message(format!("Finding ANNs ef={ef}"));
+
+        let mut recall_10: HashMap<i32, f32> = HashMap::new();
+        for _ in 0..sample_size {
+            bar.inc(1);
+
+            let idx = rng.gen_range(0..(index.node_ids.len()));
+            let vector = embeddings.slice(s![idx, ..]);
+            let anns = index.ann_by_vector(&vector.to_owned(), 10, ef);
+            let true_nns: Vec<i32> = bf_data
+                .get(&(idx as usize))
+                .unwrap()
+                .iter()
+                .map(|x| *x as i32)
+                // .filter(|x| x <= &max_idx)
+                .collect();
+            let mut hits = 0;
+            for ann in anns.iter() {
+                if true_nns[..10].contains(ann) {
+                    hits += 1;
+                }
+            }
+            recall_10.insert(idx as i32, (hits as f32) / 10.0);
+        }
+        let mut avg_recall = 0.0;
+        for (_, recall) in recall_10.iter() {
+            avg_recall += recall;
+        }
+        avg_recall /= recall_10.keys().count() as f32;
+        println!("Recall@10 {avg_recall}");
+    }
 }
