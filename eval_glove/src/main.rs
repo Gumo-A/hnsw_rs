@@ -139,7 +139,7 @@ fn estimate_recall(
         for (_, recall) in recall_10.iter() {
             avg_recall += recall;
         }
-        avg_recall /= sample_size as f32;
+        avg_recall /= recall_10.keys().count() as f32;
         println!("Recall@10 {avg_recall}");
     }
 }
