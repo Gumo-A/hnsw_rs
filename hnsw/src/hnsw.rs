@@ -97,12 +97,7 @@ impl HNSW {
             .insert((node_a.min(node_b), node_a.max(node_b)), distance);
     }
 
-    pub fn ann_by_vector(
-        &mut self,
-        vector: &Array<f32, Dim<[usize; 1]>>,
-        n: i32,
-        ef: i32,
-    ) -> Vec<i32> {
+    pub fn ann_by_vector(&self, vector: &Array<f32, Dim<[usize; 1]>>, n: i32, ef: i32) -> Vec<i32> {
         let mut ep: Vec<i32> = Vec::new();
         ep.push(self.ep);
         let nb_layer = self.layers.len();
@@ -126,6 +121,7 @@ impl HNSW {
             nearest_neighbors.push((*neighbor, dist));
         }
         nearest_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        // dbg!(&nearest_neighbors);
 
         let mut anns: Vec<i32> = Vec::new();
         for (idx, neighbor) in nearest_neighbors.iter().enumerate() {
@@ -150,10 +146,9 @@ impl HNSW {
         max_layer_nb: i32,
         current_layer_number: i32,
     ) -> Vec<i32> {
-        // let mut ep: Vec<i32> = Vec::from_iter(ep.iter().map(|x| *x));
         for layer_number in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_number).unwrap();
-            if layer.nb_nodes() == 0 {
+            if layer.nb_nodes() <= 1 {
                 continue;
             }
             ep = self.search_layer(layer, node_id, vector, &ep, 1);
@@ -165,10 +160,10 @@ impl HNSW {
         &mut self,
         node_id: i32,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        ep: Vec<i32>,
+        mut ep: Vec<i32>,
         current_layer_number: i32,
     ) {
-        let mut ep: Vec<i32> = Vec::from_iter(ep.iter().map(|x| *x));
+        // let mut ep: Vec<i32> = Vec::from_iter(ep.iter().map(|x| *x));
         for layer_nb in (0..current_layer_number + 1).rev() {
             self.layers
                 .get_mut(&layer_nb)
@@ -243,7 +238,7 @@ impl HNSW {
         extend_cands: bool,
         keep_pruned: bool,
     ) -> Vec<i32> {
-        let max_node_id = *layer.nodes.keys().max().unwrap_or(&0) as usize;
+        let max_node_id = *layer.nodes.keys().max().unwrap() as usize;
         let mut selected: Vec<bool> = Vec::with_capacity(max_node_id + 1);
         let mut candidates: Vec<bool> = Vec::with_capacity(max_node_id + 1);
         let mut pruned_selected: Vec<bool> = Vec::with_capacity(max_node_id + 1);
@@ -280,9 +275,9 @@ impl HNSW {
             }
 
             let e_vector = layer.node(e).1.clone();
-            let (_, dist_from_r) = self.get_nearest(layer, &selected, &e_vector, e, false);
+            let (_, dist_from_s) = self.get_nearest(layer, &selected, &e_vector, e, false);
 
-            if dist_e < dist_from_r {
+            if dist_e < dist_from_s {
                 selected[e as usize] = true;
             } else {
                 pruned_selected[e as usize] = true;
@@ -375,7 +370,7 @@ impl HNSW {
         ep: &Vec<i32>,
         ef: i32,
     ) -> Vec<i32> {
-        let max_node_id = *layer.nodes.keys().max().unwrap_or(&0) as usize;
+        let max_node_id = *layer.nodes.keys().max().unwrap() as usize;
         let ef = ef as usize;
 
         let mut selected: Vec<bool> = Vec::with_capacity(max_node_id + 1);
@@ -413,16 +408,17 @@ impl HNSW {
                     visited[neighbor] = true;
                     let neighbor_vec = layer.node(neighbor as i32).1.clone();
 
-                    let (_, f2q_dist) = self.get_nearest(layer, &selected, &vector, node_id, true);
+                    let (furthest, f2q_dist) =
+                        self.get_nearest(layer, &selected, &vector, node_id, true);
 
                     let n2q_dist = self.get_dist(node_id, neighbor as i32, &vector, &neighbor_vec);
 
-                    if (n2q_dist < f2q_dist) | (selected.len() < ef) {
+                    if (n2q_dist < f2q_dist) | (selected.iter().filter(|x| **x).count() < ef) {
                         candidates[neighbor] = true;
                         selected[neighbor] = true;
 
                         if selected.iter().filter(|x| **x).count() > ef {
-                            selected[neighbor] = false;
+                            selected[furthest as usize] = false;
                         }
                     }
                 }

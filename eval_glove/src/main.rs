@@ -77,6 +77,7 @@ fn main() -> std::io::Result<()> {
         bar.inc(1);
         index.insert(idx as i32, &embeddings.slice(s![idx, ..]).to_owned());
     }
+    index.remove_unused();
     index.print_params();
     for (i, idx) in bf_data.keys().enumerate() {
         if i > 3 {
@@ -88,6 +89,7 @@ fn main() -> std::io::Result<()> {
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
     }
+    // return Ok(());
 
     estimate_recall(&mut index, &embeddings, &bf_data);
     Ok(())
