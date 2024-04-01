@@ -65,19 +65,9 @@ fn main() -> std::io::Result<()> {
     // index.remove_unused();
 
     let mut index = HNSW::from_params(20, m, None, None, None, None, dim as u32);
+    let node_ids: Vec<i32> = (0..lim).map(|x| x as i32).collect();
     index.print_params();
-    let bar = ProgressBar::new(lim.try_into().unwrap());
-    bar.set_style(
-        ProgressStyle::with_template(
-            "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
-        )
-        .unwrap());
-    bar.set_message(format!("Inserting Embeddings"));
-    for idx in 0..lim {
-        bar.inc(1);
-        index.insert(idx as i32, &embeddings.slice(s![idx, ..]).to_owned());
-    }
-    index.remove_unused();
+    index.build_index(node_ids, &embeddings);
     index.print_params();
     for (i, idx) in bf_data.keys().enumerate() {
         if i > 3 {
