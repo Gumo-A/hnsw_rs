@@ -89,7 +89,7 @@ mod tests {
             g.add_node(*node, vector)
         }
 
-        let mut edges: Vec<(i32, i32)> = (0..n * 2)
+        let mut edges: Vec<(usize, usize)> = (0..n * 2)
             .map(|_| (rng.gen_range(0..n), rng.gen_range(0..n)))
             .collect();
 

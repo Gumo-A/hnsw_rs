@@ -38,7 +38,7 @@ fn main() -> std::io::Result<()> {
         let nb_nns = lim;
 
         let embs = embeddings.clone();
-        let indices: Vec<i32> = (0..lim).collect();
+        let indices: Vec<usize> = (0..lim).collect();
 
         let indices_split = split_vector(indices, nb_threads, i);
 

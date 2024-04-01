@@ -3,8 +3,8 @@ use std::fs::{self, ReadDir};
 use std::fs::{DirEntry, File};
 use std::io::{BufReader, Result};
 
-pub fn split_vector(vector: Vec<i32>, nb_splits: u8, split_to_compute: u8) -> Vec<i32> {
-    let mut split_vector: Vec<Vec<i32>> = Vec::new();
+pub fn split_vector(vector: Vec<usize>, nb_splits: u8, split_to_compute: u8) -> Vec<usize> {
+    let mut split_vector: Vec<Vec<usize>> = Vec::new();
 
     let per_split = vector.len() / nb_splits as usize;
 

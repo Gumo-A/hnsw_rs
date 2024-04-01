@@ -21,7 +21,7 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
     };
-    let (words, embeddings) = load_glove_array(dim as i32, lim as i32, true, 0).unwrap();
+    let (words, embeddings) = load_glove_array(dim as usize, lim as usize, true, 0).unwrap();
     let bf_data = load_bf_data(dim, lim).unwrap();
 
     // let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
@@ -48,7 +48,7 @@ fn main() -> std::io::Result<()> {
     //         .unwrap());
     //     bar.set_message(format!("Inserting Embeddings"));
     //     for idx in 0..lim {
-    //         let inserted = index.insert(idx as i32, &embeddings.slice(s![idx, ..]).to_owned());
+    //         let inserted = index.insert(idx as usize, &embeddings.slice(s![idx, ..]).to_owned());
     //         if inserted {
     //             bar.inc(1);
     //         }
@@ -64,8 +64,8 @@ fn main() -> std::io::Result<()> {
     // }
     // index.remove_unused();
 
-    let mut index = HNSW::from_params(20, m, None, None, None, None, dim as u32);
-    let node_ids: Vec<i32> = (0..lim).map(|x| x as i32).collect();
+    let mut index = HNSW::from_params(20, m, None, None, None, None, dim);
+    let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
     index.print_params();
     index.build_index(node_ids, &embeddings);
     index.print_params();
@@ -91,9 +91,8 @@ fn estimate_recall(
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
     let mut rng = rand::thread_rng();
-    let max_idx = index.node_ids.iter().max().unwrap_or(&0).clone();
     for ef in (12..37).step_by(12) {
-        let sample_size: i32 = 1000;
+        let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(
             ProgressStyle::with_template(
@@ -103,18 +102,18 @@ fn estimate_recall(
         );
         bar.set_message(format!("Finding ANNs ef={ef}"));
 
-        let mut recall_10: HashMap<i32, f32> = HashMap::new();
+        let mut recall_10: HashMap<usize, f32> = HashMap::new();
         for _ in (0..sample_size).enumerate() {
             bar.inc(1);
 
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = embeddings.slice(s![idx, ..]);
             let anns = index.ann_by_vector(&vector.to_owned(), 10, ef);
-            let true_nns: Vec<i32> = bf_data
+            let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()
                 .iter()
-                .map(|x| *x as i32)
+                .map(|x| *x as usize)
                 // .filter(|x| x <= &max_idx)
                 .collect();
             let mut hits = 0;
@@ -123,7 +122,7 @@ fn estimate_recall(
                     hits += 1;
                 }
             }
-            recall_10.insert(idx as i32, (hits as f32) / 10.0);
+            recall_10.insert(idx as usize, (hits as f32) / 10.0);
         }
         let mut avg_recall = 0.0;
         for (_, recall) in recall_10.iter() {

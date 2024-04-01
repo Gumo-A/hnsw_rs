@@ -7,8 +7,8 @@ use std::io::{BufRead, BufReader, Result};
 use crate::helpers::distance::get_nn_bf;
 
 pub fn load_glove_array(
-    dim: i32,
-    lim: i32,
+    dim: usize,
+    lim: usize,
     normalize: bool,
     pros_nb: usize,
 ) -> Result<(Vec<String>, Array2<f32>)> {
@@ -59,9 +59,9 @@ pub fn load_glove_array(
 }
 
 pub fn brute_force_nns(
-    nb_of_nn: i32,
+    nb_of_nn: usize,
     embeddings: &Array2<f32>,
-    indices: Vec<i32>,
+    indices: Vec<usize>,
     pros_nb: u8,
 ) -> HashMap<usize, Vec<usize>> {
     let bar = if pros_nb != 0 {

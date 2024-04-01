@@ -1,13 +1,13 @@
 use std::env;
 
-pub fn parse_args_bf() -> Result<(i32, i32, u8), &'static str> {
+pub fn parse_args_bf() -> Result<(usize, usize, u8), &'static str> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 4 {
         return Err("Expected exactly 3 positional arguments.");
     }
-    let dim = args[1].parse::<i32>().expect("Could not parse dimention");
-    let lim = args[2].parse::<i32>().expect("Could not parse limit");
+    let dim = args[1].parse::<usize>().expect("Could not parse dimention");
+    let lim = args[2].parse::<usize>().expect("Could not parse limit");
     let splits = args[3]
         .parse::<u8>()
         .expect("Could not parse number of splits");
@@ -21,7 +21,7 @@ pub fn parse_args() -> (usize, usize) {
     (dim, lim)
 }
 
-pub fn parse_args_eval() -> Result<(usize, usize, i32), &'static str> {
+pub fn parse_args_eval() -> Result<(usize, usize, usize), &'static str> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 4 {
@@ -30,6 +30,6 @@ pub fn parse_args_eval() -> Result<(usize, usize, i32), &'static str> {
 
     let dim = args[1].parse::<usize>().expect("Could not parse dimention");
     let lim = args[2].parse::<usize>().expect("Could not parse limit");
-    let m = args[3].parse::<i32>().expect("Could not parse M");
+    let m = args[3].parse::<usize>().expect("Could not parse M");
     Ok((dim, lim, m))
 }

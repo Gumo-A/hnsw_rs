@@ -5,9 +5,9 @@ use std::collections::{HashMap, HashSet};
 
 pub struct Graph {
     pub nodes: HashMap<
-        i32,
+        usize,
         (
-            HashSet<i32, BuildNoHashHasher<i32>>,
+            HashSet<usize, BuildNoHashHasher<usize>>,
             Array<f32, Dim<[usize; 1]>>,
         ),
     >,
@@ -22,8 +22,8 @@ impl Graph {
         }
     }
     pub fn from_layer_data(
-        dim: u32,
-        data: HashMap<i32, (HashSet<i32, BuildNoHashHasher<i32>>, Vec<f32>)>,
+        dim: usize,
+        data: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)>,
     ) -> Self {
         let mut nodes = HashMap::new();
         for (node_id, node_data) in data.iter() {
@@ -38,7 +38,7 @@ impl Graph {
             self_connexions: false,
         }
     }
-    pub fn add_node(&mut self, node_id: i32, vector: Array<f32, Dim<[usize; 1]>>) {
+    pub fn add_node(&mut self, node_id: usize, vector: Array<f32, Dim<[usize; 1]>>) {
         if !self.nodes.contains_key(&node_id) {
             self.nodes.insert(
                 node_id,
@@ -50,7 +50,7 @@ impl Graph {
         }
     }
 
-    pub fn add_edge(&mut self, node_a: i32, node_b: i32) {
+    pub fn add_edge(&mut self, node_a: usize, node_b: usize) {
         if (!self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b))
             | ((node_a == node_b) & !self.self_connexions)
         {
@@ -70,7 +70,7 @@ impl Graph {
         b_neighbors.0.insert(node_a);
     }
 
-    pub fn remove_edge(&mut self, node_a: i32, node_b: i32) {
+    pub fn remove_edge(&mut self, node_a: usize, node_b: usize) {
         let a_neighbors = self
             .nodes
             .get_mut(&node_a)
@@ -84,7 +84,7 @@ impl Graph {
         b_neighbors.0.remove(&node_a);
     }
 
-    pub fn neighbors(&self, node_id: i32) -> &HashSet<i32, BuildNoHashHasher<i32>> {
+    pub fn neighbors(&self, node_id: usize) -> &HashSet<usize, BuildNoHashHasher<usize>> {
         &self
             .nodes
             .get(&node_id)
@@ -94,9 +94,9 @@ impl Graph {
 
     pub fn node(
         &self,
-        node_id: i32,
+        node_id: usize,
     ) -> &(
-        HashSet<i32, BuildNoHashHasher<i32>>,
+        HashSet<usize, BuildNoHashHasher<usize>>,
         Array<f32, Dim<[usize; 1]>>,
     ) {
         self.nodes
@@ -104,12 +104,12 @@ impl Graph {
             .expect("Could not fetch node {node_id}")
     }
 
-    pub fn degree(&self, node_id: i32) -> i32 {
+    pub fn degree(&self, node_id: usize) -> usize {
         self.nodes
             .get(&node_id)
             .expect("Could not get the neighbors of {node_id}")
             .0
-            .len() as i32
+            .len() as usize
     }
 
     pub fn nb_nodes(&self) -> usize {
