@@ -27,15 +27,19 @@ impl FilterVector {
         }
     }
     fn fill(&mut self, entry_points: &Vec<usize>) {
-        self.clear();
+        // self.clear();
         for ep in entry_points {
             let ep = *ep as usize;
             self.add(ep);
         }
     }
-    fn clear(&mut self) {
-        self.vector.fill(false);
+    fn clear(&mut self, node_ids: &Vec<usize>) {
+        for idx in node_ids.iter() {
+            self.vector[*idx] = false;
+        }
+        // self.vector.fill(false);
         self.counter = 0;
+        assert_eq!(self.vector.iter().filter(|x| **x).count(), 0);
     }
     fn add(&mut self, node_id: usize) {
         self.counter += if self.vector[node_id] {
@@ -73,6 +77,12 @@ impl FilterVectorHolder {
         self.candidates.fill(entry_points);
         self.visited.fill(entry_points);
         self.selected.fill(entry_points);
+    }
+
+    fn clear(&mut self, node_ids: &Vec<usize>) {
+        self.candidates.clear(&node_ids);
+        self.visited.clear(&node_ids);
+        self.selected.clear(&node_ids);
     }
 }
 
@@ -371,8 +381,7 @@ impl HNSW {
             }
         }
         let mut found_nodes = 0;
-
-        return filters
+        let final_selected = filters
             .selected
             .vector
             .iter()
@@ -388,6 +397,19 @@ impl HNSW {
             .filter(|x| *x.1)
             .map(|x| x.0 as usize)
             .collect();
+
+        let final_visited = filters
+            .visited
+            .vector
+            .iter()
+            .enumerate()
+            .filter(|x| *x.1)
+            .map(|x| x.0 as usize)
+            .collect();
+
+        filters.clear(&final_visited);
+
+        final_selected
     }
 
     pub fn insert(
@@ -526,8 +548,7 @@ impl HNSW {
             }
         }
         let mut found_nodes = 0;
-
-        return filters
+        let final_selected = filters
             .selected
             .vector
             .iter()
@@ -543,6 +564,19 @@ impl HNSW {
             .filter(|x| *x.1)
             .map(|x| x.0 as usize)
             .collect();
+
+        let final_visited = filters
+            .visited
+            .vector
+            .iter()
+            .enumerate()
+            .filter(|x| *x.1)
+            .map(|x| x.0 as usize)
+            .collect();
+
+        filters.clear(&final_visited);
+
+        final_selected
     }
 
     fn get_nearest(
