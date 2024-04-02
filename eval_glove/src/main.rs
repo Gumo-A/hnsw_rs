@@ -4,7 +4,7 @@ use std::path::Path;
 use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
-use hnsw::hnsw::HNSW;
+use hnsw::hnsw::index::HNSW;
 
 use ndarray::{s, Array2};
 
@@ -69,6 +69,8 @@ fn main() -> std::io::Result<()> {
     index.print_params();
     index.build_index(node_ids, &embeddings);
     index.print_params();
+    index.timer.borrow().print_means();
+    return Ok(());
     for (i, idx) in bf_data.keys().enumerate() {
         if i > 3 {
             break;
