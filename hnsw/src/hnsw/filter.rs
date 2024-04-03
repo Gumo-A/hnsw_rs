@@ -119,7 +119,7 @@ impl FilterSetHolder {
             selected: FilterSet::new(capacity),
         }
     }
-    pub fn set_entry_points(&mut self, entry_points: &Vec<usize>) {
+    pub fn set_entry_points(&mut self, entry_points: &HashSet<usize>) {
         self.candidates.fill(entry_points);
         self.visited.fill(entry_points);
         self.selected.fill(entry_points);
@@ -144,13 +144,13 @@ impl FilterSet {
             ),
         }
     }
-    fn fill(&mut self, entry_points: &Vec<usize>) {
+    pub fn fill(&mut self, entry_points: &HashSet<usize>) {
         self.clear();
         for ep in entry_points {
             self.set.insert(*ep);
         }
     }
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.set.clear();
     }
 }

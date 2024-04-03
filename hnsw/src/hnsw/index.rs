@@ -1,5 +1,5 @@
 use crate::graph::Graph;
-use crate::helpers::bench::Bencher;
+// use crate::helpers::bench::Bencher;
 use crate::helpers::distance::v2v_dist;
 use crate::hnsw::filter::{FilterSet, FilterSetHolder};
 
@@ -11,7 +11,7 @@ use regex::Regex;
 // use rand::rngs::StdRng;
 // use rand::SeedableRng;
 
-use std::cell::RefCell;
+// use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
@@ -99,7 +99,7 @@ impl HNSW {
         n: usize,
         ef: usize,
     ) -> Vec<usize> {
-        let mut ep: Vec<usize> = Vec::from([self.ep]);
+        let mut ep: HashSet<usize> = HashSet::from([self.ep]);
         let mut filter_sets = FilterSetHolder::new(n);
         let nb_layer = self.layers.len();
         let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
@@ -153,12 +153,12 @@ impl HNSW {
         &self,
         node_id: usize,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        mut ep: Vec<usize>,
+        mut ep: HashSet<usize>,
         max_layer_nb: usize,
         current_layer_number: usize,
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
-    ) -> Vec<usize> {
+    ) -> HashSet<usize> {
         for layer_number in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_number).unwrap();
             if layer.nb_nodes() <= 1 {
@@ -175,7 +175,7 @@ impl HNSW {
         &mut self,
         node_id: usize,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        mut ep: Vec<usize>,
+        mut ep: HashSet<usize>,
         current_layer_number: usize,
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
@@ -230,7 +230,7 @@ impl HNSW {
     fn prune_connexions(
         &mut self,
         layer_nb: usize,
-        connexions_made: Vec<usize>,
+        connexions_made: HashSet<usize>,
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) {
@@ -244,8 +244,8 @@ impl HNSW {
                 let limit = if layer_nb == 0 { self.mmax0 } else { self.mmax };
 
                 let neighbor_vec = layer.node(*neighbor).1.clone();
-                let old_neighbors: Vec<usize> =
-                    Vec::from_iter(layer.neighbors(*neighbor).iter().map(|x| *x));
+                let old_neighbors: HashSet<usize> =
+                    HashSet::from_iter(layer.neighbors(*neighbor).iter().map(|x| *x));
                 let new_neighbors = self.select_heuristic(
                     &layer,
                     *neighbor,
@@ -282,15 +282,16 @@ impl HNSW {
         layer: &Graph,
         node_id: usize,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        candidate_indices: &Vec<usize>,
+        candidate_indices: &HashSet<usize>,
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
-    ) -> Vec<usize> {
-        // filter_vecs.set_entry_points(candidate_indices);
-        filter_sets.set_entry_points(candidate_indices);
+    ) -> HashSet<usize> {
+        filter_sets.candidates.fill(candidate_indices);
+        filter_sets.selected.clear();
+        filter_sets.visited.clear();
 
         if extend_cands {
             for idx in filter_sets.candidates.set.clone().iter() {
@@ -389,7 +390,7 @@ impl HNSW {
             current_layer_nb = max_layer_nb;
         }
 
-        let mut ep = Vec::from([self.ep]);
+        let mut ep = HashSet::from([self.ep]);
         // self.bencher.borrow_mut().end_timer("preliminaries");
         ep = self.step_1(
             node_id,
@@ -410,8 +411,6 @@ impl HNSW {
     pub fn build_index(&mut self, node_ids: Vec<usize>, vectors: &Array<f32, Dim<[usize; 2]>>) {
         // self.bencher.borrow_mut().start_timer("build");
         let lim = vectors.dim().0;
-        assert_eq!(node_ids.len(), lim);
-
         let bar = ProgressBar::new(lim.try_into().unwrap());
         bar.set_style(
             ProgressStyle::with_template(
@@ -450,11 +449,11 @@ impl HNSW {
         layer: &Graph,
         node_id: usize,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        ep: &Vec<usize>,
+        ep: &HashSet<usize>,
         ef: usize,
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
-    ) -> Vec<usize> {
+    ) -> HashSet<usize> {
         // self.bencher.borrow_mut().start_timer("set_entry");
         filter_sets.set_entry_points(ep);
         // self.bencher.borrow_mut().end_timer("set_entry");

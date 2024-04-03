@@ -86,13 +86,14 @@ fn main() -> std::io::Result<()> {
     // for (key, frac) in fracs.iter() {
     //     println!("{key} was {frac} of insert");
     // }
-    for (i, idx) in bf_data.keys().enumerate() {
+    // for (i, idx) in bf_data.keys().enumerate() {
+    for (i, idx) in (123..126).enumerate() {
         if i > 3 {
             break;
         }
-        let vector = embeddings.slice(s![*idx, ..]);
+        let vector = embeddings.slice(s![idx, ..]);
         let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
-        println!("ANNs of {}", words[*idx]);
+        println!("ANNs of {}", words[idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
     }
@@ -108,7 +109,7 @@ fn estimate_recall(
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
     let mut rng = rand::thread_rng();
-    for ef in (12..128).step_by(12) {
+    for ef in (12..37).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(
@@ -126,13 +127,7 @@ fn estimate_recall(
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = embeddings.slice(s![idx, ..]);
             let anns = index.ann_by_vector(&vector.to_owned(), 10, ef);
-            let true_nns: Vec<usize> = bf_data
-                .get(&idx)
-                .unwrap()
-                .iter()
-                .map(|x| *x)
-                // .filter(|x| x <= &max_idx)
-                .collect();
+            let true_nns: Vec<usize> = bf_data.get(&idx).unwrap().clone();
             let mut hits = 0;
             for ann in anns.iter() {
                 if true_nns[..10].contains(ann) {
