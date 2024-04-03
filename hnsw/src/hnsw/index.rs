@@ -24,13 +24,12 @@ pub struct HNSW {
     ml: f32,
     ef_cons: usize,
     ep: usize,
-    // pub dist_cache: RefCell<HashMap<(usize, usize), f32>>,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
     pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
     dim: usize,
     rng: rand::rngs::ThreadRng,
     // rng: rand::rngs::StdRng,
-    pub bencher: RefCell<Bencher>,
+    // pub bencher: RefCell<Bencher>,
 }
 
 impl HNSW {
@@ -43,14 +42,13 @@ impl HNSW {
             ml: 1.0 / (m as f32).log(std::f32::consts::E),
             ef_cons: ef_cons.unwrap_or(m * 2),
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
-            // dist_cache: RefCell::new(HashMap::new()),
             ep: 0,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
             dim,
             rng: rand::thread_rng(),
             // rng: StdRng::seed_from_u64(0),
             // _nb_threads: thread::available_parallelism().unwrap().get() as u8,
-            bencher: RefCell::new(Bencher::new()),
+            // bencher: RefCell::new(Bencher::new()),
         }
     }
 
@@ -71,14 +69,13 @@ impl HNSW {
             ml: ml.unwrap_or(1.0 / (m as f32).log(std::f32::consts::E)),
             ef_cons: ef_cons.unwrap_or(m * 2),
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
-            // dist_cache: RefCell::new(HashMap::new()),
             ep: 0,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
             dim,
             rng: rand::thread_rng(),
             // rng: StdRng::seed_from_u64(0),
             // _nb_threads: thread::available_parallelism().unwrap().get() as u8,
-            bencher: RefCell::new(Bencher::new()),
+            // bencher: RefCell::new(Bencher::new()),
         }
     }
 
@@ -136,7 +133,6 @@ impl HNSW {
             nearest_neighbors.push((*neighbor, dist));
         }
         nearest_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        // dbg!(&nearest_neighbors);
 
         let mut anns: Vec<usize> = Vec::new();
         for (idx, neighbor) in nearest_neighbors.iter().enumerate() {
@@ -168,9 +164,9 @@ impl HNSW {
             if layer.nb_nodes() <= 1 {
                 continue;
             }
-            self.bencher.borrow_mut().start_timer("search_layer_1");
+            // self.bencher.borrow_mut().start_timer("search_layer_1");
             ep = self.search_layer(layer, node_id, vector, &ep, 1, filter_sets, cache);
-            self.bencher.borrow_mut().end_timer("search_layer_1");
+            // self.bencher.borrow_mut().end_timer("search_layer_1");
         }
         ep
     }
@@ -191,7 +187,7 @@ impl HNSW {
                 .add_node(node_id, vector.clone());
             let layer = &self.layers.get(&layer_nb).unwrap();
 
-            self.bencher.borrow_mut().start_timer("search_layer_2");
+            // self.bencher.borrow_mut().start_timer("search_layer_2");
             ep = self.search_layer(
                 layer,
                 node_id,
@@ -201,11 +197,11 @@ impl HNSW {
                 filter_sets,
                 cache,
             );
-            self.bencher.borrow_mut().end_timer("search_layer_2");
+            // self.bencher.borrow_mut().end_timer("search_layer_2");
 
-            self.bencher
-                .borrow_mut()
-                .start_timer("heuristic_connect_prune");
+            // self.bencher
+            //     .borrow_mut()
+            //     .start_timer("heuristic_connect_prune");
             let neighbors_to_connect = self.select_heuristic(
                 &layer,
                 node_id,
@@ -225,9 +221,9 @@ impl HNSW {
                     .add_edge(node_id, *neighbor);
             }
             self.prune_connexions(layer_nb, neighbors_to_connect, filter_sets, cache);
-            self.bencher
-                .borrow_mut()
-                .end_timer("heuristic_connect_prune");
+            // self.bencher
+            //     .borrow_mut()
+            //     .end_timer("heuristic_connect_prune");
         }
     }
 
@@ -359,9 +355,9 @@ impl HNSW {
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> bool {
-        self.bencher.borrow_mut().start_timer("insert");
+        // self.bencher.borrow_mut().start_timer("insert");
 
-        self.bencher.borrow_mut().start_timer("preliminaries");
+        // self.bencher.borrow_mut().start_timer("preliminaries");
         if (self.layers.len() == 0) & (self.node_ids.is_empty()) {
             self.node_ids.insert(node_id);
 
@@ -394,7 +390,7 @@ impl HNSW {
         }
 
         let mut ep = Vec::from([self.ep]);
-        self.bencher.borrow_mut().end_timer("preliminaries");
+        // self.bencher.borrow_mut().end_timer("preliminaries");
         ep = self.step_1(
             node_id,
             &vector,
@@ -407,12 +403,12 @@ impl HNSW {
         self.step_2(node_id, &vector, ep, current_layer_nb, filter_sets, cache);
         self.node_ids.insert(node_id);
 
-        self.bencher.borrow_mut().end_timer("insert");
+        // self.bencher.borrow_mut().end_timer("insert");
         true
     }
 
     pub fn build_index(&mut self, node_ids: Vec<usize>, vectors: &Array<f32, Dim<[usize; 2]>>) {
-        self.bencher.borrow_mut().start_timer("build");
+        // self.bencher.borrow_mut().start_timer("build");
         let lim = vectors.dim().0;
         assert_eq!(node_ids.len(), lim);
 
@@ -435,7 +431,7 @@ impl HNSW {
                 &mut cache,
             );
         }
-        self.bencher.borrow_mut().end_timer("build");
+        // self.bencher.borrow_mut().end_timer("build");
         self.remove_unused();
     }
 
@@ -459,9 +455,9 @@ impl HNSW {
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> Vec<usize> {
-        self.bencher.borrow_mut().start_timer("set_entry");
+        // self.bencher.borrow_mut().start_timer("set_entry");
         filter_sets.set_entry_points(ep);
-        self.bencher.borrow_mut().end_timer("set_entry");
+        // self.bencher.borrow_mut().end_timer("set_entry");
 
         while filter_sets.candidates.set.len() > 0 {
             let (candidate, cand2query_dist) = self.get_nearest(
@@ -521,7 +517,7 @@ impl HNSW {
         reverse: bool,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> (usize, f32) {
-        self.bencher.borrow_mut().start_timer("get_nearest");
+        // self.bencher.borrow_mut().start_timer("get_nearest");
         let mut cand_dists: Vec<(usize, f32)> = Vec::new();
         // let min_idx = candidates.min_idx.unwrap_or(0);
         // let max_idx = candidates.max_idx.unwrap_or(candidates.bools.len() - 1);
@@ -534,7 +530,7 @@ impl HNSW {
         }
         cand_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        self.bencher.borrow_mut().end_timer("get_nearest");
+        // self.bencher.borrow_mut().end_timer("get_nearest");
         if reverse {
             return *cand_dists.last().unwrap();
         } else {
@@ -552,10 +548,10 @@ impl HNSW {
     ) -> f32 {
         let key = (node_a.min(node_b), node_a.max(node_b));
         if cache.contains_key(&key) & (node_a != node_b) {
-            self.bencher.borrow_mut().count("cache_hits");
+            // self.bencher.borrow_mut().count("cache_hits");
             return *cache.get(&key).unwrap();
         } else {
-            self.bencher.borrow_mut().count("dist_computations");
+            // self.bencher.borrow_mut().count("dist_computations");
             let dist = v2v_dist(a_vec, b_vec);
             cache.insert(key, dist);
             dist
@@ -668,7 +664,7 @@ impl HNSW {
             dim: *params.get("dim").unwrap() as usize,
             rng: rand::thread_rng(),
             // _nb_threads: thread::available_parallelism().unwrap().get() as u8,
-            bencher: RefCell::new(Bencher::new()),
+            // bencher: RefCell::new(Bencher::new()),
         })
     }
 }

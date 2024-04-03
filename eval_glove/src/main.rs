@@ -69,23 +69,23 @@ fn main() -> std::io::Result<()> {
     index.print_params();
     index.build_index(node_ids, &embeddings);
     index.print_params();
-    let fracs = index.bencher.borrow().get_frac_of(
-        "search_layer_2",
-        vec![
-            "insert",
-            "heuristic_connect_prune",
-            "preliminaries",
-            "search_layer_1",
-        ],
-        false,
-    );
-    for (key, frac) in fracs.iter() {
-        println!("{key} was {frac} of search_layer_2");
-    }
-    let fracs = index.bencher.borrow().get_frac_of("insert", vec![], false);
-    for (key, frac) in fracs.iter() {
-        println!("{key} was {frac} of insert");
-    }
+    // let fracs = index.bencher.borrow().get_frac_of(
+    //     "search_layer_2",
+    //     vec![
+    //         "insert",
+    //         "heuristic_connect_prune",
+    //         "preliminaries",
+    //         "search_layer_1",
+    //     ],
+    //     false,
+    // );
+    // for (key, frac) in fracs.iter() {
+    //     println!("{key} was {frac} of search_layer_2");
+    // }
+    // let fracs = index.bencher.borrow().get_frac_of("insert", vec![], false);
+    // for (key, frac) in fracs.iter() {
+    //     println!("{key} was {frac} of insert");
+    // }
     for (i, idx) in bf_data.keys().enumerate() {
         if i > 3 {
             break;
@@ -108,7 +108,7 @@ fn estimate_recall(
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
     let mut rng = rand::thread_rng();
-    for ef in (12..37).step_by(12) {
+    for ef in (12..128).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(
