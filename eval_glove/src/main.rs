@@ -21,7 +21,7 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
     };
-    let (words, embeddings) = load_glove_array(dim as usize, lim as usize, true, 0).unwrap();
+    let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     let bf_data = load_bf_data(dim, lim).unwrap();
 
     // let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
@@ -69,7 +69,7 @@ fn main() -> std::io::Result<()> {
     index.print_params();
     index.build_index(node_ids, &embeddings);
     index.print_params();
-    let fracs = index.timer.borrow().get_frac_of(
+    let fracs = index.bencher.borrow().get_frac_of(
         "search_layer_2",
         vec![
             "insert",
@@ -77,14 +77,15 @@ fn main() -> std::io::Result<()> {
             "preliminaries",
             "search_layer_1",
         ],
+        false,
     );
     for (key, frac) in fracs.iter() {
         println!("{key} was {frac} of search_layer_2");
     }
-    for (key, val) in index.timer.borrow().counters.iter() {
-        println!("{key} {val}");
+    let fracs = index.bencher.borrow().get_frac_of("insert", vec![], false);
+    for (key, frac) in fracs.iter() {
+        println!("{key} was {frac} of insert");
     }
-    return Ok(());
     for (i, idx) in bf_data.keys().enumerate() {
         if i > 3 {
             break;
@@ -129,7 +130,7 @@ fn estimate_recall(
                 .get(&idx)
                 .unwrap()
                 .iter()
-                .map(|x| *x as usize)
+                .map(|x| *x)
                 // .filter(|x| x <= &max_idx)
                 .collect();
             let mut hits = 0;
@@ -138,7 +139,7 @@ fn estimate_recall(
                     hits += 1;
                 }
             }
-            recall_10.insert(idx as usize, (hits as f32) / 10.0);
+            recall_10.insert(idx, (hits as f32) / 10.0);
         }
         let mut avg_recall = 0.0;
         for (_, recall) in recall_10.iter() {

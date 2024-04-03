@@ -4,6 +4,8 @@ pub mod index;
 #[cfg(test)]
 mod tests {
 
+    use std::collections::HashMap;
+
     use crate::hnsw::filter::FilterVectorHolder;
     use crate::hnsw::index::HNSW;
     use ndarray::{Array1, Array2};
@@ -26,15 +28,16 @@ mod tests {
         let mut index: HNSW = HNSW::new(3, 12, None, dim);
         let n: usize = 100;
         let mut filters = FilterVectorHolder::new(n);
+        let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector, &mut filters);
+            index.insert(i.try_into().unwrap(), &vector, &mut filters, &mut cache);
         }
 
         let already_in_index = 0;
         let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-        index.insert(already_in_index, &vector, &mut filters);
+        index.insert(already_in_index, &vector, &mut filters, &mut cache);
         assert_eq!(index.node_ids.len(), n);
     }
 
@@ -45,10 +48,11 @@ mod tests {
         let mut index: HNSW = HNSW::new(3, 12, None, dim);
         let n: usize = 100;
         let mut filters = FilterVectorHolder::new(n);
+        let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector, &mut filters);
+            index.insert(i.try_into().unwrap(), &vector, &mut filters, &mut cache);
         }
 
         let n = 10;
@@ -58,15 +62,6 @@ mod tests {
         for e in anns {
             println!("{:?}", e);
         }
-    }
-
-    #[test]
-    fn hnsw_distance_caching() {
-        let mut index: HNSW = HNSW::new(3, 12, None, 100);
-        index.cache_distance(0, 1, 0.5);
-        index.cache_distance(1, 0, 0.5);
-        assert_eq!(index.dist_cache.borrow().len(), 1);
-        assert_eq!(*index.dist_cache.borrow().get(&(0, 1)).unwrap(), 0.5);
     }
 
     #[test]

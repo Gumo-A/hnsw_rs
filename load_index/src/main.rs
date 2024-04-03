@@ -1,5 +1,5 @@
 use hnsw::helpers::args::parse_args_eval;
-use hnsw::hnsw::HNSW;
+use hnsw::hnsw::index::HNSW;
 use std::io::Result;
 use std::thread;
 use std::time::Duration;
