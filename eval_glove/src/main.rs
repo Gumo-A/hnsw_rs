@@ -69,7 +69,21 @@ fn main() -> std::io::Result<()> {
     index.print_params();
     index.build_index(node_ids, &embeddings);
     index.print_params();
-    index.timer.borrow().print_means();
+    let fracs = index.timer.borrow().get_frac_of(
+        "search_layer_2",
+        vec![
+            "insert",
+            "heuristic_connect_prune",
+            "preliminaries",
+            "search_layer_1",
+        ],
+    );
+    for (key, frac) in fracs.iter() {
+        println!("{key} was {frac} of search_layer_2");
+    }
+    for (key, val) in index.timer.borrow().counters.iter() {
+        println!("{key} {val}");
+    }
     return Ok(());
     for (i, idx) in bf_data.keys().enumerate() {
         if i > 3 {
