@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 pub struct FilterVectorHolder {
     pub candidates: FilterVector,
     pub visited: FilterVector,
@@ -18,10 +20,10 @@ impl FilterVectorHolder {
         self.selected.fill(entry_points);
     }
 
-    pub fn clear(&mut self, node_ids: &Vec<usize>) {
-        self.candidates.clear(&node_ids);
-        self.visited.clear(&node_ids);
-        self.selected.clear(&node_ids);
+    pub fn clear(&mut self) {
+        self.candidates.clear();
+        self.visited.clear();
+        self.selected.clear();
     }
 }
 
@@ -41,16 +43,13 @@ impl FilterVector {
         }
     }
     fn fill(&mut self, entry_points: &Vec<usize>) {
-        self.clear(&vec![0]);
+        self.clear();
         for ep in entry_points {
             let ep = *ep as usize;
             self.add(ep);
         }
     }
-    fn clear(&mut self, node_ids: &Vec<usize>) {
-        // for idx in node_ids.iter() {
-        //     self.vector[*idx] = false;
-        // }
+    fn clear(&mut self) {
         self.bools.fill(false);
         self.counter = 0;
         assert_eq!(self.bools.iter().filter(|x| **x).count(), 0);
@@ -103,5 +102,55 @@ impl FilterVector {
         } else {
             0
         }
+    }
+}
+
+pub struct FilterSetHolder {
+    pub candidates: FilterSet,
+    pub visited: FilterSet,
+    pub selected: FilterSet,
+}
+
+impl FilterSetHolder {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            candidates: FilterSet::new(capacity),
+            visited: FilterSet::new(capacity),
+            selected: FilterSet::new(capacity),
+        }
+    }
+    pub fn set_entry_points(&mut self, entry_points: &Vec<usize>) {
+        self.candidates.fill(entry_points);
+        self.visited.fill(entry_points);
+        self.selected.fill(entry_points);
+    }
+
+    pub fn clear(&mut self) {
+        self.candidates.clear();
+        self.visited.clear();
+        self.selected.clear();
+    }
+}
+
+pub struct FilterSet {
+    pub set: HashSet<usize, nohash_hasher::BuildNoHashHasher<usize>>,
+}
+impl FilterSet {
+    fn new(capacity: usize) -> Self {
+        Self {
+            set: HashSet::with_capacity_and_hasher(
+                capacity,
+                nohash_hasher::BuildNoHashHasher::default(),
+            ),
+        }
+    }
+    fn fill(&mut self, entry_points: &Vec<usize>) {
+        self.clear();
+        for ep in entry_points {
+            self.set.insert(*ep);
+        }
+    }
+    fn clear(&mut self) {
+        self.set.clear();
     }
 }

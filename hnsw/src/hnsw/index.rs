@@ -1,7 +1,7 @@
-use super::filter::{FilterVector, FilterVectorHolder};
 use crate::graph::Graph;
 use crate::helpers::bench::Bencher;
 use crate::helpers::distance::v2v_dist;
+use crate::hnsw::filter::{FilterSet, FilterSetHolder};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, Dim};
@@ -103,7 +103,7 @@ impl HNSW {
         ef: usize,
     ) -> Vec<usize> {
         let mut ep: Vec<usize> = Vec::from([self.ep]);
-        let mut filters = FilterVectorHolder::new(self.node_ids.len());
+        let mut filter_sets = FilterSetHolder::new(n);
         let nb_layer = self.layers.len();
         let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
 
@@ -114,7 +114,7 @@ impl HNSW {
                 vector,
                 &ep,
                 1,
-                &mut filters,
+                &mut filter_sets,
                 &mut cache,
             );
         }
@@ -125,7 +125,7 @@ impl HNSW {
             vector,
             &ep,
             ef,
-            &mut filters,
+            &mut filter_sets,
             &mut cache,
         );
         let mut nearest_neighbors: Vec<(usize, f32)> = Vec::new();
@@ -160,7 +160,7 @@ impl HNSW {
         mut ep: Vec<usize>,
         max_layer_nb: usize,
         current_layer_number: usize,
-        filters: &mut FilterVectorHolder,
+        filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> Vec<usize> {
         for layer_number in (current_layer_number + 1..max_layer_nb + 1).rev() {
@@ -169,7 +169,7 @@ impl HNSW {
                 continue;
             }
             self.bencher.borrow_mut().start_timer("search_layer_1");
-            ep = self.search_layer(layer, node_id, vector, &ep, 1, filters, cache);
+            ep = self.search_layer(layer, node_id, vector, &ep, 1, filter_sets, cache);
             self.bencher.borrow_mut().end_timer("search_layer_1");
         }
         ep
@@ -181,7 +181,7 @@ impl HNSW {
         vector: &Array<f32, Dim<[usize; 1]>>,
         mut ep: Vec<usize>,
         current_layer_number: usize,
-        filters: &mut FilterVectorHolder,
+        filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) {
         for layer_nb in (0..current_layer_number + 1).rev() {
@@ -192,14 +192,30 @@ impl HNSW {
             let layer = &self.layers.get(&layer_nb).unwrap();
 
             self.bencher.borrow_mut().start_timer("search_layer_2");
-            ep = self.search_layer(layer, node_id, &vector, &ep, self.ef_cons, filters, cache);
+            ep = self.search_layer(
+                layer,
+                node_id,
+                &vector,
+                &ep,
+                self.ef_cons,
+                filter_sets,
+                cache,
+            );
             self.bencher.borrow_mut().end_timer("search_layer_2");
 
             self.bencher
                 .borrow_mut()
                 .start_timer("heuristic_connect_prune");
             let neighbors_to_connect = self.select_heuristic(
-                &layer, node_id, vector, &ep, self.m, false, true, filters, cache,
+                &layer,
+                node_id,
+                vector,
+                &ep,
+                self.m,
+                false,
+                true,
+                filter_sets,
+                cache,
             );
 
             for neighbor in neighbors_to_connect.iter() {
@@ -208,7 +224,7 @@ impl HNSW {
                     .unwrap()
                     .add_edge(node_id, *neighbor);
             }
-            self.prune_connexions(layer_nb, neighbors_to_connect, filters, cache);
+            self.prune_connexions(layer_nb, neighbors_to_connect, filter_sets, cache);
             self.bencher
                 .borrow_mut()
                 .end_timer("heuristic_connect_prune");
@@ -219,7 +235,7 @@ impl HNSW {
         &mut self,
         layer_nb: usize,
         connexions_made: Vec<usize>,
-        filters: &mut FilterVectorHolder,
+        filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) {
         for neighbor in connexions_made.iter() {
@@ -242,7 +258,7 @@ impl HNSW {
                     limit,
                     false,
                     true,
-                    filters,
+                    filter_sets,
                     cache,
                 );
 
@@ -274,94 +290,73 @@ impl HNSW {
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
-        filters: &mut FilterVectorHolder,
+        filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> Vec<usize> {
-        filters.set_entry_points(candidate_indices);
+        // filter_vecs.set_entry_points(candidate_indices);
+        filter_sets.set_entry_points(candidate_indices);
 
         if extend_cands {
-            for (idx, _) in filters
-                .candidates
-                .bools
-                .clone()
-                .iter()
-                .enumerate()
-                .filter(|x| *x.1)
-            {
-                for neighbor in layer.neighbors(idx) {
-                    if !filters.candidates.bools[*neighbor] {
-                        filters.candidates.add(*neighbor);
+            for idx in filter_sets.candidates.set.clone().iter() {
+                for neighbor in layer.neighbors(*idx) {
+                    if !filter_sets.candidates.set.contains(neighbor) {
+                        filter_sets.candidates.set.insert(*neighbor);
                     }
                 }
             }
         }
 
-        while (filters.candidates.counter > 0) & (filters.selected.counter < m) {
-            let (e, dist_e) =
-                self.get_nearest(layer, &filters.candidates, vector, node_id, false, cache);
-            filters.candidates.remove(e);
+        while (filter_sets.candidates.set.len() > 0) & (filter_sets.selected.set.len() < m) {
+            let (e, dist_e) = self.get_nearest(
+                layer,
+                &filter_sets.candidates,
+                vector,
+                node_id,
+                false,
+                cache,
+            );
+            // filter_vecs.candidates.remove(e);
+            filter_sets.candidates.set.remove(&e);
 
-            if filters.selected.counter == 0 {
-                filters.selected.add(e);
+            if filter_sets.selected.set.len() == 0 {
+                filter_sets.selected.set.insert(e);
                 continue;
             }
 
             let e_vector = &layer.node(e).1;
             let (_, dist_from_s) =
-                self.get_nearest(layer, &filters.selected, &e_vector, e, false, cache);
+                self.get_nearest(layer, &filter_sets.selected, &e_vector, e, false, cache);
 
             if dist_e < dist_from_s {
-                filters.selected.add(e);
+                filter_sets.selected.set.insert(e);
             } else {
-                filters.visited.add(e);
+                filter_sets.visited.set.insert(e);
             }
 
             if keep_pruned {
-                while (filters.visited.counter > 0) & (filters.selected.counter < m) {
-                    let (e, _) =
-                        self.get_nearest(layer, &filters.visited, vector, node_id, false, cache);
-                    filters.visited.remove(e);
-                    filters.selected.add(e);
+                while (filter_sets.visited.set.len() > 0) & (filter_sets.selected.set.len() < m) {
+                    let (e, _) = self.get_nearest(
+                        layer,
+                        &filter_sets.visited,
+                        vector,
+                        node_id,
+                        false,
+                        cache,
+                    );
+                    filter_sets.visited.set.remove(&e);
+                    filter_sets.selected.set.insert(e);
                 }
             }
         }
-        let mut found_nodes = 0;
-        let final_selected = filters
-            .selected
-            .bools
-            .iter()
-            .enumerate()
-            .take_while(|x| {
-                found_nodes += if *x.1 { 1 } else { 0 };
-                if found_nodes == m {
-                    found_nodes += 1;
-                    return true;
-                }
-                found_nodes < m
-            })
-            .filter(|x| *x.1)
-            .map(|x| x.0)
-            .collect();
-
-        // let final_visited = filters
-        //     .visited
-        //     .vector
-        //     .iter()
-        //     .enumerate()
-        //     .filter(|x| *x.1)
-        //     .map(|x| x.0)
-        //     .collect();
-
-        // filters.clear(&final_visited);
-
-        final_selected
+        let results = filter_sets.selected.set.iter().map(|x| *x).collect();
+        results
     }
 
     pub fn insert(
         &mut self,
         node_id: usize,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        filters: &mut FilterVectorHolder,
+        filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> bool {
         self.bencher.borrow_mut().start_timer("insert");
@@ -406,10 +401,10 @@ impl HNSW {
             ep,
             max_layer_nb,
             current_layer_nb,
-            filters,
+            filter_sets,
             cache,
         );
-        self.step_2(node_id, &vector, ep, current_layer_nb, filters, cache);
+        self.step_2(node_id, &vector, ep, current_layer_nb, filter_sets, cache);
         self.node_ids.insert(node_id);
 
         self.bencher.borrow_mut().end_timer("insert");
@@ -429,14 +424,14 @@ impl HNSW {
             .unwrap());
         bar.set_message(format!("Inserting Embeddings"));
 
-        let mut filter_vectors = FilterVectorHolder::new(vectors.dim().0);
+        let mut filter_sets = FilterSetHolder::new(vectors.dim().0);
         let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
         for idx in node_ids {
             bar.inc(1);
             self.insert(
                 idx,
                 &vectors.slice(s![idx, ..]).to_owned(),
-                &mut filter_vectors,
+                &mut filter_sets,
                 &mut cache,
             );
         }
@@ -461,89 +456,66 @@ impl HNSW {
         vector: &Array<f32, Dim<[usize; 1]>>,
         ep: &Vec<usize>,
         ef: usize,
-        filters: &mut FilterVectorHolder,
+        filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> Vec<usize> {
         self.bencher.borrow_mut().start_timer("set_entry");
-        filters.set_entry_points(ep);
+        filter_sets.set_entry_points(ep);
         self.bencher.borrow_mut().end_timer("set_entry");
 
-        while filters.candidates.counter > 0 {
-            let (candidate, cand2query_dist) =
-                self.get_nearest(layer, &filters.candidates, &vector, node_id, false, cache);
-            filters.candidates.remove(candidate);
+        while filter_sets.candidates.set.len() > 0 {
+            let (candidate, cand2query_dist) = self.get_nearest(
+                layer,
+                &filter_sets.candidates,
+                &vector,
+                node_id,
+                false,
+                cache,
+            );
+            filter_sets.candidates.set.remove(&candidate);
 
             let (_, f2q_dist) =
-                self.get_nearest(layer, &filters.selected, &vector, node_id, true, cache);
+                self.get_nearest(layer, &filter_sets.selected, &vector, node_id, true, cache);
 
             if cand2query_dist > f2q_dist {
                 break;
             }
 
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
-                if !filters.visited.bools[neighbor] {
-                    filters.visited.add(neighbor);
+                if !filter_sets.visited.set.contains(&neighbor) {
+                    filter_sets.visited.set.insert(neighbor);
                     let neighbor_vec = &layer.node(neighbor).1;
 
-                    let (furthest, f2q_dist) =
-                        self.get_nearest(layer, &filters.selected, &vector, node_id, true, cache);
+                    let (furthest, f2q_dist) = self.get_nearest(
+                        layer,
+                        &filter_sets.selected,
+                        &vector,
+                        node_id,
+                        true,
+                        cache,
+                    );
 
                     let n2q_dist = self.get_dist(node_id, neighbor, &vector, &neighbor_vec, cache);
 
-                    if (n2q_dist < f2q_dist) | (filters.selected.counter < ef) {
-                        filters.candidates.add(neighbor);
-                        filters.selected.add(neighbor);
+                    if (n2q_dist < f2q_dist) | (filter_sets.selected.set.len() < ef) {
+                        filter_sets.candidates.set.insert(neighbor);
+                        filter_sets.selected.set.insert(neighbor);
 
-                        if filters.selected.counter > ef {
-                            filters.selected.remove(furthest);
+                        if filter_sets.selected.set.len() > ef {
+                            filter_sets.selected.set.remove(&furthest);
                         }
                     }
                 }
             }
         }
-        let mut found_nodes = 0;
-
-        self.bencher
-            .borrow_mut()
-            .start_timer("final_iter_search_layer");
-        let final_selected = filters
-            .selected
-            .bools
-            .iter()
-            .enumerate()
-            .take_while(|x| {
-                found_nodes += if *x.1 { 1 } else { 0 };
-                if found_nodes == ef {
-                    found_nodes += 1;
-                    return true;
-                }
-                found_nodes < ef
-            })
-            .filter(|x| *x.1)
-            .map(|x| x.0)
-            .collect();
-        self.bencher
-            .borrow_mut()
-            .end_timer("final_iter_search_layer");
-
-        // let final_visited = filters
-        //     .visited
-        //     .vector
-        //     .iter()
-        //     .enumerate()
-        //     .filter(|x| *x.1)
-        //     .map(|x| x.0)
-        //     .collect();
-
-        // filters.clear(&final_visited);
-
-        final_selected
+        let result = filter_sets.selected.set.iter().map(|x| *x).collect();
+        result
     }
 
     fn get_nearest(
         &self,
         layer: &Graph,
-        candidates: &FilterVector,
+        candidates: &FilterSet,
         vector: &Array<f32, Dim<[usize; 1]>>,
         node_id: usize,
         reverse: bool,
@@ -551,13 +523,14 @@ impl HNSW {
     ) -> (usize, f32) {
         self.bencher.borrow_mut().start_timer("get_nearest");
         let mut cand_dists: Vec<(usize, f32)> = Vec::new();
-        let min_idx = candidates.min_idx.unwrap_or(0);
-        let max_idx = candidates.max_idx.unwrap_or(candidates.bools.len() - 1);
+        // let min_idx = candidates.min_idx.unwrap_or(0);
+        // let max_idx = candidates.max_idx.unwrap_or(candidates.bools.len() - 1);
 
-        for idx in (min_idx..max_idx + 1).filter(|x| candidates.bools[*x]) {
-            let cand_vec = &layer.node(idx).1.clone();
-            let dist: f32 = self.get_dist(node_id, idx, vector, cand_vec, cache);
-            cand_dists.push((idx, dist));
+        // for idx in (min_idx..max_idx + 1).filter(|x| candidates.bools[*x]) {
+        for idx in candidates.set.iter() {
+            let cand_vec = &layer.node(*idx).1.clone();
+            let dist: f32 = self.get_dist(node_id, *idx, vector, cand_vec, cache);
+            cand_dists.push((*idx, dist));
         }
         cand_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
