@@ -4,6 +4,7 @@ use std::path::Path;
 use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
+use hnsw::hnsw::filter::FilterSetHolder;
 use hnsw::hnsw::index::HNSW;
 
 use ndarray::{s, Array2};
@@ -24,45 +25,51 @@ fn main() -> std::io::Result<()> {
     let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     let bf_data = load_bf_data(dim, lim).unwrap();
 
-    // let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
-    // let mut copy_path = checkpoint_path.clone();
-    // copy_path.push_str("_copy");
+    let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
+    let mut copy_path = checkpoint_path.clone();
+    copy_path.push_str("_copy");
 
-    // let mut index = if Path::new(&checkpoint_path).exists() {
-    //     HNSW::load(&checkpoint_path)?
-    // } else {
-    //     HNSW::from_params(20, m, None, None, None, None, dim as u32)
-    // };
-    // let nb_nodes = index.node_ids.len();
-    // println!("Loaded index with {} inserted nodes.", nb_nodes);
-    // if nb_nodes > 0 {
-    //     estimate_recall(&mut index, &embeddings, &bf_data);
-    // }
+    let mut index = if Path::new(&checkpoint_path).exists() {
+        HNSW::load(&checkpoint_path)?
+    } else {
+        HNSW::from_params(20, m, None, None, None, None, dim)
+    };
+    let nb_nodes = index.node_ids.len();
+    println!("Loaded index with {} inserted nodes.", nb_nodes);
+    if nb_nodes > 1 {
+        estimate_recall(&mut index, &embeddings, &bf_data);
+    }
 
-    // if nb_nodes != lim {
-    //     let bar = ProgressBar::new((lim as usize - nb_nodes).try_into().unwrap());
-    //     bar.set_style(
-    //         ProgressStyle::with_template(
-    //             "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
-    //         )
-    //         .unwrap());
-    //     bar.set_message(format!("Inserting Embeddings"));
-    //     for idx in 0..lim {
-    //         let inserted = index.insert(idx as usize, &embeddings.slice(s![idx, ..]).to_owned());
-    //         if inserted {
-    //             bar.inc(1);
-    //         }
-    //         if ((idx % 1_000 == 0) & (inserted)) | (idx == lim - 1) {
-    //             println!("Checkpointing in {checkpoint_path}");
-    //             estimate_recall(&mut index, &embeddings, &bf_data);
-    //             // index.print_params();
-    //             index.save(&checkpoint_path)?;
-    //             index.save(&copy_path)?;
-    //         }
-    //     }
-    //     index.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str())?;
-    // }
-    // index.remove_unused();
+    if nb_nodes != lim {
+        let bar = ProgressBar::new((lim - nb_nodes).try_into().unwrap());
+        bar.set_style(
+            ProgressStyle::with_template(
+                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
+            )
+            .unwrap());
+        bar.set_message(format!("Inserting Embeddings"));
+        let mut filter_sets = FilterSetHolder::new(embeddings.dim().0);
+        let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
+        for idx in 0..lim {
+            let inserted = index.insert(
+                idx,
+                &embeddings.slice(s![idx, ..]).to_owned(),
+                &mut filter_sets,
+                &mut cache,
+            );
+            if inserted {
+                bar.inc(1);
+            }
+            if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
+                println!("Checkpointing in {checkpoint_path}");
+                estimate_recall(&mut index, &embeddings, &bf_data);
+                index.save(&checkpoint_path)?;
+                index.save(&copy_path)?;
+            }
+        }
+        index.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str())?;
+    }
+    index.remove_unused();
 
     let mut index = HNSW::from_params(20, m, None, None, None, None, dim);
     let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
@@ -109,6 +116,7 @@ fn estimate_recall(
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
     let mut rng = rand::thread_rng();
+    let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);
     for ef in (12..37).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
@@ -127,10 +135,22 @@ fn estimate_recall(
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = embeddings.slice(s![idx, ..]);
             let anns = index.ann_by_vector(&vector.to_owned(), 10, ef);
-            let true_nns: Vec<usize> = bf_data.get(&idx).unwrap().clone();
+            let true_nns: Vec<usize> = bf_data
+                .get(&idx)
+                .unwrap()
+                .clone()
+                .iter()
+                .filter(|x| x <= &max_id)
+                .map(|x| *x)
+                .collect();
+            let length = if (true_nns.len() < 10) | (anns.len() < 10) {
+                true_nns.len().min(anns.len())
+            } else {
+                10
+            };
             let mut hits = 0;
-            for ann in anns.iter() {
-                if true_nns[..10].contains(ann) {
+            for ann in anns[..length].iter() {
+                if true_nns[..length].contains(ann) {
                     hits += 1;
                 }
             }

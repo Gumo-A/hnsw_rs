@@ -26,7 +26,7 @@ pub fn get_nn_bf(
     indices_distances[1..(n + 1).min(b.dim().0)].to_vec()
 }
 
-pub fn norm_vector(vector: Array<f32, Dim<[usize; 1]>>) -> Array<f32, Dim<[usize; 1]>> {
+pub fn norm_vector(vector: &Array<f32, Dim<[usize; 1]>>) -> Array<f32, Dim<[usize; 1]>> {
     let norm: f32 = vector.map(|x| x.powf(2.0)).sum().powf(0.5);
     vector / norm
 }

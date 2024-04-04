@@ -1,3 +1,4 @@
+use nohash_hasher::BuildNoHashHasher;
 use std::collections::HashSet;
 
 pub struct FilterVectorHolder {
@@ -119,7 +120,7 @@ impl FilterSetHolder {
             selected: FilterSet::new(capacity),
         }
     }
-    pub fn set_entry_points(&mut self, entry_points: &HashSet<usize>) {
+    pub fn set_entry_points(&mut self, entry_points: &HashSet<usize, BuildNoHashHasher<usize>>) {
         self.candidates.fill(entry_points);
         self.visited.fill(entry_points);
         self.selected.fill(entry_points);
@@ -144,7 +145,7 @@ impl FilterSet {
             ),
         }
     }
-    pub fn fill(&mut self, entry_points: &HashSet<usize>) {
+    pub fn fill(&mut self, entry_points: &HashSet<usize, BuildNoHashHasher<usize>>) {
         self.clear();
         for ep in entry_points {
             self.set.insert(*ep);

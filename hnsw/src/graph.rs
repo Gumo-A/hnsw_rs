@@ -38,7 +38,7 @@ impl Graph {
             self_connexions: false,
         }
     }
-    pub fn add_node(&mut self, node_id: usize, vector: Array<f32, Dim<[usize; 1]>>) {
+    pub fn add_node(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) {
         if !self.nodes.contains_key(&node_id) {
             self.nodes.insert(
                 node_id,
