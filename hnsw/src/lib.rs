@@ -62,7 +62,7 @@ mod tests {
         }
 
         for (node, vector) in nodes.iter().zip(node_vectors) {
-            g.add_node(*node, vector)
+            g.add_node(*node, &vector)
         }
 
         assert_eq!(g.nb_nodes(), n as usize);
@@ -86,7 +86,7 @@ mod tests {
         }
 
         for (node, vector) in nodes.iter().zip(node_vectors) {
-            g.add_node(*node, vector)
+            g.add_node(*node, &vector)
         }
 
         let mut edges: Vec<(usize, usize)> = (0..n * 2)
@@ -122,7 +122,7 @@ mod tests {
         }
 
         for (node, vector) in nodes.iter().zip(node_vectors) {
-            g.add_node(*node, vector);
+            g.add_node(*node, &vector);
         }
 
         let mut dist = helpers::distance::v2v_dist(&g.node(0).1, &g.node(0).1);

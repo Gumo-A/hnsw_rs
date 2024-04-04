@@ -61,29 +61,21 @@ impl Bencher {
     pub fn get_sums(&self) -> HashMap<String, f32> {
         let mut sums = HashMap::new();
         for (key, val) in self.records.iter() {
-            let mut sum = 0.0;
-            for record in val.iter() {
-                sum += record;
-            }
-            sums.insert(key.to_string(), sum);
+            sums.insert(key.to_string(), val.iter().sum());
         }
         sums
     }
 
-    pub fn get_frac_of(&self, base: &str, exclude: Vec<&str>, sums: bool) -> HashMap<String, f32> {
+    pub fn get_frac_of(&self, base: &str, exclude: Vec<&str>) -> HashMap<String, f32> {
         let records: Vec<f32> = self.records.get(base).unwrap().clone();
-        let base_mean: f32 = records.iter().sum::<f32>() / records.len() as f32;
-        let means = if sums {
-            self.get_sums()
-        } else {
-            self.get_means()
-        };
+        let base_sum: f32 = records.iter().sum::<f32>();
+        let sums = self.get_sums();
         let mut fracs = HashMap::new();
-        for (key, mean) in means.iter() {
+        for (key, sum) in sums.iter() {
             if (key == base) | (exclude.contains(&key.as_str())) {
                 continue;
             }
-            fracs.insert(key.to_string(), mean / base_mean);
+            fracs.insert(key.to_string(), sum / base_sum);
         }
         fracs
     }
