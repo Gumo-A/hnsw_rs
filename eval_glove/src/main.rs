@@ -25,64 +25,76 @@ fn main() -> std::io::Result<()> {
     let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     let bf_data = load_bf_data(dim, lim).unwrap();
 
-    // let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
-    // let mut copy_path = checkpoint_path.clone();
-    // copy_path.push_str("_copy");
+    let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
+    let mut copy_path = checkpoint_path.clone();
+    copy_path.push_str("_copy");
 
-    // let mut index = if Path::new(&checkpoint_path).exists() {
-    //     HNSW::load(&checkpoint_path)?
-    // } else {
-    //     HNSW::from_params(20, m, None, None, None, None, dim)
-    // };
-    // let nb_nodes = index.node_ids.len();
-    // println!("Loaded index with {} inserted nodes.", nb_nodes);
-    // if nb_nodes > 1 {
-    //     estimate_recall(&mut index, &embeddings, &bf_data);
-    // }
-
-    // if nb_nodes != lim {
-    //     let bar = ProgressBar::new((lim - nb_nodes).try_into().unwrap());
-    //     bar.set_style(
-    //         ProgressStyle::with_template(
-    //             "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
-    //         )
-    //         .unwrap());
-    //     bar.set_message(format!("Inserting Embeddings"));
-    //     let mut filter_sets = FilterSetHolder::new(embeddings.dim().0);
-    //     let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
-    //     for idx in 0..lim {
-    //         let inserted = index.insert(
-    //             idx,
-    //             &embeddings.slice(s![idx, ..]).to_owned(),
-    //             &mut filter_sets,
-    //             &mut cache,
-    //         );
-    //         if inserted {
-    //             bar.inc(1);
-    //         }
-    //         if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
-    //             println!("Checkpointing in {checkpoint_path}");
-    //             estimate_recall(&mut index, &embeddings, &bf_data);
-    //             index.save(&checkpoint_path)?;
-    //             index.save(&copy_path)?;
-    //         }
-    //     }
-    //     index.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str())?;
-    // }
-    // index.remove_unused();
-
-    let mut index = HNSW::from_params(20, m, None, None, None, None, dim);
-    let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
-    index.print_params();
-    index.build_index(node_ids, &embeddings);
-    index.print_params();
-    let fracs = index.bencher.borrow().get_frac_of("step_2", vec!["insert"]);
-    let mut total = 0.0;
-    for (key, frac) in fracs.iter() {
-        println!("{key} was {frac} of step 2");
-        total += frac;
+    let mut index = if Path::new(&checkpoint_path).exists() {
+        HNSW::load(&checkpoint_path)?
+    } else {
+        HNSW::from_params(20, m, None, None, None, None, dim)
+    };
+    let nb_nodes = index.node_ids.len();
+    println!("Loaded index with {} inserted nodes.", nb_nodes);
+    if nb_nodes > 1 {
+        estimate_recall(&mut index, &embeddings, &bf_data);
     }
-    println!("Sum of these fractions is {total}");
+
+    if nb_nodes != lim {
+        let bar = ProgressBar::new((lim - nb_nodes).try_into().unwrap());
+        bar.set_style(
+            ProgressStyle::with_template(
+                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
+            )
+            .unwrap());
+        bar.set_message(format!("Inserting Embeddings"));
+        let mut filter_sets = FilterSetHolder::new(embeddings.dim().0);
+        let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
+        for idx in 0..lim {
+            let inserted = index.insert(
+                idx,
+                &embeddings.slice(s![idx, ..]).to_owned(),
+                &mut filter_sets,
+                &mut cache,
+            );
+            if inserted {
+                bar.inc(1);
+            }
+            if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
+                println!("Checkpointing in {checkpoint_path}");
+                estimate_recall(&mut index, &embeddings, &bf_data);
+                index.save(&checkpoint_path)?;
+                index.save(&copy_path)?;
+            }
+        }
+        index.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str())?;
+    }
+    index.remove_unused();
+
+    // let mut index = HNSW::from_params(20, m, None, None, None, None, dim);
+    // let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
+    // index.print_params();
+    // index.build_index(node_ids, &embeddings);
+    // index.print_params();
+    // let function = "get_nearest";
+    // let fracs = index.bencher.borrow().get_frac_of(function, vec!["insert"]);
+    // let mut total = 0.0;
+    // for (key, frac) in fracs.iter() {
+    //     println!("{key} was {frac} of {function}");
+    //     total += frac;
+    // }
+    // println!("Sum of these fractions is {total}");
+    // let mean = *index.bencher.borrow().get_means().get(function).unwrap();
+    // println!("Mean execution time of {function} is {mean}");
+    // let tot_time_get_nearest = *index.bencher.borrow().get_sums().get(function).unwrap();
+    // println!("Total execution time of {function} is {tot_time_get_nearest }");
+    // let tot_time_insert = *index.bencher.borrow().get_sums().get("insert").unwrap();
+    // println!("Total execution time of insert is {tot_time_insert}");
+    // println!(
+    //     "{function} was then {} of insert",
+    //     tot_time_get_nearest / tot_time_insert
+    // );
+
     for (i, idx) in (123..126).enumerate() {
         if i > 3 {
             break;

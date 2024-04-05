@@ -27,7 +27,9 @@ impl Bencher {
 
     pub fn start_timer(&mut self, record_name: &str) {
         self.timers.insert(record_name.to_string(), Instant::now());
-        self.records.insert(record_name.to_string(), Vec::new());
+        if !self.records.contains_key(record_name) {
+            self.records.insert(record_name.to_string(), Vec::new());
+        }
     }
 
     pub fn end_timer(&mut self, record_name: &str) {

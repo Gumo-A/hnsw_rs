@@ -12,7 +12,7 @@ use regex::Regex;
 // use rand::SeedableRng;
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 
@@ -131,7 +131,7 @@ impl HNSW {
 
         for neighbor in neighbors.iter() {
             let neighbor_vec = &self.layers.get(&0).unwrap().node(*neighbor).1.clone();
-            let dist: f32 = self.get_dist(0, 0, vector, neighbor_vec, &mut cache);
+            let dist: f32 = self.get_dist(None, None, vector, neighbor_vec, &mut cache);
             nearest_neighbors.push((*neighbor, dist));
         }
         nearest_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -180,17 +180,17 @@ impl HNSW {
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) {
-        self.bencher.borrow_mut().start_timer("step_2");
+        // self.bencher.borrow_mut().start_timer("step_2");
         for layer_nb in (0..current_layer_number + 1).rev() {
-            self.bencher.borrow_mut().start_timer("add_node_get_layer");
+            // self.bencher.borrow_mut().start_timer("add_node_get_layer");
             self.layers
                 .get_mut(&layer_nb)
                 .unwrap()
                 .add_node(node_id, vector);
             let layer = &self.layers.get(&layer_nb).unwrap();
-            self.bencher.borrow_mut().end_timer("add_node_get_layer");
+            // self.bencher.borrow_mut().end_timer("add_node_get_layer");
 
-            self.bencher.borrow_mut().start_timer("search_layer");
+            // self.bencher.borrow_mut().start_timer("search_layer");
             ep = self.search_layer(
                 layer,
                 node_id,
@@ -200,9 +200,9 @@ impl HNSW {
                 filter_sets,
                 cache,
             );
-            self.bencher.borrow_mut().end_timer("search_layer");
+            // self.bencher.borrow_mut().end_timer("search_layer");
 
-            self.bencher.borrow_mut().start_timer("heuristic");
+            // self.bencher.borrow_mut().start_timer("heuristic");
             let neighbors_to_connect = self.select_heuristic(
                 &layer,
                 node_id,
@@ -214,22 +214,22 @@ impl HNSW {
                 filter_sets,
                 cache,
             );
-            self.bencher.borrow_mut().end_timer("heuristic");
+            // self.bencher.borrow_mut().end_timer("heuristic");
 
-            self.bencher.borrow_mut().start_timer("connect");
+            // self.bencher.borrow_mut().start_timer("connect");
             for neighbor in neighbors_to_connect.iter() {
                 self.layers
                     .get_mut(&layer_nb)
                     .unwrap()
                     .add_edge(node_id, *neighbor);
             }
-            self.bencher.borrow_mut().end_timer("connect");
+            // self.bencher.borrow_mut().end_timer("connect");
 
-            self.bencher.borrow_mut().start_timer("prune");
+            // self.bencher.borrow_mut().start_timer("prune");
             self.prune_connexions(layer_nb, neighbors_to_connect, filter_sets, cache);
-            self.bencher.borrow_mut().end_timer("prune");
+            // self.bencher.borrow_mut().end_timer("prune");
         }
-        self.bencher.borrow_mut().end_timer("step_2");
+        // self.bencher.borrow_mut().end_timer("step_2");
     }
 
     fn prune_connexions(
@@ -256,7 +256,7 @@ impl HNSW {
                     &old_neighbors,
                     limit,
                     false,
-                    true,
+                    false,
                     filter_sets,
                     cache,
                 );
@@ -375,8 +375,7 @@ impl HNSW {
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> bool {
-        self.bencher.borrow_mut().start_timer("insert");
-
+        // self.bencher.borrow_mut().start_timer("insert");
         if (self.layers.len() == 0) & (self.node_ids.is_empty()) {
             self.init_index(node_id, vector);
             return true;
@@ -395,6 +394,7 @@ impl HNSW {
 
         let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
+        // self.bencher.borrow_mut().start_timer("step_1");
         ep = self.step_1(
             node_id,
             &vector,
@@ -404,10 +404,13 @@ impl HNSW {
             filter_sets,
             cache,
         );
+        // self.bencher.borrow_mut().end_timer("step_1");
+        // self.bencher.borrow_mut().start_timer("step_2");
         self.step_2(node_id, &vector, ep, current_layer_nb, filter_sets, cache);
+        // self.bencher.borrow_mut().end_timer("step_2");
         self.node_ids.insert(node_id);
 
-        self.bencher.borrow_mut().end_timer("insert");
+        // self.bencher.borrow_mut().end_timer("insert");
         true
     }
 
@@ -423,12 +426,6 @@ impl HNSW {
 
         let mut filter_sets = FilterSetHolder::new(vectors.dim().0);
         let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
-        self.init_index(0, &vectors.slice(s![0, ..]).to_owned());
-        self.layers
-            .get_mut(&0)
-            .unwrap()
-            .nodes
-            .reserve(vectors.dim().0);
         for idx in node_ids {
             bar.inc(1);
             self.insert(
@@ -451,6 +448,57 @@ impl HNSW {
         }
     }
 
+    fn sort_by_distance(
+        &self,
+        layer: &Graph,
+        node_id: usize,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        others: &HashSet<usize, BuildNoHashHasher<usize>>,
+        cache: &mut HashMap<(usize, usize), f32>,
+    ) -> BTreeMap<usize, usize> {
+        let mut result: Vec<(usize, f32)> = others
+            .iter()
+            .map(|idx| {
+                (
+                    *idx,
+                    self.get_dist(
+                        Some(node_id),
+                        Some(*idx),
+                        vector,
+                        &layer.node(*idx).1,
+                        cache,
+                    ),
+                )
+            })
+            .collect();
+        // result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        BTreeMap::from_iter(
+            result
+                .iter()
+                .map(|x| ((x.1 * 10_000.0).trunc() as usize, x.0)),
+        )
+    }
+
+    fn update_sorted_by_distance(
+        &self,
+        layer: &Graph,
+        node_id: usize,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        other: usize,
+        mut sorted_others: BTreeMap<usize, usize>,
+        cache: &mut HashMap<(usize, usize), f32>,
+    ) -> BTreeMap<usize, usize> {
+        let new_dist = self.get_dist(
+            Some(node_id),
+            Some(other),
+            vector,
+            &layer.node(other).1,
+            cache,
+        );
+        sorted_others.insert((new_dist * 10_000.0).trunc() as usize, other);
+        sorted_others
+    }
+
     fn search_layer(
         &self,
         layer: &Graph,
@@ -461,55 +509,62 @@ impl HNSW {
         filter_sets: &mut FilterSetHolder,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
+        // TODO change to use BTreeMap instead of get_nearest all the time
+        // self.bencher.borrow_mut().start_timer("search_layer");
         filter_sets.set_entry_points(ep);
 
-        while filter_sets.candidates.set.len() > 0 {
-            let (candidate, cand2query_dist) = self.get_nearest(
-                layer,
-                &filter_sets.candidates,
-                &vector,
-                node_id,
-                false,
-                cache,
-            );
-            filter_sets.candidates.set.remove(&candidate);
+        let mut candidates =
+            self.sort_by_distance(layer, node_id, vector, &filter_sets.candidates.set, cache);
+        let mut selected =
+            self.sort_by_distance(layer, node_id, vector, &filter_sets.candidates.set, cache);
 
-            let (_, f2q_dist) =
-                self.get_nearest(layer, &filter_sets.selected, &vector, node_id, true, cache);
+        while candidates.len() > 0 {
+            // self.bencher.borrow_mut().start_timer("while block 1");
 
-            if cand2query_dist > f2q_dist {
+            let (cand2query_dist, candidate) = candidates.pop_first().unwrap();
+
+            let (f2q_dist, _) = selected.last_key_value().unwrap();
+
+            // self.bencher.borrow_mut().end_timer("while block 1");
+            if &cand2query_dist > f2q_dist {
+                // self.bencher.borrow_mut().end_timer("while block 1");
                 break;
             }
 
+            // self.bencher.borrow_mut().start_timer("while block 2");
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if !filter_sets.visited.set.contains(&neighbor) {
                     filter_sets.visited.set.insert(neighbor);
                     let neighbor_vec = &layer.node(neighbor).1;
 
-                    let (furthest, f2q_dist) = self.get_nearest(
-                        layer,
-                        &filter_sets.selected,
+                    let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
+
+                    let n2q_dist = (self.get_dist(
+                        Some(node_id),
+                        Some(neighbor),
                         &vector,
-                        node_id,
-                        true,
+                        &neighbor_vec,
                         cache,
-                    );
+                    ) * 10_000.0)
+                        .trunc() as usize;
 
-                    let n2q_dist = self.get_dist(node_id, neighbor, &vector, &neighbor_vec, cache);
+                    if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
+                        candidates.insert(n2q_dist, neighbor);
+                        selected.insert(n2q_dist, neighbor);
 
-                    if (n2q_dist < f2q_dist) | (filter_sets.selected.set.len() < ef) {
-                        filter_sets.candidates.set.insert(neighbor);
-                        filter_sets.selected.set.insert(neighbor);
-
-                        if filter_sets.selected.set.len() > ef {
-                            filter_sets.selected.set.remove(&furthest);
+                        if selected.len() > ef {
+                            selected.pop_last();
                         }
                     }
                 }
             }
+            // self.bencher.borrow_mut().end_timer("while block 2");
         }
         let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
-        result.clone_from(&filter_sets.selected.set);
+        for val in selected.values() {
+            result.insert(*val);
+        }
+        // self.bencher.borrow_mut().end_timer("search_layer");
         result
     }
 
@@ -522,49 +577,79 @@ impl HNSW {
         reverse: bool,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> (usize, f32) {
-        self.bencher.borrow_mut().start_timer("get_nearest");
-        let mut cand_dists: Vec<(usize, f32)> = Vec::new();
-        for idx in candidates.set.iter() {
-            let cand_vec = &layer.node(*idx).1.clone();
-            let dist: f32 = self.get_dist(node_id, *idx, vector, cand_vec, cache);
-            cand_dists.push((*idx, dist));
-        }
-
+        // self.bencher.borrow_mut().start_timer("get_nearest");
         if reverse {
-            let furthest = *cand_dists
+            let result = candidates
+                .set
                 .iter()
+                .map(|idx| {
+                    (
+                        *idx,
+                        self.get_dist(
+                            Some(node_id),
+                            Some(*idx),
+                            vector,
+                            &layer.node(*idx).1,
+                            cache,
+                        ),
+                    )
+                })
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                 .unwrap();
-            self.bencher.borrow_mut().end_timer("get_nearest");
-            furthest
+
+            // self.bencher.borrow_mut().end_timer("get_nearest");
+            result
         } else {
-            let nearest = *cand_dists
+            let result = candidates
+                .set
                 .iter()
+                .map(|idx| {
+                    (
+                        *idx,
+                        self.get_dist(
+                            Some(node_id),
+                            Some(*idx),
+                            vector,
+                            &layer.node(*idx).1,
+                            cache,
+                        ),
+                    )
+                })
                 .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                 .unwrap();
-            self.bencher.borrow_mut().end_timer("get_nearest");
-            nearest
+
+            // self.bencher.borrow_mut().end_timer("get_nearest");
+            result
         }
     }
 
     fn get_dist(
         &self,
-        node_a: usize,
-        node_b: usize,
+        node_a: Option<usize>,
+        node_b: Option<usize>,
         a_vec: &Array<f32, Dim<[usize; 1]>>,
         b_vec: &Array<f32, Dim<[usize; 1]>>,
         cache: &mut HashMap<(usize, usize), f32>,
     ) -> f32 {
-        let key = (node_a.min(node_b), node_a.max(node_b));
-        if cache.contains_key(&key) & (node_a != node_b) {
-            return *cache.get(&key).unwrap();
-        } else {
-            let dist = v2v_dist(a_vec, b_vec);
-            cache.insert(key, dist);
-            dist
+        match (node_a, node_b) {
+            (Some(a), Some(b)) => {
+                let key = (a.min(b), a.max(b));
+                match cache.get(&key) {
+                    Some(dist) => *dist,
+                    None => {
+                        let dist = v2v_dist(a_vec, b_vec);
+                        cache.insert(key, dist);
+                        dist
+                    }
+                }
+            }
+            (None, None) => {
+                return v2v_dist(a_vec, b_vec);
+            }
+            (_, _) => {
+                return f32::MAX;
+            }
         }
-
-        // v2v_dist(a_vec, b_vec)
     }
 
     pub fn save(&self, index_dir: &str) -> std::io::Result<()> {
