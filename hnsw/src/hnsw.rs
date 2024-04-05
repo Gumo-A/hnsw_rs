@@ -4,8 +4,6 @@ pub mod index;
 #[cfg(test)]
 mod tests {
 
-    use std::collections::HashMap;
-
     use crate::hnsw::index::HNSW;
     use ndarray::{Array1, Array2};
     use rand::Rng;
@@ -26,16 +24,15 @@ mod tests {
         let dim = 100;
         let mut index: HNSW = HNSW::new(3, 12, None, dim);
         let n: usize = 100;
-        let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector, &mut cache);
+            index.insert(i.try_into().unwrap(), &vector);
         }
 
         let already_in_index = 0;
         let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-        index.insert(already_in_index, &vector, &mut cache);
+        index.insert(already_in_index, &vector);
         assert_eq!(index.node_ids.len(), n);
     }
 
@@ -45,11 +42,10 @@ mod tests {
         let dim = 100;
         let mut index: HNSW = HNSW::new(3, 12, None, dim);
         let n: usize = 100;
-        let mut cache: HashMap<(usize, usize), f32> = HashMap::new();
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector, &mut cache);
+            index.insert(i.try_into().unwrap(), &vector);
         }
 
         let n = 10;
