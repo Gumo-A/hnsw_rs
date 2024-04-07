@@ -6,6 +6,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use rand::Rng;
+use rayon::prelude::IntoParallelRefIterator;
 use regex::Regex;
 // use rand::rngs::StdRng;
 // use rand::SeedableRng;
@@ -14,9 +15,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
+use std::path::Path;
 
 pub struct HNSW {
-    max_layers: usize,
     m: usize,
     mmax: usize,
     mmax0: usize,
@@ -32,9 +33,8 @@ pub struct HNSW {
 }
 
 impl HNSW {
-    pub fn new(max_layers: usize, m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
+    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
         Self {
-            max_layers,
             m,
             mmax: m + m / 2,
             mmax0: m * 2,
@@ -52,7 +52,6 @@ impl HNSW {
     }
 
     pub fn from_params(
-        max_layers: usize,
         m: usize,
         mmax: Option<usize>,
         mmax0: Option<usize>,
@@ -61,7 +60,6 @@ impl HNSW {
         dim: usize,
     ) -> Self {
         Self {
-            max_layers,
             m,
             mmax: mmax.unwrap_or(m + m / 2),
             mmax0: mmax0.unwrap_or(m * 2),
@@ -135,15 +133,14 @@ impl HNSW {
     fn step_1(
         &self,
         vector: &Array<f32, Dim<[usize; 1]>>,
-        mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         max_layer_nb: usize,
         current_layer_number: usize,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
-        for layer_number in (current_layer_number + 1..max_layer_nb + 1).rev() {
-            let layer = &self.layers.get(&layer_number).unwrap();
-            if layer.nb_nodes() <= 1 {
-                continue;
-            }
+        let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
+        ep.insert(self.ep);
+
+        for layer_nb in (current_layer_number + 1..max_layer_nb + 1).rev() {
+            let layer = &self.layers.get(&layer_nb).unwrap();
             ep = self.search_layer(layer, vector, &mut ep, 1);
         }
         ep
@@ -156,39 +153,28 @@ impl HNSW {
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
     ) {
-        // self.bencher.borrow_mut().start_timer("step_2");
-        for layer_nb in (0..current_layer_number + 1).rev() {
-            // self.bencher.borrow_mut().start_timer("add_node_get_layer");
+        let bound = (current_layer_number + 1).min(self.layers.len());
+        for layer_nb in (0..bound).rev() {
             self.layers
                 .get_mut(&layer_nb)
                 .unwrap()
                 .add_node(node_id, vector);
             let layer = &self.layers.get(&layer_nb).unwrap();
-            // self.bencher.borrow_mut().end_timer("add_node_get_layer");
 
-            // self.bencher.borrow_mut().start_timer("search_layer");
             ep = self.search_layer(layer, &vector, &mut ep, self.ef_cons);
-            // self.bencher.borrow_mut().end_timer("search_layer");
 
-            // self.bencher.borrow_mut().start_timer("heuristic");
             let neighbors_to_connect =
                 self.select_heuristic(&layer, vector, &mut ep, self.m, false, true);
-            // self.bencher.borrow_mut().end_timer("heuristic");
 
-            // self.bencher.borrow_mut().start_timer("connect");
             for neighbor in neighbors_to_connect.iter() {
                 self.layers
                     .get_mut(&layer_nb)
                     .unwrap()
                     .add_edge(node_id, *neighbor);
             }
-            // self.bencher.borrow_mut().end_timer("connect");
 
-            // self.bencher.borrow_mut().start_timer("prune");
             self.prune_connexions(layer_nb, neighbors_to_connect);
-            // self.bencher.borrow_mut().end_timer("prune");
         }
-        // self.bencher.borrow_mut().end_timer("step_2");
     }
 
     fn prune_connexions(
@@ -283,80 +269,96 @@ impl HNSW {
         // filter_sets.selected.set.clone()
     }
 
-    fn init_index(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) {
-        self.node_ids.insert(node_id);
-
-        // TODO: This is a cheap way to make the index work
-        // but there is a problem linked to the addition of new layers.
-        // If during insertion, I insert a new layer on top of the ones before,
-        // (re-asaigning the entry point to the inserted node)
-        // The results are all wrong.
-        for lyr_nb in 0..self.max_layers {
-            self.layers.insert(lyr_nb, Graph::new());
-            self.layers
-                .get_mut(&(lyr_nb))
-                .unwrap()
-                .add_node(node_id, vector);
-        }
-
-        self.ep = node_id;
-    }
-
     pub fn insert(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) -> bool {
-        self.bencher.borrow_mut().start_timer("insert");
-        if (self.layers.len() == 0) & (self.node_ids.is_empty()) {
-            self.init_index(node_id, vector);
-            return true;
-        } else if self.node_ids.contains(&node_id) {
+        if self.node_ids.contains(&node_id) {
             return false;
         }
 
-        let mut current_layer_nb: usize =
-            (-self.rng.gen::<f32>().log(std::f32::consts::E) * self.ml).floor() as usize;
+        let current_layer_nb: usize = self.get_new_node_layer();
         let max_layer_nb = self.layers.len() - 1;
-        if current_layer_nb > max_layer_nb {
-            current_layer_nb = max_layer_nb;
-        }
 
-        let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
-        ep.insert(self.ep);
-        self.bencher.borrow_mut().start_timer("step_1");
-        ep = self.step_1(&vector, ep, max_layer_nb, current_layer_nb);
-        self.bencher.borrow_mut().end_timer("step_1");
-        self.bencher.borrow_mut().start_timer("step_2");
+        let ep = self.step_1(&vector, max_layer_nb, current_layer_nb);
         self.step_2(node_id, &vector, ep, current_layer_nb);
-        self.bencher.borrow_mut().end_timer("step_2");
         self.node_ids.insert(node_id);
-
-        self.bencher.borrow_mut().end_timer("insert");
+        if current_layer_nb > max_layer_nb {
+            for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
+                let mut layer = Graph::new();
+                layer.add_node(node_id, vector);
+                self.layers.insert(layer_nb, layer);
+                self.node_ids.insert(node_id);
+            }
+            self.ep = node_id;
+        }
         true
     }
 
-    pub fn build_index(&mut self, node_ids: Vec<usize>, vectors: &Array<f32, Dim<[usize; 2]>>) {
-        let lim = vectors.dim().0;
-        let bar = ProgressBar::new(lim.try_into().unwrap());
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
-            )
-            .unwrap());
-        bar.set_message(format!("Inserting Embeddings"));
+    fn first_insert(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) {
+        assert_eq!(self.node_ids.len(), 0);
+        assert_eq!(self.layers.len(), 0);
 
-        for idx in node_ids {
-            bar.inc(1);
-            self.insert(idx, &vectors.slice(s![idx, ..]).to_owned());
+        let current_layer_nb: usize = self.get_new_node_layer();
+        for layer_nb in 0..current_layer_nb + 1 {
+            let mut layer = Graph::new();
+            layer.add_node(node_id, vector);
+            self.layers.insert(layer_nb, layer);
+            self.node_ids.insert(node_id);
         }
-        self.remove_unused();
+        self.ep = node_id;
     }
 
-    pub fn remove_unused(&mut self) {
-        for lyr_nb in 0..(self.layers.len()) {
-            if self.layers.contains_key(&lyr_nb) {
-                if self.layers.get(&lyr_nb).unwrap().nb_nodes() == 1 {
-                    self.layers.remove(&lyr_nb);
+    pub fn build_index(
+        &mut self,
+        mut node_ids: Vec<usize>,
+        vectors: &Array<f32, Dim<[usize; 2]>>,
+        checkpoint: bool,
+    ) -> std::io::Result<()> {
+        let lim = vectors.dim().0;
+        let dim = self.dim;
+        let m = self.m;
+        let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
+        let mut copy_path = checkpoint_path.clone();
+        copy_path.push_str("_copy");
+
+        if checkpoint & Path::new(&checkpoint_path).exists() {
+            self.load(&checkpoint_path)?;
+        } else {
+            println!("No checkpoint was loaded, building self from scratch.");
+            self.first_insert(node_ids[0], &vectors.slice(s![0, ..]).to_owned());
+            node_ids.remove(0);
+        };
+
+        let nb_nodes = self.node_ids.len();
+
+        let bar = ProgressBar::new((lim - nb_nodes) as u64);
+        bar.set_style(
+                ProgressStyle::with_template(
+                    "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed_precise} ] {per_sec} {wide_bar}",
+                )
+                .unwrap());
+        bar.set_message(format!("Inserting vectors"));
+        for idx in 1..lim {
+            let inserted = self.insert(idx, &vectors.slice(s![idx, ..]).to_owned());
+            if inserted {
+                bar.inc(1);
+            } else {
+                bar.reset_eta();
+            }
+            if checkpoint {
+                if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
+                    println!("Checkpointing in {checkpoint_path}");
+                    self.save(&checkpoint_path)?;
+                    self.save(&copy_path)?;
+                    bar.reset_eta();
                 }
             }
         }
+        self.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str())?;
+
+        Ok(())
+    }
+
+    fn get_new_node_layer(&mut self) -> usize {
+        (-self.rng.gen::<f32>().log(std::f32::consts::E) * self.ml).floor() as usize
     }
 
     fn sort_by_distance(
@@ -365,16 +367,13 @@ impl HNSW {
         vector: &Array<f32, Dim<[usize; 1]>>,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> BTreeMap<usize, usize> {
-        let result: Vec<(usize, f32)> = others
-            .iter()
-            .map(|idx| (*idx, v2v_dist(vector, &layer.node(*idx).1)))
-            .collect();
-        // result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        BTreeMap::from_iter(
-            result
-                .iter()
-                .map(|x| ((x.1 * 10_000.0).trunc() as usize, x.0)),
-        )
+        let result = others.iter().map(|idx| {
+            (
+                (v2v_dist(vector, &layer.node(*idx).1) * 10_000.0).trunc() as usize,
+                *idx,
+            )
+        });
+        BTreeMap::from_iter(result)
     }
 
     fn search_layer(
@@ -384,29 +383,18 @@ impl HNSW {
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
-        // self.bencher.borrow_mut().start_timer("search_layer");
-
-        // self.bencher.borrow_mut().start_timer("pre-while");
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = self.sort_by_distance(layer, vector, &ep);
-        let mut selected_set: HashSet<usize, BuildNoHashHasher<usize>> =
-            HashSet::with_capacity_and_hasher(ef, BuildNoHashHasher::default());
-        // self.bencher.borrow_mut().end_timer("pre-while");
 
         while candidates.len() > 0 {
-            // self.bencher.borrow_mut().start_timer("while block 1");
-
             let (cand2query_dist, candidate) = candidates.pop_first().unwrap();
 
             let (f2q_dist, _) = selected.last_key_value().unwrap();
 
-            // self.bencher.borrow_mut().end_timer("while block 1");
             if &cand2query_dist > f2q_dist {
-                // self.bencher.borrow_mut().end_timer("while block 1");
                 break;
             }
 
-            // self.bencher.borrow_mut().start_timer("while block 2");
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
@@ -419,24 +407,18 @@ impl HNSW {
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
                         selected.insert(n2q_dist, neighbor);
-                        selected_set.insert(neighbor);
 
                         if selected.len() > ef {
-                            let (_, e) = selected.pop_last().unwrap();
-                            selected_set.remove(&e);
+                            selected.pop_last().unwrap();
                         }
                     }
                 }
             }
-            // self.bencher.borrow_mut().end_timer("while block 2");
         }
-        // self.bencher.borrow_mut().start_timer("post-while");
         let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
         for val in selected.values() {
             result.insert(*val);
         }
-        // self.bencher.borrow_mut().end_timer("post-while");
-        // self.bencher.borrow_mut().end_timer("search_layer");
         result
     }
 
@@ -483,7 +465,7 @@ impl HNSW {
         Ok(())
     }
 
-    pub fn load(path: &str) -> std::io::Result<Self> {
+    pub fn from_path(path: &str) -> std::io::Result<Self> {
         let mut params: HashMap<String, f32> = HashMap::new();
         let mut node_ids: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
@@ -531,20 +513,57 @@ impl HNSW {
         }
 
         Ok(Self {
-            max_layers: 0,
             m: *params.get("m").unwrap() as usize,
             mmax: *params.get("mmax").unwrap() as usize,
             mmax0: *params.get("mmax0").unwrap() as usize,
             ml: *params.get("ml").unwrap() as f32,
             ef_cons: *params.get("ef_cons").unwrap() as usize,
             ep: *params.get("ep").unwrap() as usize,
-            // dist_cache: RefCell::new(HashMap::new()),
             node_ids,
             layers,
             dim: *params.get("dim").unwrap() as usize,
             rng: rand::thread_rng(),
-            // _nb_threads: thread::available_parallelism().unwrap().get() as u8,
             bencher: RefCell::new(Bencher::new()),
         })
+    }
+
+    pub fn load(&mut self, path: &str) -> std::io::Result<()> {
+        self.node_ids.clear();
+        self.layers.clear();
+        let paths = std::fs::read_dir(path)?;
+        for file_path in paths {
+            let file_name = file_path?;
+            let file = File::open(file_name.path())?;
+            let reader = BufReader::new(file);
+            if file_name.file_name().to_str().unwrap().contains("params") {
+                let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
+                self.m = *content.get("m").unwrap() as usize;
+                self.mmax = *content.get("mmax").unwrap() as usize;
+                self.mmax0 = *content.get("mmax0").unwrap() as usize;
+                self.ep = *content.get("ep").unwrap() as usize;
+                self.ef_cons = *content.get("ef_cons").unwrap() as usize;
+                self.dim = *content.get("dim").unwrap() as usize;
+                self.ml = *content.get("ml").unwrap() as f32;
+            } else if file_name.file_name().to_str().unwrap().contains("node_ids") {
+                let content: HashSet<usize, BuildNoHashHasher<usize>> =
+                    serde_json::from_reader(reader)?;
+                for val in content.iter() {
+                    self.node_ids.insert(*val);
+                }
+            } else if file_name.file_name().to_str().unwrap().contains("layer") {
+                let re = Regex::new(r"\d+").unwrap();
+                let layer_nb: u8 = re
+                    .find(file_name.file_name().to_str().unwrap())
+                    .unwrap()
+                    .as_str()
+                    .parse::<u8>()
+                    .expect("Could not parse u8 from file name.");
+                let content: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)> =
+                    serde_json::from_reader(reader)?;
+                self.layers
+                    .insert(layer_nb as usize, Graph::from_layer_data(self.dim, content));
+            }
+        }
+        Ok(())
     }
 }

@@ -38,9 +38,9 @@ mod tests {
         for _ in 0..3 {
             let rnd_idx = rng.gen_range(0..10_000);
             let nns = bf_data[&rnd_idx].clone();
-            let nns_words: Vec<String> = nns.iter().map(|i| words[*i].clone()).collect();
-            // println!("NNs of '{}':", words[rnd_idx]);
-            // println!("{:?}", nns_words[0..10]);
+            let nns_words: Vec<String> = nns.iter().map(|i| words[*i].clone()).take(10).collect();
+            println!("NNs of '{}':", words[rnd_idx]);
+            println!("{:?}", nns_words);
         }
     }
 

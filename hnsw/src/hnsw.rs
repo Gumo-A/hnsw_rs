@@ -10,19 +10,19 @@ mod tests {
 
     #[test]
     fn hnsw_construction() {
-        let _index: HNSW = HNSW::new(3, 12, None, 100);
-        let _index: HNSW = HNSW::from_params(3, 12, Some(9), None, None, None, 100);
-        let _index: HNSW = HNSW::from_params(3, 12, None, Some(18), None, None, 100);
-        let _index: HNSW = HNSW::from_params(3, 12, None, None, Some(0.25), None, 100);
-        let _index: HNSW = HNSW::from_params(3, 12, None, None, None, Some(100), 100);
-        let _index: HNSW = HNSW::from_params(3, 12, Some(9), Some(18), Some(0.25), Some(100), 100);
+        let _index: HNSW = HNSW::new(12, None, 100);
+        let _index: HNSW = HNSW::from_params(12, Some(9), None, None, None, 100);
+        let _index: HNSW = HNSW::from_params(12, None, Some(18), None, None, 100);
+        let _index: HNSW = HNSW::from_params(12, None, None, Some(0.25), None, 100);
+        let _index: HNSW = HNSW::from_params(12, None, None, None, Some(100), 100);
+        let _index: HNSW = HNSW::from_params(12, Some(9), Some(18), Some(0.25), Some(100), 100);
     }
 
     #[test]
     fn hnsw_insert() {
         let mut rng = rand::thread_rng();
         let dim = 100;
-        let mut index: HNSW = HNSW::new(3, 12, None, dim);
+        let mut index: HNSW = HNSW::new(12, None, dim);
         let n: usize = 100;
 
         for i in 0..n {
@@ -40,7 +40,7 @@ mod tests {
     fn ann() {
         let mut rng = rand::thread_rng();
         let dim = 100;
-        let mut index: HNSW = HNSW::new(3, 12, None, dim);
+        let mut index: HNSW = HNSW::new(12, None, dim);
         let n: usize = 100;
 
         for i in 0..n {
@@ -59,7 +59,9 @@ mod tests {
 
     #[test]
     fn build_multithreaded() {
-        let mut index = HNSW::new(12, 12, None, 100);
-        index.build_index(Vec::from_iter(0..10), &Array2::zeros((10, 100)));
+        let mut index = HNSW::new(12, None, 100);
+        index
+            .build_index(Vec::from_iter(0..10), &Array2::zeros((10, 100)), false)
+            .expect("Error");
     }
 }

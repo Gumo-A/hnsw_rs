@@ -15,7 +15,7 @@ fn main() -> Result<()> {
         }
     };
     let _index =
-        HNSW::load(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str());
+        HNSW::from_path(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str());
     thread::sleep(Duration::from_secs(10));
     Ok(())
 }

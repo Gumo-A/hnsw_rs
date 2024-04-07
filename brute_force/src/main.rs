@@ -1,6 +1,5 @@
 use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 
@@ -30,11 +29,9 @@ fn main() -> std::io::Result<()> {
         load_glove_array(dim, lim, true, 0).unwrap();
 
     let embeddings = Arc::new(embeddings);
-
-    let (tx, rx) = mpsc::channel();
+    let mut children = vec![];
 
     for i in 0..nb_threads {
-        let tx = tx.clone();
         let nb_nns = 1000;
 
         let embs = embeddings.clone();
@@ -42,7 +39,7 @@ fn main() -> std::io::Result<()> {
 
         let indices_split = split_vector(indices, nb_threads, i);
 
-        thread::spawn(move || -> std::io::Result<()> {
+        children.push(thread::spawn(move || -> std::io::Result<()> {
             let bf_data = brute_force_nns(nb_nns, &embs, indices_split, i);
             let file_name =
                 format!("/home/gamal/glove_dataset/bf_rust/dim{dim}_lim{lim}/split_{i}.json");
@@ -50,15 +47,12 @@ fn main() -> std::io::Result<()> {
             let mut writer = BufWriter::new(file);
             serde_json::to_writer(&mut writer, &bf_data)?;
             writer.flush()?;
-
-            tx.send(()).unwrap();
-
             Ok(())
-        });
+        }));
     }
 
-    for _ in 0..nb_threads {
-        rx.recv().unwrap();
+    for child in children {
+        let _ = child.join();
     }
 
     Ok(())

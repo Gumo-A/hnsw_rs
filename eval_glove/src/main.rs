@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 
 use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
@@ -7,11 +6,19 @@ use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::index::HNSW;
 
 use ndarray::{s, Array2};
+use rayon::prelude::*;
+use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 
 fn main() -> std::io::Result<()> {
+    // (0..100).into_par_iter().for_each(|i| {
+    //     println!("Rayon works in parallel");
+    //     std::thread::sleep(Duration::from_secs(1));
+    // });
+    // (0..100).into_par_iter().for_each(|x| println!("{:?}", x));
+
     let (dim, lim, m) = match parse_args_eval() {
         Ok(args) => args,
         Err(err) => {
@@ -22,56 +29,34 @@ fn main() -> std::io::Result<()> {
         }
     };
     let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
-    let bf_data = load_bf_data(dim, lim).unwrap();
-
-    let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
-    let mut copy_path = checkpoint_path.clone();
-    copy_path.push_str("_copy");
-
-    let mut index = if Path::new(&checkpoint_path).exists() {
-        HNSW::load(&checkpoint_path)?
-    } else {
-        HNSW::from_params(20, m, None, None, None, None, dim)
-    };
-    let nb_nodes = index.node_ids.len();
-    println!("Loaded index with {} inserted nodes.", nb_nodes);
-    if nb_nodes > 1 {
-        // estimate_recall(&mut index, &embeddings, &bf_data);
-    }
-
-    if nb_nodes != lim {
-        let bar = ProgressBar::new((lim - nb_nodes).try_into().unwrap());
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
-            )
-            .unwrap());
-        bar.set_message(format!("Inserting Embeddings"));
-        for idx in 0..lim {
-            let inserted = index.insert(idx, &embeddings.slice(s![idx, ..]).to_owned());
-            if inserted {
-                bar.inc(1);
-            }
-            if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
-                println!("Checkpointing in {checkpoint_path}");
-                // estimate_recall(&mut index, &embeddings, &bf_data);
-                index.save(&checkpoint_path)?;
-                index.save(&copy_path)?;
-                bar.reset_eta();
-            }
+    let bf_data = match load_bf_data(dim, lim) {
+        Ok(data) => data,
+        Err(err) => {
+            println!("Error loading bf data: {err}");
+            return Ok(());
         }
-        index.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str())?;
+    };
+
+    // let mut index = HNSW::new(m, Some(500), dim);
+    let mut index = HNSW::new(m, None, dim);
+    let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
+    index.print_params();
+    index.build_index(node_ids, &embeddings, true)?;
+    index.print_params();
+    estimate_recall(&mut index, &embeddings, &bf_data);
+
+    for (i, idx) in bf_data.keys().enumerate() {
+        if i > 3 {
+            break;
+        }
+        let vector = embeddings.slice(s![*idx, ..]);
+        let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
+        println!("ANNs of {}", words[*idx]);
+        let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
+        println!("{:?}", anns_words);
     }
-    index.remove_unused();
 
-    // let mut index = HNSW::from_params(20, m, None, None, None, None, dim);
-    // let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
-    // index.print_params();
-    // index.build_index(node_ids, &embeddings);
-    // index.print_params();
-    // estimate_recall(&mut index, &embeddings, &bf_data);
-
-    // let function = "insert";
+    // let function = "while block 2";
     // let fracs = index.bencher.borrow().get_frac_of(function, vec![]);
     // let mut total = 0.0;
     // for (key, frac) in fracs.iter() {
@@ -90,17 +75,6 @@ fn main() -> std::io::Result<()> {
     //     tot_time_function / tot_time_insert
     // );
 
-    for (i, idx) in (123..126).enumerate() {
-        if i > 3 {
-            break;
-        }
-        let vector = embeddings.slice(s![idx, ..]);
-        let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
-        println!("ANNs of {}", words[idx]);
-        let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
-        println!("{:?}", anns_words);
-    }
-
     Ok(())
 }
 
@@ -111,7 +85,7 @@ fn estimate_recall(
 ) {
     let mut rng = rand::thread_rng();
     let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);
-    for ef in (12..113).step_by(12) {
+    for ef in (12..37).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(

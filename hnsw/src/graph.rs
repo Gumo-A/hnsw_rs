@@ -27,7 +27,7 @@ impl Graph {
     ) -> Self {
         let mut nodes = HashMap::new();
         for (node_id, node_data) in data.iter() {
-            let vector = Array::from_shape_vec((dim as usize,), node_data.1.clone())
+            let vector = Array::from_shape_vec((dim,), node_data.1.clone())
                 .expect("Could not load a vector.");
             let neighbors = node_data.0.clone();
             nodes.insert(*node_id, (neighbors, vector));
@@ -98,9 +98,15 @@ impl Graph {
         HashSet<usize, BuildNoHashHasher<usize>>,
         Array<f32, Dim<[usize; 1]>>,
     ) {
-        self.nodes
-            .get(&node_id)
-            .expect("Could not fetch node {node_id}")
+        match self.nodes.get(&node_id) {
+            Some(node) => node,
+            None => {
+                println!("{node_id} not found in graph. This graph's nodes are:");
+                let nodes: Vec<&usize> = self.nodes.keys().collect();
+                println!("{:?}", nodes);
+                panic!();
+            }
+        }
     }
 
     pub fn degree(&self, node_id: usize) -> usize {
