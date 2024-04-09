@@ -161,6 +161,55 @@ impl HNSW {
         }
     }
 
+    fn step_2_par(
+        index: &Arc<RwLock<Self>>,
+        node_id: usize,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
+        current_layer_number: usize,
+    ) {
+        let bound = (current_layer_number + 1).min(index.read().unwrap().layers.len());
+        for layer_nb in (0..bound).rev() {
+            index
+                .write()
+                .unwrap()
+                .layers
+                .get_mut(&layer_nb)
+                .unwrap()
+                .add_node(node_id, vector);
+
+            ep = Self::search_layer_par(
+                index,
+                layer_nb,
+                &vector,
+                &mut ep,
+                index.read().unwrap().ef_cons,
+            );
+
+            let neighbors_to_connect = Self::select_heuristic_par(
+                index,
+                layer_nb,
+                vector,
+                &mut ep,
+                index.read().unwrap().m,
+                false,
+                true,
+            );
+
+            for neighbor in neighbors_to_connect.iter() {
+                index
+                    .write()
+                    .unwrap()
+                    .layers
+                    .get_mut(&layer_nb)
+                    .unwrap()
+                    .add_edge(node_id, *neighbor);
+            }
+
+            Self::prune_connexions_par(index, layer_nb, neighbors_to_connect);
+        }
+    }
+
     fn prune_connexions(
         &mut self,
         layer_nb: usize,
@@ -191,6 +240,52 @@ impl HNSW {
                 }
                 for (idx, new_neighbor) in new_neighbors.iter().enumerate() {
                     layer_mut.add_edge(*neighbor, *new_neighbor);
+                    if idx + 1 == limit {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn prune_connexions_par(
+        index: &Arc<RwLock<Self>>,
+        layer_nb: usize,
+        connexions_made: HashSet<usize, BuildNoHashHasher<usize>>,
+    ) {
+        let read_ref = index.read().unwrap();
+        let layer_read = read_ref.layers.get(&layer_nb).unwrap();
+
+        let limit = if layer_nb == 0 {
+            read_ref.mmax0
+        } else {
+            read_ref.mmax
+        };
+        for neighbor in connexions_made.iter() {
+            // let layer = &read_ref.layers.get(&layer_nb).unwrap();
+            if ((layer_nb == 0) & (layer_read.degree(*neighbor) > read_ref.mmax0))
+                | ((layer_nb > 0) & (layer_read.degree(*neighbor) > read_ref.mmax))
+            {
+                let neighbor_vec = &layer_read.node(*neighbor).1;
+                let mut old_neighbors: HashSet<usize, BuildNoHashHasher<usize>> =
+                    HashSet::with_hasher(BuildNoHashHasher::default());
+                old_neighbors.clone_from(layer_read.neighbors(*neighbor));
+                let new_neighbors = read_ref.select_heuristic(
+                    &layer_read,
+                    &neighbor_vec,
+                    &mut old_neighbors,
+                    limit,
+                    false,
+                    false,
+                );
+
+                let mut write_ref = index.write().unwrap();
+                let layer_write = write_ref.layers.get_mut(&layer_nb).unwrap();
+                for old_neighbor in old_neighbors.iter() {
+                    layer_write.remove_edge(*neighbor, *old_neighbor);
+                }
+                for (idx, new_neighbor) in new_neighbors.iter().enumerate() {
+                    layer_write.add_edge(*neighbor, *new_neighbor);
                     if idx + 1 == limit {
                         break;
                     }
@@ -231,6 +326,64 @@ impl HNSW {
             selected_set.extend(selected.values());
             let (dist_from_s, _) = self
                 .sort_by_distance(layer, &e_vector, &selected_set)
+                .pop_first()
+                .unwrap();
+
+            if dist_e < dist_from_s {
+                selected.insert(dist_e, e);
+            } else {
+                visited.insert(dist_e, e);
+            }
+
+            if keep_pruned {
+                while (visited.len() > 0) & (selected.len() < m) {
+                    let (dist_e, e) = visited.pop_first().unwrap();
+                    selected.insert(dist_e, e);
+                }
+            }
+        }
+        let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
+        for val in selected.values() {
+            result.insert(*val);
+        }
+        result
+    }
+
+    fn select_heuristic_par(
+        index: &Arc<RwLock<Self>>,
+        layer_nb: usize,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        cands_idx: &mut HashSet<usize, BuildNoHashHasher<usize>>,
+        m: usize,
+        extend_cands: bool,
+        keep_pruned: bool,
+    ) -> HashSet<usize, BuildNoHashHasher<usize>> {
+        let read_ref = index.read().unwrap();
+        let layer_read = read_ref.layers.get(&layer_nb).unwrap();
+
+        if extend_cands {
+            for idx in cands_idx.clone().iter() {
+                for neighbor in layer_read.neighbors(*idx) {
+                    cands_idx.insert(*neighbor);
+                }
+            }
+        }
+        let mut candidates = read_ref.sort_by_distance(layer_read, vector, &cands_idx);
+        let mut visited = BTreeMap::new();
+        let mut selected = BTreeMap::new();
+
+        while (candidates.len() > 0) & (selected.len() < m) {
+            let (dist_e, e) = candidates.pop_first().unwrap();
+            if selected.len() == 0 {
+                selected.insert(dist_e, e);
+                continue;
+            }
+
+            let e_vector = &layer_read.node(e).1;
+            let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
+            selected_set.extend(selected.values());
+            let (dist_from_s, _) = read_ref
+                .sort_by_distance(layer_read, &e_vector, &selected_set)
                 .pop_first()
                 .unwrap();
 
@@ -296,6 +449,7 @@ impl HNSW {
         if index.read().unwrap().node_ids.contains(&node_id) {
             return false;
         }
+        index.write().unwrap().node_ids.insert(node_id);
 
         let current_layer_nb: usize = match level {
             Some(level) => level,
@@ -308,11 +462,11 @@ impl HNSW {
             .read()
             .unwrap()
             .step_1(&vector, max_layer_nb, current_layer_nb);
-        index
-            .write()
-            .unwrap()
-            .step_2(node_id, &vector, ep, current_layer_nb);
-        index.write().unwrap().node_ids.insert(node_id);
+        Self::step_2_par(index, node_id, &vector, ep, current_layer_nb);
+        // index
+        //     .write()
+        //     .unwrap()
+        //     .step_2(node_id, vector, ep, current_layer_nb);
         if current_layer_nb > max_layer_nb {
             println!("Inserting new layers!");
             for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
@@ -508,6 +662,54 @@ impl HNSW {
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
                     let neighbor_vec = &layer.node(neighbor).1;
+
+                    let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
+
+                    let n2q_dist = (v2v_dist(&vector, &neighbor_vec) * 10_000.0).trunc() as usize;
+
+                    if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
+                        candidates.insert(n2q_dist, neighbor);
+                        selected.insert(n2q_dist, neighbor);
+
+                        if selected.len() > ef {
+                            selected.pop_last().unwrap();
+                        }
+                    }
+                }
+            }
+        }
+        let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
+        for val in selected.values() {
+            result.insert(*val);
+        }
+        result
+    }
+
+    fn search_layer_par(
+        index: &Arc<RwLock<Self>>,
+        layer_nb: usize,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
+        ef: usize,
+    ) -> HashSet<usize, BuildNoHashHasher<usize>> {
+        let read_ref = index.read().unwrap();
+        let layer_read = read_ref.layers.get(&layer_nb).unwrap();
+        let mut candidates = read_ref.sort_by_distance(layer_read, vector, &ep);
+        let mut selected = candidates.clone();
+
+        while candidates.len() > 0 {
+            let (cand2query_dist, candidate) = candidates.pop_first().unwrap();
+
+            let (f2q_dist, _) = selected.last_key_value().unwrap();
+
+            if &cand2query_dist > f2q_dist {
+                break;
+            }
+
+            for neighbor in layer_read.neighbors(candidate).iter().map(|x| *x) {
+                if !ep.contains(&neighbor) {
+                    ep.insert(neighbor);
+                    let neighbor_vec = &layer_read.node(neighbor).1;
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 
