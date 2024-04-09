@@ -1,17 +1,13 @@
 use crate::graph::Graph;
-use crate::helpers::bench::Bencher;
+// use crate::helpers::bench::Bencher;
 use crate::helpers::distance::v2v_dist;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use rand::Rng;
-use rayon::prelude::IntoParallelRefIterator;
 use regex::Regex;
-// use rand::rngs::StdRng;
-// use rand::SeedableRng;
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
@@ -24,12 +20,10 @@ pub struct HNSW {
     ml: f32,
     ef_cons: usize,
     ep: usize,
+    dim: usize,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
     pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
-    dim: usize,
-    rng: rand::rngs::ThreadRng,
-    // rng: rand::rngs::StdRng,
-    pub bencher: RefCell<Bencher>,
+    // pub bencher: RefCell<Bencher>,
 }
 
 impl HNSW {
@@ -40,14 +34,11 @@ impl HNSW {
             mmax0: m * 2,
             ml: 1.0 / (m as f32).log(std::f32::consts::E),
             ef_cons: ef_cons.unwrap_or(m * 2),
-            node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             ep: 0,
-            layers: HashMap::with_hasher(BuildNoHashHasher::default()),
             dim,
-            rng: rand::thread_rng(),
-            // rng: StdRng::seed_from_u64(0),
-            // _nb_threads: thread::available_parallelism().unwrap().get() as u8,
-            bencher: RefCell::new(Bencher::new()),
+            node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
+            layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            // bencher: RefCell::new(Bencher::new()),
         }
     }
 
@@ -65,14 +56,11 @@ impl HNSW {
             mmax0: mmax0.unwrap_or(m * 2),
             ml: ml.unwrap_or(1.0 / (m as f32).log(std::f32::consts::E)),
             ef_cons: ef_cons.unwrap_or(m * 2),
-            node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             ep: 0,
-            layers: HashMap::with_hasher(BuildNoHashHasher::default()),
             dim,
-            rng: rand::thread_rng(),
-            // rng: StdRng::seed_from_u64(0),
-            // _nb_threads: thread::available_parallelism().unwrap().get() as u8,
-            bencher: RefCell::new(Bencher::new()),
+            node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
+            layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            // bencher: RefCell::new(Bencher::new()),
         }
     }
 
@@ -106,27 +94,20 @@ impl HNSW {
         }
 
         let neighbors = self.search_layer(&self.layers.get(&0).unwrap(), vector, &mut ep, ef);
-        let mut nearest_neighbors: Vec<(usize, f32)> = Vec::new();
 
-        for neighbor in neighbors.iter() {
-            let neighbor_vec = &self.layers.get(&0).unwrap().node(*neighbor).1.clone();
-            let dist: f32 = v2v_dist(vector, neighbor_vec);
-            nearest_neighbors.push((*neighbor, dist));
-        }
-        nearest_neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let nearest_neighbors: BTreeMap<usize, usize> =
+            BTreeMap::from_iter(neighbors.iter().map(|x| {
+                let dist = (v2v_dist(vector, &self.layers.get(&0).unwrap().node(*x).1) * 10_000.0)
+                    .trunc() as usize;
+                (dist, *x)
+            }));
 
-        let mut anns: Vec<usize> = Vec::new();
-        for (idx, neighbor) in nearest_neighbors.iter().enumerate() {
-            if idx == 0 {
-                continue;
-            }
-            // +1 because dont want to include idx == 0
-            // only to measure glove
-            if idx == (n + 1) {
-                break;
-            }
-            anns.push(neighbor.0);
-        }
+        let anns: Vec<usize> = nearest_neighbors
+            .values()
+            .skip(1)
+            .take(n)
+            .map(|x| *x)
+            .collect();
         anns
     }
 
@@ -232,19 +213,19 @@ impl HNSW {
             }
         }
         let mut candidates = self.sort_by_distance(layer, vector, &cands_idx);
-        let mut selected = BTreeMap::new();
         let mut visited = BTreeMap::new();
-        let mut selected_set = HashSet::with_capacity_and_hasher(m, BuildNoHashHasher::default());
+        let mut selected = BTreeMap::new();
 
         while (candidates.len() > 0) & (selected.len() < m) {
             let (dist_e, e) = candidates.pop_first().unwrap();
             if selected.len() == 0 {
                 selected.insert(dist_e, e);
-                selected_set.insert(e);
                 continue;
             }
 
             let e_vector = &layer.node(e).1;
+            let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
+            selected_set.extend(selected.values());
             let (dist_from_s, _) = self
                 .sort_by_distance(layer, &e_vector, &selected_set)
                 .pop_first()
@@ -252,7 +233,6 @@ impl HNSW {
 
             if dist_e < dist_from_s {
                 selected.insert(dist_e, e);
-                selected_set.insert(e);
             } else {
                 visited.insert(dist_e, e);
             }
@@ -260,27 +240,39 @@ impl HNSW {
             if keep_pruned {
                 while (visited.len() > 0) & (selected.len() < m) {
                     let (dist_e, e) = visited.pop_first().unwrap();
-                    selected_set.insert(e);
                     selected.insert(dist_e, e);
                 }
             }
         }
-        selected_set
-        // filter_sets.selected.set.clone()
+        let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
+        for val in selected.values() {
+            result.insert(*val);
+        }
+        result
     }
 
-    pub fn insert(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) -> bool {
+    pub fn insert(
+        &mut self,
+        node_id: usize,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        level: Option<usize>,
+    ) -> bool {
         if self.node_ids.contains(&node_id) {
             return false;
         }
 
-        let current_layer_nb: usize = self.get_new_node_layer();
+        let current_layer_nb: usize = match level {
+            Some(level) => level,
+            None => self.get_new_node_layer(),
+        };
+
         let max_layer_nb = self.layers.len() - 1;
 
         let ep = self.step_1(&vector, max_layer_nb, current_layer_nb);
         self.step_2(node_id, &vector, ep, current_layer_nb);
         self.node_ids.insert(node_id);
         if current_layer_nb > max_layer_nb {
+            println!("Inserting new layers!");
             for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
                 let mut layer = Graph::new();
                 layer.add_node(node_id, vector);
@@ -296,55 +288,66 @@ impl HNSW {
         assert_eq!(self.node_ids.len(), 0);
         assert_eq!(self.layers.len(), 0);
 
-        let current_layer_nb: usize = self.get_new_node_layer();
-        for layer_nb in 0..current_layer_nb + 1 {
-            let mut layer = Graph::new();
-            layer.add_node(node_id, vector);
-            self.layers.insert(layer_nb, layer);
-            self.node_ids.insert(node_id);
-        }
+        let mut layer = Graph::new();
+        layer.add_node(node_id, vector);
+        self.layers.insert(0, layer);
+        self.node_ids.insert(node_id);
         self.ep = node_id;
     }
 
     pub fn build_index(
         &mut self,
-        mut node_ids: Vec<usize>,
+        node_ids: Vec<usize>,
         vectors: &Array<f32, Dim<[usize; 2]>>,
         checkpoint: bool,
     ) -> std::io::Result<()> {
         let lim = vectors.dim().0;
         let dim = self.dim;
         let m = self.m;
-        let checkpoint_path = format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}");
+        let efcons = self.ef_cons;
+
+        let checkpoint_path =
+            format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}_efcons{efcons}");
         let mut copy_path = checkpoint_path.clone();
         copy_path.push_str("_copy");
 
         if checkpoint & Path::new(&checkpoint_path).exists() {
             self.load(&checkpoint_path)?;
+            self.print_params();
         } else {
             println!("No checkpoint was loaded, building self from scratch.");
             self.first_insert(node_ids[0], &vectors.slice(s![0, ..]).to_owned());
-            node_ids.remove(0);
         };
 
-        let nb_nodes = self.node_ids.len();
+        let mut nodes_remaining = HashSet::with_hasher(BuildNoHashHasher::default());
+        nodes_remaining.extend(node_ids.iter());
+        let nodes_remaining: Vec<usize> = nodes_remaining
+            .difference(&self.node_ids)
+            .map(|x| *x)
+            .collect();
 
-        let bar = ProgressBar::new((lim - nb_nodes) as u64);
-        bar.set_style(
-                ProgressStyle::with_template(
-                    "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed_precise} ] {per_sec} {wide_bar}",
-                )
-                .unwrap());
-        bar.set_message(format!("Inserting vectors"));
-        for idx in 1..lim {
-            let inserted = self.insert(idx, &vectors.slice(s![idx, ..]).to_owned());
+        let vector_levels: Vec<(usize, usize)> = nodes_remaining
+            .iter()
+            .map(|x| (*x, self.get_new_node_layer()))
+            .collect();
+
+        let nb_nodes = self.node_ids.len();
+        let remaining = lim - nb_nodes;
+        let bar = get_progress_bar(remaining);
+        for (node_id, level) in vector_levels.iter() {
+            let inserted = self.insert(
+                *node_id,
+                &vectors.slice(s![*node_id, ..]).to_owned(),
+                Some(*level),
+            );
             if inserted {
                 bar.inc(1);
             } else {
                 bar.reset_eta();
             }
             if checkpoint {
-                if ((idx % 10_000 == 0) & (inserted)) | (idx == lim - 1) {
+                if ((*node_id != 0) & (node_id % 10_000 == 0) & (inserted)) | (*node_id == lim - 1)
+                {
                     println!("Checkpointing in {checkpoint_path}");
                     self.save(&checkpoint_path)?;
                     self.save(&copy_path)?;
@@ -352,13 +355,17 @@ impl HNSW {
                 }
             }
         }
-        self.save(format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}").as_str())?;
+        self.save(
+            format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}_efcons{efcons}")
+                .as_str(),
+        )?;
 
         Ok(())
     }
 
     fn get_new_node_layer(&mut self) -> usize {
-        (-self.rng.gen::<f32>().log(std::f32::consts::E) * self.ml).floor() as usize
+        let mut rng = rand::thread_rng();
+        (-rng.gen::<f32>().log(std::f32::consts::E) * self.ml).floor() as usize
     }
 
     fn sort_by_distance(
@@ -384,7 +391,7 @@ impl HNSW {
         ef: usize,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
-        let mut selected = self.sort_by_distance(layer, vector, &ep);
+        let mut selected = candidates.clone();
 
         while candidates.len() > 0 {
             let (cand2query_dist, candidate) = candidates.pop_first().unwrap();
@@ -522,8 +529,8 @@ impl HNSW {
             node_ids,
             layers,
             dim: *params.get("dim").unwrap() as usize,
-            rng: rand::thread_rng(),
-            bencher: RefCell::new(Bencher::new()),
+            // rng: rand::thread_rng(),
+            // bencher: RefCell::new(Bencher::new()),
         })
     }
 
@@ -566,4 +573,15 @@ impl HNSW {
         }
         Ok(())
     }
+}
+
+fn get_progress_bar(remaining: usize) -> ProgressBar {
+    let bar = ProgressBar::new(remaining as u64);
+    bar.set_style(
+                ProgressStyle::with_template(
+                    "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed_precise} ] {per_sec} {wide_bar}",
+                )
+                .unwrap());
+    bar.set_message(format!("Inserting vectors"));
+    bar
 }

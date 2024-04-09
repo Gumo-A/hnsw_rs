@@ -6,19 +6,11 @@ use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::index::HNSW;
 
 use ndarray::{s, Array2};
-use rayon::prelude::*;
-use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 
 fn main() -> std::io::Result<()> {
-    // (0..100).into_par_iter().for_each(|i| {
-    //     println!("Rayon works in parallel");
-    //     std::thread::sleep(Duration::from_secs(1));
-    // });
-    // (0..100).into_par_iter().for_each(|x| println!("{:?}", x));
-
     let (dim, lim, m) = match parse_args_eval() {
         Ok(args) => args,
         Err(err) => {
@@ -28,6 +20,7 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
     };
+
     let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     let bf_data = match load_bf_data(dim, lim) {
         Ok(data) => data,
@@ -37,10 +30,9 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    // let mut index = HNSW::new(m, Some(500), dim);
-    let mut index = HNSW::new(m, None, dim);
+    let mut index = HNSW::new(m, Some(500), dim);
+    // let mut index = HNSW::new(m, None, dim);
     let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
-    index.print_params();
     index.build_index(node_ids, &embeddings, true)?;
     index.print_params();
     estimate_recall(&mut index, &embeddings, &bf_data);
@@ -85,7 +77,7 @@ fn estimate_recall(
 ) {
     let mut rng = rand::thread_rng();
     let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);
-    for ef in (12..37).step_by(12) {
+    for ef in (12..256).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(

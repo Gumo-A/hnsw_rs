@@ -27,12 +27,12 @@ mod tests {
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector);
+            index.insert(i.try_into().unwrap(), &vector, None);
         }
 
         let already_in_index = 0;
         let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-        index.insert(already_in_index, &vector);
+        index.insert(already_in_index, &vector, None);
         assert_eq!(index.node_ids.len(), n);
     }
 
@@ -45,7 +45,7 @@ mod tests {
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector);
+            index.insert(i.try_into().unwrap(), &vector, None);
         }
 
         let n = 10;
