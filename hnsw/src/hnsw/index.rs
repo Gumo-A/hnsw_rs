@@ -1,4 +1,5 @@
 use crate::graph::Graph;
+use crate::helpers::data::split_ids;
 // use crate::helpers::bench::Bencher;
 use crate::helpers::distance::v2v_dist;
 
@@ -7,12 +8,14 @@ use ndarray::{s, Array, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use rand::Rng;
 use regex::Regex;
+use std::sync::{Arc, RwLock};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct HNSW {
     m: usize,
     mmax: usize,
@@ -284,6 +287,45 @@ impl HNSW {
         true
     }
 
+    pub fn insert_par(
+        index: &Arc<RwLock<Self>>,
+        node_id: usize,
+        vector: &Array<f32, Dim<[usize; 1]>>,
+        level: Option<usize>,
+    ) -> bool {
+        if index.read().unwrap().node_ids.contains(&node_id) {
+            return false;
+        }
+
+        let current_layer_nb: usize = match level {
+            Some(level) => level,
+            None => index.read().unwrap().get_new_node_layer(),
+        };
+
+        let max_layer_nb = index.read().unwrap().layers.len() - 1;
+
+        let ep = index
+            .read()
+            .unwrap()
+            .step_1(&vector, max_layer_nb, current_layer_nb);
+        index
+            .write()
+            .unwrap()
+            .step_2(node_id, &vector, ep, current_layer_nb);
+        index.write().unwrap().node_ids.insert(node_id);
+        if current_layer_nb > max_layer_nb {
+            println!("Inserting new layers!");
+            for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
+                let mut layer = Graph::new();
+                layer.add_node(node_id, vector);
+                index.write().unwrap().layers.insert(layer_nb, layer);
+                index.write().unwrap().node_ids.insert(node_id);
+            }
+            index.write().unwrap().ep = node_id;
+        }
+        true
+    }
+
     fn first_insert(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) {
         assert_eq!(self.node_ids.len(), 0);
         assert_eq!(self.layers.len(), 0);
@@ -363,7 +405,67 @@ impl HNSW {
         Ok(())
     }
 
-    fn get_new_node_layer(&mut self) -> usize {
+    pub fn build_index_par(
+        m: usize,
+        node_ids: Vec<usize>,
+        vectors: Array<f32, Dim<[usize; 2]>>,
+    ) -> Self {
+        let (_lim, dim) = vectors.dim();
+        let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
+        // let vectors = Arc::new(RwLock::new(vectors));
+
+        index
+            .write()
+            .unwrap()
+            .first_insert(node_ids[0], &vectors.slice(s![0, ..]).to_owned());
+
+        let mut handlers = vec![];
+
+        // let nb_threads = std::thread::available_parallelism().unwrap().get();
+        let nb_threads = 2;
+        for thread_nb in 0..nb_threads {
+            let node_ids_split = split_ids(node_ids.clone(), nb_threads as u8, thread_nb as u8);
+            let vector_levels: Vec<(usize, usize)> = node_ids_split
+                .iter()
+                .map(|x| (*x, index.read().unwrap().get_new_node_layer()))
+                .collect();
+            let index_ref = index.clone();
+            let vectors_ref = vectors.clone();
+            if thread_nb == 0 {
+                let bar = get_progress_bar(vector_levels.len());
+                handlers.push(std::thread::spawn(move || {
+                    for (node_id, level) in vector_levels.iter() {
+                        let inserted = Self::insert_par(
+                            &index_ref,
+                            *node_id,
+                            &vectors_ref.slice(s![*node_id, ..]).to_owned(),
+                            Some(*level),
+                        );
+                        if inserted {
+                            bar.inc(1);
+                        }
+                    }
+                }));
+            } else {
+                handlers.push(std::thread::spawn(move || {
+                    for (node_id, level) in vector_levels.iter() {
+                        let _ = Self::insert_par(
+                            &index_ref,
+                            *node_id,
+                            &vectors_ref.slice(s![*node_id, ..]).to_owned(),
+                            Some(*level),
+                        );
+                    }
+                }));
+            }
+        }
+        for handle in handlers {
+            let _ = handle.join().unwrap();
+        }
+        Arc::try_unwrap(index).unwrap().into_inner().unwrap()
+    }
+
+    fn get_new_node_layer(&self) -> usize {
         let mut rng = rand::thread_rng();
         (-rng.gen::<f32>().log(std::f32::consts::E) * self.ml).floor() as usize
     }

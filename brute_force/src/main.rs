@@ -6,7 +6,7 @@ use std::thread;
 use ndarray::Array2;
 
 use hnsw::helpers::args::parse_args_bf;
-use hnsw::helpers::data::split_vector;
+use hnsw::helpers::data::split_ids;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
 
 fn main() -> std::io::Result<()> {
@@ -21,7 +21,6 @@ fn main() -> std::io::Result<()> {
     };
 
     // TODO: delete files in dir if dir exists.
-    //
     let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/bf_rust/dim{dim}_lim{lim}"
     ));
@@ -38,7 +37,7 @@ fn main() -> std::io::Result<()> {
         let embs = embeddings.clone();
         let indices: Vec<usize> = (0..lim).collect();
 
-        let indices_split = split_vector(indices, nb_threads, i);
+        let indices_split = split_ids(indices, nb_threads, i);
 
         children.push(thread::spawn(move || -> std::io::Result<()> {
             let bf_data = brute_force_nns(nb_nns, &embs, indices_split, i);

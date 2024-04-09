@@ -30,23 +30,24 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let mut index = HNSW::new(m, Some(500), dim);
-    // let mut index = HNSW::new(m, None, dim);
     let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
-    index.build_index(node_ids, &embeddings, true)?;
+    // let mut index = HNSW::build_index_par(12, node_ids, embeddings);
+    let mut index = HNSW::new(12, Some(500), dim);
+    index.build_index(node_ids, &embeddings, false);
     index.print_params();
+    let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     estimate_recall(&mut index, &embeddings, &bf_data);
 
-    for (i, idx) in bf_data.keys().enumerate() {
-        if i > 3 {
-            break;
-        }
-        let vector = embeddings.slice(s![*idx, ..]);
-        let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
-        println!("ANNs of {}", words[*idx]);
-        let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
-        println!("{:?}", anns_words);
-    }
+    // for (i, idx) in bf_data.keys().enumerate() {
+    //     if i > 3 {
+    //         break;
+    //     }
+    //     let vector = embeddings.slice(s![*idx, ..]);
+    //     let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
+    //     println!("ANNs of {}", words[*idx]);
+    //     let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
+    //     println!("{:?}", anns_words);
+    // }
 
     // let function = "while block 2";
     // let fracs = index.bencher.borrow().get_frac_of(function, vec![]);
@@ -77,7 +78,7 @@ fn estimate_recall(
 ) {
     let mut rng = rand::thread_rng();
     let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);
-    for ef in (12..256).step_by(12) {
+    for ef in (12..36).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(

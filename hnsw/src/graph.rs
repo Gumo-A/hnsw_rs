@@ -3,6 +3,7 @@ use ndarray::{Array, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug)]
 pub struct Graph {
     pub nodes: HashMap<
         usize,
