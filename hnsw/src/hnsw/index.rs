@@ -431,7 +431,8 @@ impl HNSW {
         vectors: Array<f32, Dim<[usize; 2]>>,
     ) -> Self {
         let (_lim, dim) = vectors.dim();
-        let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
+        let index = Arc::new(RwLock::new(Self::new(m, None, dim)));
+        // let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
         // let vectors = Arc::new(RwLock::new(vectors));
 
         index
@@ -440,8 +441,8 @@ impl HNSW {
 
         let mut handlers = vec![];
 
-        let nb_threads = std::thread::available_parallelism().unwrap().get();
-        // let nb_threads = 2;
+        // let nb_threads = std::thread::available_parallelism().unwrap().get();
+        let nb_threads = 16;
         for thread_nb in 0..nb_threads {
             let node_ids_split = split_ids(node_ids.clone(), nb_threads as u8, thread_nb as u8);
             let vector_levels: Vec<(usize, usize)> = node_ids_split
@@ -531,72 +532,6 @@ impl HNSW {
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 
                     let n2q_dist = (v2v_dist(&vector, &neighbor_vec) * 10_000.0).trunc() as usize;
-
-                    if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
-                        candidates.insert(n2q_dist, neighbor);
-                        selected.insert(n2q_dist, neighbor);
-
-                        if selected.len() > ef {
-                            selected.pop_last().unwrap();
-                        }
-                    }
-                }
-            }
-        }
-        let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
-        for val in selected.values() {
-            result.insert(*val);
-        }
-        result
-    }
-
-    fn search_layer_par(
-        index: &Arc<RwLock<Self>>,
-        layer_nb: usize,
-        vector: &Array<f32, Dim<[usize; 1]>>,
-        ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
-        ef: usize,
-    ) -> HashSet<usize, BuildNoHashHasher<usize>> {
-        // let read_ref = index.read();
-        // let layer_read = index.read().layers.get(&layer_nb).unwrap();
-        let mut candidates =
-            index
-                .read()
-                .sort_by_distance(index.read().layers.get(&layer_nb).unwrap(), vector, &ep);
-        let mut selected = candidates.clone();
-
-        while candidates.len() > 0 {
-            let (cand2query_dist, candidate) = candidates.pop_first().unwrap();
-
-            let (f2q_dist, _) = selected.last_key_value().unwrap();
-
-            if &cand2query_dist > f2q_dist {
-                break;
-            }
-
-            for neighbor in index
-                .read()
-                .layers
-                .get(&layer_nb)
-                .unwrap()
-                .neighbors(candidate)
-                .iter()
-                .map(|x| *x)
-            {
-                if !ep.contains(&neighbor) {
-                    ep.insert(neighbor);
-                    let index_read_ref = index.read();
-                    let neighbor_vec = &index_read_ref
-                        .layers
-                        .get(&layer_nb)
-                        .unwrap()
-                        .node(neighbor)
-                        .1;
-
-                    let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
-
-                    let n2q_dist = (v2v_dist(&vector, &neighbor_vec) * 10_000.0).trunc() as usize;
-                    drop(index_read_ref);
 
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);

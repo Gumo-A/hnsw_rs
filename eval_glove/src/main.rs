@@ -78,7 +78,7 @@ fn estimate_recall(
 ) {
     let mut rng = rand::thread_rng();
     let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);
-    for ef in (12..36).step_by(12) {
+    for ef in (12..100).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
         bar.set_style(
