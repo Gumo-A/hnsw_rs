@@ -102,9 +102,12 @@ impl Graph {
         match self.nodes.get(&node_id) {
             Some(node) => node,
             None => {
-                println!("{node_id} not found in graph. This graph's nodes are:");
-                let nodes: Vec<&usize> = self.nodes.keys().collect();
-                println!("{:?}", nodes);
+                println!(
+                    "{node_id} not found in graph. This graph has {} nodes",
+                    self.nb_nodes()
+                );
+                // let nodes: Vec<&usize> = self.nodes.keys().collect();
+                // println!("{:?}", nodes);
                 panic!();
             }
         }

@@ -33,7 +33,7 @@ fn main() -> std::io::Result<()> {
     let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
     let mut index = HNSW::build_index_par(12, node_ids, embeddings);
     // let mut index = HNSW::new(12, Some(500), dim);
-    // index.build_index(node_ids, &embeddings, false);
+    // index.build_index(node_ids, &embeddings, false)?;
     index.print_params();
     let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     estimate_recall(&mut index, &embeddings, &bf_data);
