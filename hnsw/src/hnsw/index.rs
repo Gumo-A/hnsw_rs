@@ -8,7 +8,10 @@ use ndarray::{s, Array, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use rand::Rng;
 use regex::Regex;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+// use std::sync::{Arc, RwLock};
+// use tokio::sync::RwLock;
+use parking_lot::RwLock;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
@@ -168,30 +171,24 @@ impl HNSW {
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
     ) {
-        let bound = (current_layer_number + 1).min(index.read().unwrap().layers.len());
+        let num_layers = index.read().layers.len();
+        let bound = (current_layer_number + 1).min(num_layers);
         for layer_nb in (0..bound).rev() {
             index
                 .write()
-                .unwrap()
                 .layers
                 .get_mut(&layer_nb)
                 .unwrap()
                 .add_node(node_id, vector);
 
-            ep = Self::search_layer_par(
-                index,
-                layer_nb,
-                &vector,
-                &mut ep,
-                index.read().unwrap().ef_cons,
-            );
+            ep = Self::search_layer_par(index, layer_nb, &vector, &mut ep, index.read().ef_cons);
 
             let neighbors_to_connect = Self::select_heuristic_par(
                 index,
                 layer_nb,
                 vector,
                 &mut ep,
-                index.read().unwrap().m,
+                index.read().m,
                 false,
                 true,
             );
@@ -199,7 +196,6 @@ impl HNSW {
             for neighbor in neighbors_to_connect.iter() {
                 index
                     .write()
-                    .unwrap()
                     .layers
                     .get_mut(&layer_nb)
                     .unwrap()
@@ -253,15 +249,14 @@ impl HNSW {
         layer_nb: usize,
         connexions_made: HashSet<usize, BuildNoHashHasher<usize>>,
     ) {
-        let read_ref = index.read().unwrap();
-        let layer_read = read_ref.layers.get(&layer_nb).unwrap();
-
-        let limit = if layer_nb == 0 {
-            read_ref.mmax0
-        } else {
-            read_ref.mmax
-        };
         for neighbor in connexions_made.iter() {
+            let read_ref = index.read();
+            let layer_read = read_ref.layers.get(&layer_nb).unwrap();
+            let limit = if layer_nb == 0 {
+                read_ref.mmax0
+            } else {
+                read_ref.mmax
+            };
             // let layer = &read_ref.layers.get(&layer_nb).unwrap();
             if ((layer_nb == 0) & (layer_read.degree(*neighbor) > read_ref.mmax0))
                 | ((layer_nb > 0) & (layer_read.degree(*neighbor) > read_ref.mmax))
@@ -278,8 +273,9 @@ impl HNSW {
                     false,
                     false,
                 );
+                drop(read_ref);
 
-                let mut write_ref = index.write().unwrap();
+                let mut write_ref = index.write();
                 let layer_write = write_ref.layers.get_mut(&layer_nb).unwrap();
                 for old_neighbor in old_neighbors.iter() {
                     layer_write.remove_edge(*neighbor, *old_neighbor);
@@ -358,7 +354,7 @@ impl HNSW {
         extend_cands: bool,
         keep_pruned: bool,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
-        let read_ref = index.read().unwrap();
+        let read_ref = index.read();
         let layer_read = read_ref.layers.get(&layer_nb).unwrap();
 
         if extend_cands {
@@ -371,6 +367,7 @@ impl HNSW {
         let mut candidates = read_ref.sort_by_distance(layer_read, vector, &cands_idx);
         let mut visited = BTreeMap::new();
         let mut selected = BTreeMap::new();
+        drop(read_ref);
 
         while (candidates.len() > 0) & (selected.len() < m) {
             let (dist_e, e) = candidates.pop_first().unwrap();
@@ -379,6 +376,9 @@ impl HNSW {
                 continue;
             }
 
+            let read_ref = index.read();
+            let layer_read = read_ref.layers.get(&layer_nb).unwrap();
+
             let e_vector = &layer_read.node(e).1;
             let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
             selected_set.extend(selected.values());
@@ -386,6 +386,7 @@ impl HNSW {
                 .sort_by_distance(layer_read, &e_vector, &selected_set)
                 .pop_first()
                 .unwrap();
+            drop(read_ref);
 
             if dist_e < dist_from_s {
                 selected.insert(dist_e, e);
@@ -446,22 +447,19 @@ impl HNSW {
         vector: &Array<f32, Dim<[usize; 1]>>,
         level: Option<usize>,
     ) -> bool {
-        if index.read().unwrap().node_ids.contains(&node_id) {
+        if index.read().node_ids.contains(&node_id) {
             return false;
         }
-        index.write().unwrap().node_ids.insert(node_id);
+        index.write().node_ids.insert(node_id);
 
         let current_layer_nb: usize = match level {
             Some(level) => level,
-            None => index.read().unwrap().get_new_node_layer(),
+            None => index.read().get_new_node_layer(),
         };
 
-        let max_layer_nb = index.read().unwrap().layers.len() - 1;
+        let max_layer_nb = index.read().layers.len() - 1;
 
-        let ep = index
-            .read()
-            .unwrap()
-            .step_1(&vector, max_layer_nb, current_layer_nb);
+        let ep = index.read().step_1(&vector, max_layer_nb, current_layer_nb);
         Self::step_2_par(index, node_id, &vector, ep, current_layer_nb);
         // index
         //     .write()
@@ -472,10 +470,10 @@ impl HNSW {
             for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
                 let mut layer = Graph::new();
                 layer.add_node(node_id, vector);
-                index.write().unwrap().layers.insert(layer_nb, layer);
-                index.write().unwrap().node_ids.insert(node_id);
+                index.write().layers.insert(layer_nb, layer);
+                index.write().node_ids.insert(node_id);
             }
-            index.write().unwrap().ep = node_id;
+            index.write().ep = node_id;
         }
         true
     }
@@ -570,7 +568,6 @@ impl HNSW {
 
         index
             .write()
-            .unwrap()
             .first_insert(node_ids[0], &vectors.slice(s![0, ..]).to_owned());
 
         let mut handlers = vec![];
@@ -581,7 +578,7 @@ impl HNSW {
             let node_ids_split = split_ids(node_ids.clone(), nb_threads as u8, thread_nb as u8);
             let vector_levels: Vec<(usize, usize)> = node_ids_split
                 .iter()
-                .map(|x| (*x, index.read().unwrap().get_new_node_layer()))
+                .map(|x| (*x, index.read().get_new_node_layer()))
                 .collect();
             let index_ref = index.clone();
             let vectors_ref = vectors.clone();
@@ -616,7 +613,7 @@ impl HNSW {
         for handle in handlers {
             let _ = handle.join().unwrap();
         }
-        Arc::try_unwrap(index).unwrap().into_inner().unwrap()
+        Arc::try_unwrap(index).unwrap().into_inner()
     }
 
     fn get_new_node_layer(&self) -> usize {
@@ -692,9 +689,12 @@ impl HNSW {
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
-        let read_ref = index.read().unwrap();
-        let layer_read = read_ref.layers.get(&layer_nb).unwrap();
-        let mut candidates = read_ref.sort_by_distance(layer_read, vector, &ep);
+        // let read_ref = index.read();
+        // let layer_read = index.read().layers.get(&layer_nb).unwrap();
+        let mut candidates =
+            index
+                .read()
+                .sort_by_distance(index.read().layers.get(&layer_nb).unwrap(), vector, &ep);
         let mut selected = candidates.clone();
 
         while candidates.len() > 0 {
@@ -706,14 +706,29 @@ impl HNSW {
                 break;
             }
 
-            for neighbor in layer_read.neighbors(candidate).iter().map(|x| *x) {
+            for neighbor in index
+                .read()
+                .layers
+                .get(&layer_nb)
+                .unwrap()
+                .neighbors(candidate)
+                .iter()
+                .map(|x| *x)
+            {
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
-                    let neighbor_vec = &layer_read.node(neighbor).1;
+                    let index_read_ref = index.read();
+                    let neighbor_vec = &index_read_ref
+                        .layers
+                        .get(&layer_nb)
+                        .unwrap()
+                        .node(neighbor)
+                        .1;
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 
                     let n2q_dist = (v2v_dist(&vector, &neighbor_vec) * 10_000.0).trunc() as usize;
+                    drop(index_read_ref);
 
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
