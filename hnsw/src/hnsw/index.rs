@@ -457,9 +457,11 @@ impl HNSW {
             None => index.read().get_new_node_layer(),
         };
 
-        let max_layer_nb = index.read().layers.len() - 1;
+        let read_ref = index.read();
+        let max_layer_nb = read_ref.layers.len() - 1;
 
-        let ep = index.read().step_1(&vector, max_layer_nb, current_layer_nb);
+        let ep = read_ref.step_1(&vector, max_layer_nb, current_layer_nb);
+        drop(read_ref);
         Self::step_2_par(index, node_id, &vector, ep, current_layer_nb);
         // index
         //     .write()
