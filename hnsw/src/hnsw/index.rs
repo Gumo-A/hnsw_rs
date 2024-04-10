@@ -142,6 +142,7 @@ impl HNSW {
     ) {
         let bound = (current_layer_number + 1).min(self.layers.len());
         for layer_nb in (0..bound).rev() {
+            // TODO: collect the fact that this node should be added to this layer
             self.layers
                 .get_mut(&layer_nb)
                 .unwrap()
@@ -150,16 +151,16 @@ impl HNSW {
 
             ep = self.search_layer(layer, &vector, &mut ep, self.ef_cons);
 
+            // TODO: Just collect these neighbors, dont make connexions
+            // But also take into account the possible prunning step
             let neighbors_to_connect =
                 self.select_heuristic(&layer, vector, &mut ep, self.m, false, true);
-
             for neighbor in neighbors_to_connect.iter() {
                 self.layers
                     .get_mut(&layer_nb)
                     .unwrap()
                     .add_edge(node_id, *neighbor);
             }
-
             self.prune_connexions(layer_nb, neighbors_to_connect);
         }
     }
@@ -447,36 +448,33 @@ impl HNSW {
         vector: &Array<f32, Dim<[usize; 1]>>,
         level: Option<usize>,
     ) -> bool {
+        // TODO: This would be the beginning of the readable reference
         if index.read().node_ids.contains(&node_id) {
             return false;
         }
-        index.write().node_ids.insert(node_id);
 
         let current_layer_nb: usize = match level {
             Some(level) => level,
             None => index.read().get_new_node_layer(),
         };
 
-        let read_ref = index.read();
-        let max_layer_nb = read_ref.layers.len() - 1;
+        let max_layer_nb = index.read().layers.len() - 1;
 
-        let ep = read_ref.step_1(&vector, max_layer_nb, current_layer_nb);
-        drop(read_ref);
-        Self::step_2_par(index, node_id, &vector, ep, current_layer_nb);
-        // index
-        //     .write()
-        //     .unwrap()
-        //     .step_2(node_id, vector, ep, current_layer_nb);
+        let ep = index.read().step_1(&vector, max_layer_nb, current_layer_nb);
+        let insertion_results = index.read().step_2(node_id, vector, ep, current_layer_nb);
+        // TODO: Here, I would drop the read reference, but keep the collected results
+
+        // TODO: This would be the beginning of the writable reference
         if current_layer_nb > max_layer_nb {
             println!("Inserting new layers!");
             for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
                 let mut layer = Graph::new();
                 layer.add_node(node_id, vector);
                 index.write().layers.insert(layer_nb, layer);
-                index.write().node_ids.insert(node_id);
             }
             index.write().ep = node_id;
         }
+        index.write().node_ids.insert(node_id);
         true
     }
 
