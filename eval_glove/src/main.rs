@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
@@ -11,6 +12,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 
 fn main() -> std::io::Result<()> {
+    let start = Instant::now();
     let (dim, lim, m) = match parse_args_eval() {
         Ok(args) => args,
         Err(err) => {
@@ -21,7 +23,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
+    let (_, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     let bf_data = match load_bf_data(dim, lim) {
         Ok(data) => data,
         Err(err) => {
@@ -31,23 +33,23 @@ fn main() -> std::io::Result<()> {
     };
 
     let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
-    let mut index = HNSW::build_index_par(12, node_ids, embeddings);
-    // let mut index = HNSW::new(12, Some(500), dim);
+    let mut index = HNSW::build_index_par(m, node_ids, embeddings);
+    // let mut index = HNSW::new(m, Some(500), dim);
     // index.build_index(node_ids, &embeddings, false)?;
     index.print_params();
     let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     estimate_recall(&mut index, &embeddings, &bf_data);
 
-    // for (i, idx) in bf_data.keys().enumerate() {
-    //     if i > 3 {
-    //         break;
-    //     }
-    //     let vector = embeddings.slice(s![*idx, ..]);
-    //     let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
-    //     println!("ANNs of {}", words[*idx]);
-    //     let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
-    //     println!("{:?}", anns_words);
-    // }
+    for (i, idx) in bf_data.keys().enumerate() {
+        if i > 3 {
+            break;
+        }
+        let vector = embeddings.slice(s![*idx, ..]);
+        let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
+        println!("ANNs of {}", words[*idx]);
+        let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
+        println!("{:?}", anns_words);
+    }
 
     // let function = "while block 2";
     // let fracs = index.bencher.borrow().get_frac_of(function, vec![]);
@@ -68,6 +70,11 @@ fn main() -> std::io::Result<()> {
     //     tot_time_function / tot_time_insert
     // );
 
+    let end = Instant::now();
+    println!(
+        "Elapsed time: {}s",
+        start.elapsed().as_secs_f32() - end.elapsed().as_secs_f32()
+    );
     Ok(())
 }
 

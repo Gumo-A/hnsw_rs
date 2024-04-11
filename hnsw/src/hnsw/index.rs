@@ -1,3 +1,6 @@
+use rand::seq::SliceRandom;
+use rand::thread_rng;
+
 use crate::graph::Graph;
 use crate::helpers::data::split_ids;
 // use crate::helpers::bench::Bencher;
@@ -6,12 +9,10 @@ use crate::helpers::distance::v2v_dist;
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, Dim};
 use nohash_hasher::BuildNoHashHasher;
+use parking_lot::RwLock;
 use rand::Rng;
 use regex::Regex;
 use std::sync::Arc;
-// use std::sync::{Arc, RwLock};
-// use tokio::sync::RwLock;
-use parking_lot::RwLock;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
@@ -150,13 +151,17 @@ impl HNSW {
 
             let neighbors_to_connect =
                 self.select_heuristic(&layer, vector, &mut ep, self.m, false, true);
-            let entry = insertion_results.entry(layer_nb).or_insert(HashMap::new());
-            entry.insert(node_id, neighbors_to_connect.clone());
-
             let prune_results = self.prune_connexions(layer_nb, &neighbors_to_connect);
-            for (neighbor, its_neighbors) in prune_results.iter() {
-                entry.insert(*neighbor, its_neighbors.clone());
-            }
+
+            insertion_results.insert(layer_nb, HashMap::new());
+            insertion_results
+                .get_mut(&layer_nb)
+                .unwrap()
+                .insert(node_id, neighbors_to_connect);
+            insertion_results
+                .get_mut(&layer_nb)
+                .unwrap()
+                .extend(prune_results.iter().map(|x| (*x.0, x.1.to_owned())));
         }
         insertion_results
     }
@@ -283,7 +288,6 @@ impl HNSW {
             }
         }
         if current_layer_nb > max_layer_nb {
-            println!("Inserting new layers!");
             for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
                 let mut layer = Graph::new();
                 layer.add_node(node_id, vector);
@@ -297,53 +301,142 @@ impl HNSW {
 
     pub fn insert_par(
         index: &Arc<RwLock<Self>>,
-        node_id: usize,
-        vector: &Array<f32, Dim<[usize; 1]>>,
-        level: Option<usize>,
-    ) -> bool {
-        let read_ref = index.read();
-        if read_ref.node_ids.contains(&node_id) {
-            return false;
-        }
+        ids_levels: Vec<(usize, usize)>,
+        vectors: &Array<f32, Dim<[usize; 2]>>,
+        bar: ProgressBar,
+    ) {
+        let mut insertion_results = Vec::new();
+        let ids_levels: Vec<(usize, usize)> = ids_levels.iter().rev().map(|x| *x).collect();
+        let max_results = 16;
+        for (idx, (node_id, current_layer_nb)) in ids_levels.iter().enumerate() {
+            bar.inc(1);
+            let read_ref = index.read();
+            if read_ref.node_ids.contains(&node_id) {
+                continue;
+            }
+            let max_layer_nb = read_ref.layers.len() - 1;
+            let vector = &vectors.slice(s![*node_id, ..]).to_owned();
+            let ep = read_ref.step_1(vector, max_layer_nb, *current_layer_nb);
+            let read_results = read_ref.step_2(*node_id, vector, ep, *current_layer_nb);
+            insertion_results.push(read_results);
+            drop(read_ref);
 
-        let current_layer_nb: usize = match level {
-            Some(level) => level,
-            None => read_ref.get_new_node_layer(),
-        };
-
-        let max_layer_nb = read_ref.layers.len() - 1;
-
-        let ep = read_ref.step_1(&vector, max_layer_nb, current_layer_nb);
-        let insertion_results = read_ref.step_2(node_id, vector, ep, current_layer_nb);
-        drop(read_ref);
-
-        let mut write_ref = index.write();
-        write_ref.node_ids.insert(node_id);
-        for (layer_nb, node_data) in insertion_results.iter() {
-            let layer = write_ref.layers.get_mut(&layer_nb).unwrap();
-            for (node, neighbors) in node_data.iter() {
-                if *node == node_id {
-                    layer.add_node(node_id, vector);
+            let mut write_ref = match index.try_write() {
+                // match index.try_write_for(Duration::from_millis(50)) {
+                None => {
+                    if (idx == (ids_levels.len() - 1))
+                        | (current_layer_nb > &max_layer_nb)
+                        | (insertion_results.len() > max_results)
+                    {
+                        index.write()
+                    } else {
+                        continue;
+                    }
                 }
-                for old_neighbor in layer.neighbors(*node).clone() {
-                    layer.remove_edge(*node, old_neighbor);
-                }
-                for neighbor in neighbors.iter() {
-                    layer.add_edge(*node, *neighbor);
+                Some(reference) => reference,
+            };
+            for i in insertion_results.iter() {
+                for (layer_nb, node_data) in i.iter() {
+                    let layer = write_ref.layers.get_mut(&layer_nb).unwrap();
+                    for (node, neighbors) in node_data.iter() {
+                        layer.add_node(*node, &vectors.slice(s![*node, ..]).to_owned());
+                        for old_neighbor in layer.neighbors(*node).clone() {
+                            layer.remove_edge(*node, old_neighbor);
+                        }
+                        for neighbor in neighbors.iter() {
+                            layer.add_edge(*node, *neighbor);
+                        }
+                    }
                 }
             }
-        }
-        if current_layer_nb > max_layer_nb {
-            println!("Inserting new layers!");
-            for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
-                let mut layer = Graph::new();
-                layer.add_node(node_id, vector);
-                write_ref.layers.insert(layer_nb, layer);
-                write_ref.node_ids.insert(node_id);
+            if current_layer_nb > &max_layer_nb {
+                for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
+                    let mut layer = Graph::new();
+                    layer.add_node(*node_id, vector);
+                    write_ref.layers.insert(layer_nb, layer);
+                    write_ref.node_ids.insert(*node_id);
+                }
+                write_ref.ep = *node_id;
             }
-            write_ref.ep = node_id;
+            for i in insertion_results.iter() {
+                for (_, node_data) in i.iter() {
+                    for (node, _) in node_data.iter() {
+                        write_ref.node_ids.insert(*node);
+                    }
+                }
+            }
+            insertion_results.clear();
         }
-        true
+        // loop {
+        //     if idx == ids_levels.len() {
+        //         break;
+        //     }
+        //     let read_ref = index.read();
+        //     let max_layer_nb = read_ref.layers.len() - 1;
+        //     let node_id = ids_levels[idx].0;
+        //     if read_ref.node_ids.contains(&node_id) {
+        //         if (idx + 1) < ids_levels.len() {
+        //             idx += 1;
+        //             continue;
+        //         }
+        //     }
+        //     let current_layer_nb = ids_levels[idx].1;
+        //     let vector = &vectors.slice(s![node_id, ..]).to_owned();
+
+        //     let ep = read_ref.step_1(vector, max_layer_nb, current_layer_nb);
+        //     let read_results = read_ref.step_2(node_id, vector, ep, current_layer_nb);
+        //     insertion_results.push(read_results);
+        //     drop(read_ref);
+
+        //     let mut write_ref = if current_layer_nb > max_layer_nb {
+        //         index.write()
+        //     } else {
+        //         match index.try_write_for(Duration::from_millis(1)) {
+        //             None => {
+        //                 if (idx + 1) < ids_levels.len() {
+        //                     idx += 1;
+        //                     continue;
+        //                 } else {
+        //                     index.write()
+        //                 }
+        //             }
+        //             Some(reference) => reference,
+        //         }
+        //     };
+        //     for i in insertion_results.iter() {
+        //         for (_, node_data) in i.iter() {
+        //             for (node, _) in node_data.iter() {
+        //                 write_ref.node_ids.insert(*node);
+        //             }
+        //         }
+        //     }
+        //     for i in insertion_results.iter() {
+        //         for (layer_nb, node_data) in i.iter() {
+        //             let layer = write_ref.layers.get_mut(&layer_nb).unwrap();
+        //             for (node, neighbors) in node_data.iter() {
+        //                 layer.add_node(*node, vector);
+        //                 for old_neighbor in layer.neighbors(*node).clone() {
+        //                     layer.remove_edge(*node, old_neighbor);
+        //                 }
+        //                 for neighbor in neighbors.iter() {
+        //                     layer.add_edge(*node, *neighbor);
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     if current_layer_nb > max_layer_nb {
+        //         println!("Inserting new layers!");
+        //         for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
+        //             let mut layer = Graph::new();
+        //             layer.add_node(node_id, vector);
+        //             write_ref.layers.insert(layer_nb, layer);
+        //             write_ref.node_ids.insert(node_id);
+        //         }
+        //         write_ref.ep = node_id;
+        //     }
+        //     idx += 1;
+        //     insertion_results.clear();
+        // }
     }
 
     fn first_insert(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) {
@@ -388,14 +481,15 @@ impl HNSW {
             .map(|x| *x)
             .collect();
 
-        let vector_levels: Vec<(usize, usize)> = nodes_remaining
+        let mut vector_levels: Vec<(usize, usize)> = nodes_remaining
             .iter()
             .map(|x| (*x, self.get_new_node_layer()))
             .collect();
+        vector_levels.shuffle(&mut thread_rng());
 
         let nb_nodes = self.node_ids.len();
         let remaining = lim - nb_nodes;
-        let bar = get_progress_bar(remaining);
+        let bar = get_progress_bar(remaining, false);
         for (node_id, level) in vector_levels.iter() {
             let inserted = self.insert(
                 *node_id,
@@ -425,15 +519,75 @@ impl HNSW {
         Ok(())
     }
 
+    // pub fn build_index_par_copy(
+    //     m: usize,
+    //     node_ids: Vec<usize>,
+    //     vectors: Array<f32, Dim<[usize; 2]>>,
+    // ) -> Self {
+    //     let (_lim, dim) = vectors.dim();
+    //     let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
+
+    //     index
+    //         .write()
+    //         .first_insert(node_ids[0], &vectors.slice(s![0, ..]).to_owned());
+
+    //     let mut handlers = vec![];
+
+    //     // let nb_threads = 20;
+    //     let nb_threads = std::thread::available_parallelism().unwrap().get();
+    //     for thread_nb in 0..nb_threads {
+    //         let node_ids_split = split_ids(node_ids.clone(), nb_threads as u8, thread_nb as u8);
+    //         let vector_levels: Vec<(usize, usize)> = node_ids_split
+    //             .iter()
+    //             .map(|x| (*x, index.read().get_new_node_layer()))
+    //             .collect();
+    //         let index_ref = index.clone();
+    //         let vectors_ref = vectors.clone();
+    //         if thread_nb == (nb_threads - 1) {
+    //             let bar = get_progress_bar(vector_levels.len());
+    //             handlers.push(std::thread::spawn(move || {
+    //                 for (node_id, level) in vector_levels.iter() {
+    //                     let inserted = Self::insert_par(
+    //                         &index_ref,
+    //                         // *node_id,
+    //                         // &vectors_ref.slice(s![*node_id, ..]).to_owned(),
+    //                         &vector_levels,
+    //                         &vectors_ref.to_owned(),
+    //                         Some(*level),
+    //                     );
+    //                     if inserted {
+    //                         bar.inc(1);
+    //                     }
+    //                 }
+    //             }));
+    //         } else {
+    //             handlers.push(std::thread::spawn(move || {
+    //                 for (node_id, level) in vector_levels.iter() {
+    //                     let _ = Self::insert_par(
+    //                         &index_ref,
+    //                         *node_id,
+    //                         // &vectors_ref.slice(s![*node_id, ..]).to_owned(),
+    //                         &vectors_ref.to_owned(),
+    //                         Some(*level),
+    //                     );
+    //                 }
+    //             }));
+    //         }
+    //     }
+    //     for handle in handlers {
+    //         let _ = handle.join().unwrap();
+    //     }
+    //     Arc::try_unwrap(index).unwrap().into_inner()
+    // }
+
     pub fn build_index_par(
         m: usize,
         node_ids: Vec<usize>,
         vectors: Array<f32, Dim<[usize; 2]>>,
     ) -> Self {
         let (_lim, dim) = vectors.dim();
-        let index = Arc::new(RwLock::new(Self::new(m, None, dim)));
-        // let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
-        // let vectors = Arc::new(RwLock::new(vectors));
+        // let index = Arc::new(RwLock::new(Self::new(m, None, dim)));
+        let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
 
         index
             .write()
@@ -441,43 +595,20 @@ impl HNSW {
 
         let mut handlers = vec![];
 
-        // let nb_threads = std::thread::available_parallelism().unwrap().get();
-        let nb_threads = 16;
+        let nb_threads = std::thread::available_parallelism().unwrap().get();
         for thread_nb in 0..nb_threads {
             let node_ids_split = split_ids(node_ids.clone(), nb_threads as u8, thread_nb as u8);
-            let vector_levels: Vec<(usize, usize)> = node_ids_split
+            let mut vector_levels: Vec<(usize, usize)> = node_ids_split
                 .iter()
                 .map(|x| (*x, index.read().get_new_node_layer()))
                 .collect();
+            vector_levels.sort_by_key(|x| x.1);
             let index_ref = index.clone();
             let vectors_ref = vectors.clone();
-            if thread_nb == 0 {
-                let bar = get_progress_bar(vector_levels.len());
-                handlers.push(std::thread::spawn(move || {
-                    for (node_id, level) in vector_levels.iter() {
-                        let inserted = Self::insert_par(
-                            &index_ref,
-                            *node_id,
-                            &vectors_ref.slice(s![*node_id, ..]).to_owned(),
-                            Some(*level),
-                        );
-                        if inserted {
-                            bar.inc(1);
-                        }
-                    }
-                }));
-            } else {
-                handlers.push(std::thread::spawn(move || {
-                    for (node_id, level) in vector_levels.iter() {
-                        let _ = Self::insert_par(
-                            &index_ref,
-                            *node_id,
-                            &vectors_ref.slice(s![*node_id, ..]).to_owned(),
-                            Some(*level),
-                        );
-                    }
-                }));
-            }
+            let bar = get_progress_bar(vector_levels.len(), thread_nb != (nb_threads - 1));
+            handlers.push(std::thread::spawn(move || {
+                Self::insert_par(&index_ref, vector_levels, &vectors_ref.to_owned(), bar);
+            }));
         }
         for handle in handlers {
             let _ = handle.join().unwrap();
@@ -697,8 +828,12 @@ impl HNSW {
     }
 }
 
-fn get_progress_bar(remaining: usize) -> ProgressBar {
-    let bar = ProgressBar::new(remaining as u64);
+fn get_progress_bar(remaining: usize, hidden: bool) -> ProgressBar {
+    let bar = if hidden {
+        return ProgressBar::hidden();
+    } else {
+        ProgressBar::new(remaining as u64)
+    };
     bar.set_style(
                 ProgressStyle::with_template(
                     "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed_precise} ] {per_sec} {wide_bar}",

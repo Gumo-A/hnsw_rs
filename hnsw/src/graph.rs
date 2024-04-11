@@ -60,13 +60,13 @@ impl Graph {
         let a_neighbors = self
             .nodes
             .get_mut(&node_a)
-            .expect("Could not get the value of node {node_a}");
+            .expect(format!("Could not get the value of node {node_a}").as_str());
         a_neighbors.0.insert(node_b);
 
         let b_neighbors = self
             .nodes
             .get_mut(&node_b)
-            .expect("Could not get the value of node {node_b}");
+            .expect(format!("Could not get the value of node {node_b}").as_str());
         b_neighbors.0.insert(node_a);
     }
 
@@ -74,13 +74,13 @@ impl Graph {
         let a_neighbors = self
             .nodes
             .get_mut(&node_a)
-            .expect("Could not get neighbors of {node_a}");
+            .expect(format!("Could not get neighbors of {node_a}").as_str());
         a_neighbors.0.remove(&node_b);
 
         let b_neighbors = self
             .nodes
             .get_mut(&node_b)
-            .expect("Could not get neighbors of {node_b}");
+            .expect(format!("Could not get neighbors of {node_b}").as_str());
         b_neighbors.0.remove(&node_a);
     }
 
@@ -88,7 +88,7 @@ impl Graph {
         &self
             .nodes
             .get(&node_id)
-            .expect("Could not get the neighbors of {node_id}")
+            .expect(format!("Could not get the neighbors of {node_id}").as_str())
             .0
     }
 
