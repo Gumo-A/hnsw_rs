@@ -33,9 +33,9 @@ fn main() -> std::io::Result<()> {
     };
 
     let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
-    let mut index = HNSW::build_index_par(m, node_ids, embeddings);
-    // let mut index = HNSW::new(m, Some(500), dim);
-    // index.build_index(node_ids, &embeddings, false)?;
+    // let mut index = HNSW::build_index_par(m, node_ids, embeddings);
+    let mut index = HNSW::new(m, Some(500), dim);
+    index.build_index(node_ids, &embeddings, false)?;
     index.print_params();
     let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     estimate_recall(&mut index, &embeddings, &bf_data);
@@ -73,7 +73,7 @@ fn main() -> std::io::Result<()> {
     let end = Instant::now();
     println!(
         "Elapsed time: {}s",
-        start.elapsed().as_secs_f32() - end.elapsed().as_secs_f32()
+        start.elapsed().as_secs() - end.elapsed().as_secs()
     );
     Ok(())
 }
