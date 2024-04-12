@@ -10,7 +10,6 @@ use hnsw::hnsw::index::HNSW;
 use ndarray::{s, Array2};
 
 use indicatif::{ProgressBar, ProgressStyle};
-use rand::Rng;
 
 fn main() -> std::io::Result<()> {
     let start = Instant::now();
@@ -24,7 +23,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let (_, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
+    let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     let bf_data = match load_bf_data(dim, lim) {
         Ok(data) => data,
         Err(err) => {
@@ -34,11 +33,11 @@ fn main() -> std::io::Result<()> {
     };
 
     let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
-    // let mut index = HNSW::build_index_par(m, node_ids, embeddings);
-    let mut index = HNSW::new(m, Some(500), dim);
-    index.build_index(node_ids, &embeddings, false)?;
+    let mut index = HNSW::build_index_par(m, node_ids, &embeddings);
+    // let mut index = HNSW::new(m, None, dim);
+    // index.build_index(node_ids, &embeddings, false)?;
     index.print_params();
-    let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
+    // let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     estimate_recall(&mut index, &embeddings, &bf_data);
 
     for (i, idx) in bf_data.keys().enumerate() {
@@ -46,7 +45,7 @@ fn main() -> std::io::Result<()> {
             break;
         }
         let vector = embeddings.slice(s![*idx, ..]);
-        let anns = index.ann_by_vector(&vector.to_owned(), 10, 16);
+        let anns = index.ann_by_vector(&vector, 10, 16);
         println!("ANNs of {}", words[*idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
@@ -105,7 +104,7 @@ fn estimate_recall(
 
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = embeddings.slice(s![idx, ..]);
-            let anns = index.ann_by_vector(&vector.to_owned(), 10, ef);
+            let anns = index.ann_by_vector(&vector, 10, ef);
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()
@@ -126,55 +125,6 @@ fn estimate_recall(
                 }
             }
             recall_10.insert(idx, (hits as f32) / 10.0);
-        }
-        let mut avg_recall = 0.0;
-        for (_, recall) in recall_10.iter() {
-            avg_recall += recall;
-        }
-        avg_recall /= recall_10.keys().count() as f32;
-        println!("Recall@10 {avg_recall}");
-    }
-}
-
-fn estimate_recall(
-    index: &mut HNSW,
-    embeddings: &Array2<f32>,
-    bf_data: &HashMap<usize, Vec<usize>>,
-) {
-    let mut rng = rand::thread_rng();
-    let max_idx = index.node_ids.iter().max().unwrap().clone();
-    for ef in (12..37).step_by(12) {
-        let sample_size: i32 = 1000;
-        let bar = ProgressBar::new(sample_size as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
-            )
-            .unwrap(),
-        );
-        bar.set_message(format!("Finding ANNs ef={ef}"));
-
-        let mut recall_10: HashMap<i32, f32> = HashMap::new();
-        for _ in 0..sample_size {
-            bar.inc(1);
-
-            let idx = rng.gen_range(0..(index.node_ids.len()));
-            let vector = embeddings.slice(s![idx, ..]);
-            let anns = index.ann_by_vector(&vector.to_owned(), 10, ef);
-            let true_nns: Vec<i32> = bf_data
-                .get(&(idx as usize))
-                .unwrap()
-                .iter()
-                .map(|x| *x as i32)
-                // .filter(|x| x <= &max_idx)
-                .collect();
-            let mut hits = 0;
-            for ann in anns.iter() {
-                if true_nns[..10].contains(ann) {
-                    hits += 1;
-                }
-            }
-            recall_10.insert(idx as i32, (hits as f32) / 10.0);
         }
         let mut avg_recall = 0.0;
         for (_, recall) in recall_10.iter() {

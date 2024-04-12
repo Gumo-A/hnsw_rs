@@ -7,7 +7,7 @@ use crate::helpers::data::split_ids;
 use crate::helpers::distance::v2v_dist;
 
 use indicatif::{ProgressBar, ProgressStyle};
-use ndarray::{s, Array, Dim};
+use ndarray::{s, Array, ArrayView, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use parking_lot::RwLock;
 use rand::Rng;
@@ -87,7 +87,7 @@ impl HNSW {
 
     pub fn ann_by_vector(
         &self,
-        vector: &Array<f32, Dim<[usize; 1]>>,
+        vector: &ArrayView<f32, Dim<[usize; 1]>>,
         n: usize,
         ef: usize,
     ) -> Vec<usize> {
@@ -104,7 +104,8 @@ impl HNSW {
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
-                let dist = (v2v_dist(vector, &self.layers.get(&0).unwrap().node(*x).1) * 10_000.0)
+                let dist = (v2v_dist(vector, &self.layers.get(&0).unwrap().node(*x).1.view())
+                    * 10_000.0)
                     .trunc() as usize;
                 (dist, *x)
             }));
@@ -120,7 +121,7 @@ impl HNSW {
 
     fn step_1(
         &self,
-        vector: &Array<f32, Dim<[usize; 1]>>,
+        vector: &ArrayView<f32, Dim<[usize; 1]>>,
         max_layer_nb: usize,
         current_layer_number: usize,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
@@ -137,7 +138,7 @@ impl HNSW {
     fn step_2(
         &self,
         node_id: usize,
-        vector: &Array<f32, Dim<[usize; 1]>>,
+        vector: &ArrayView<f32, Dim<[usize; 1]>>,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
     ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
@@ -179,7 +180,7 @@ impl HNSW {
             if ((layer_nb == 0) & (layer.degree(*neighbor) > self.mmax0))
                 | ((layer_nb > 0) & (layer.degree(*neighbor) > self.mmax))
             {
-                let neighbor_vec = &layer.node(*neighbor).1;
+                let neighbor_vec = &layer.node(*neighbor).1.view();
                 let mut old_neighbors: HashSet<usize, BuildNoHashHasher<usize>> =
                     HashSet::with_hasher(BuildNoHashHasher::default());
                 old_neighbors.clone_from(layer.neighbors(*neighbor));
@@ -200,7 +201,7 @@ impl HNSW {
     fn select_heuristic(
         &self,
         layer: &Graph,
-        vector: &Array<f32, Dim<[usize; 1]>>,
+        vector: &ArrayView<f32, Dim<[usize; 1]>>,
         cands_idx: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         m: usize,
         extend_cands: bool,
@@ -224,7 +225,7 @@ impl HNSW {
                 continue;
             }
 
-            let e_vector = &layer.node(e).1;
+            let e_vector = &layer.node(e).1.view();
             let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
             selected_set.extend(selected.values());
             let (dist_from_s, _) = self
@@ -255,7 +256,7 @@ impl HNSW {
     pub fn insert(
         &mut self,
         node_id: usize,
-        vector: &Array<f32, Dim<[usize; 1]>>,
+        vector: &ArrayView<f32, Dim<[usize; 1]>>,
         level: Option<usize>,
     ) -> bool {
         if self.node_ids.contains(&node_id) {
@@ -306,7 +307,7 @@ impl HNSW {
         bar: ProgressBar,
     ) {
         let mut batch = Vec::new();
-        let batch_size = 16;
+        let batch_size = 36;
         for (idx, (node_id, current_layer_nb)) in ids_levels.iter().enumerate() {
             bar.inc(1);
             let read_ref = index.read();
@@ -314,7 +315,7 @@ impl HNSW {
                 continue;
             }
             let max_layer_nb = read_ref.layers.len() - 1;
-            let vector = &vectors.slice(s![*node_id, ..]).to_owned();
+            let vector = &vectors.slice(s![*node_id, ..]);
             let ep = read_ref.step_1(vector, max_layer_nb, *current_layer_nb);
             let insertion_results = read_ref.step_2(*node_id, vector, ep, *current_layer_nb);
             batch.push(insertion_results);
@@ -335,7 +336,7 @@ impl HNSW {
                     write_ref.node_ids.extend(node_data.keys());
                     let layer = write_ref.layers.get_mut(&layer_nb).unwrap();
                     for (node, neighbors) in node_data.iter() {
-                        layer.add_node(*node, &vectors.slice(s![*node, ..]).to_owned());
+                        layer.add_node(*node, &vectors.slice(s![*node, ..]));
                         for old_neighbor in layer.neighbors(*node).clone() {
                             layer.remove_edge(*node, old_neighbor);
                         }
@@ -358,7 +359,7 @@ impl HNSW {
         }
     }
 
-    fn first_insert(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) {
+    fn first_insert(&mut self, node_id: usize, vector: &ArrayView<f32, Dim<[usize; 1]>>) {
         assert_eq!(self.node_ids.len(), 0);
         assert_eq!(self.layers.len(), 0);
 
@@ -390,7 +391,7 @@ impl HNSW {
             self.print_params();
         } else {
             println!("No checkpoint was loaded, building self from scratch.");
-            self.first_insert(node_ids[0], &vectors.slice(s![0, ..]).to_owned());
+            self.first_insert(node_ids[0], &vectors.slice(s![0, ..]));
         };
 
         let mut nodes_remaining = HashSet::with_hasher(BuildNoHashHasher::default());
@@ -410,11 +411,7 @@ impl HNSW {
         let remaining = lim - nb_nodes;
         let bar = get_progress_bar(remaining, false);
         for (node_id, level) in vector_levels.iter() {
-            let inserted = self.insert(
-                *node_id,
-                &vectors.slice(s![*node_id, ..]).to_owned(),
-                Some(*level),
-            );
+            let inserted = self.insert(*node_id, &vectors.slice(s![*node_id, ..]), Some(*level));
             if inserted {
                 bar.inc(1);
             } else {
@@ -502,15 +499,16 @@ impl HNSW {
     pub fn build_index_par(
         m: usize,
         node_ids: Vec<usize>,
-        vectors: Array<f32, Dim<[usize; 2]>>,
+        vectors: &Array<f32, Dim<[usize; 2]>>,
     ) -> Self {
         let (_lim, dim) = vectors.dim();
         let index = Arc::new(RwLock::new(Self::new(m, None, dim)));
         // let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
+        let vectors = Arc::new(vectors.to_owned());
 
         index
             .write()
-            .first_insert(node_ids[0], &vectors.slice(s![0, ..]).to_owned());
+            .first_insert(node_ids[0], &vectors.slice(s![0, ..]));
 
         let mut handlers = vec![];
 
@@ -522,7 +520,6 @@ impl HNSW {
                 .map(|x| (*x, index.read().get_new_node_layer()))
                 .collect();
             vector_levels.sort_by_key(|x| x.1);
-            // vector_levels.reverse();
             let index_ref = index.clone();
             let vectors_ref = vectors.clone();
             let bar = get_progress_bar(vector_levels.len(), thread_nb != (nb_threads - 1));
@@ -544,12 +541,12 @@ impl HNSW {
     fn sort_by_distance(
         &self,
         layer: &Graph,
-        vector: &Array<f32, Dim<[usize; 1]>>,
+        vector: &ArrayView<f32, Dim<[usize; 1]>>,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> BTreeMap<usize, usize> {
         let result = others.iter().map(|idx| {
             (
-                (v2v_dist(vector, &layer.node(*idx).1) * 10_000.0).trunc() as usize,
+                (v2v_dist(vector, &layer.node(*idx).1.view()) * 10_000.0).trunc() as usize,
                 *idx,
             )
         });
@@ -559,7 +556,7 @@ impl HNSW {
     fn search_layer(
         &self,
         layer: &Graph,
-        vector: &Array<f32, Dim<[usize; 1]>>,
+        vector: &ArrayView<f32, Dim<[usize; 1]>>,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
@@ -578,11 +575,10 @@ impl HNSW {
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
-                    let neighbor_vec = &layer.node(neighbor).1;
+                    let neighbor_vec = &layer.node(neighbor).1.view();
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
-
-                    let n2q_dist = (v2v_dist(&vector, &neighbor_vec) * 10_000.0).trunc() as usize;
+                    let n2q_dist = (v2v_dist(&vector, neighbor_vec) * 10_000.0).trunc() as usize;
 
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);

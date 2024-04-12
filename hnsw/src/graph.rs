@@ -1,5 +1,5 @@
 use crate::helpers::distance::norm_vector;
-use ndarray::{Array, Dim};
+use ndarray::{Array, ArrayView, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
@@ -39,13 +39,13 @@ impl Graph {
             self_connexions: false,
         }
     }
-    pub fn add_node(&mut self, node_id: usize, vector: &Array<f32, Dim<[usize; 1]>>) {
+    pub fn add_node(&mut self, node_id: usize, vector: &ArrayView<f32, Dim<[usize; 1]>>) {
         if !self.nodes.contains_key(&node_id) {
             self.nodes.insert(
                 node_id,
                 (
                     HashSet::with_hasher(BuildNoHashHasher::default()),
-                    norm_vector(vector),
+                    norm_vector(vector).to_owned(),
                 ),
             );
         }

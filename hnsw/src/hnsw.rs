@@ -27,12 +27,12 @@ mod tests {
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector, None);
+            index.insert(i.try_into().unwrap(), &vector.view(), None);
         }
 
         let already_in_index = 0;
         let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-        index.insert(already_in_index, &vector, None);
+        index.insert(already_in_index, &vector.view(), None);
         assert_eq!(index.node_ids.len(), n);
     }
 
@@ -45,12 +45,12 @@ mod tests {
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector, None);
+            index.insert(i.try_into().unwrap(), &vector.view(), None);
         }
 
         let n = 10;
         let vector = index.layers.get(&0).unwrap().node(n).1.to_owned();
-        let anns = index.ann_by_vector(&vector, 10, 16);
+        let anns = index.ann_by_vector(&vector.view(), 10, 16);
         println!("ANNs of {:?}", n);
         for e in anns {
             println!("{:?}", e);
