@@ -1,20 +1,27 @@
-use std::fs::{create_dir, File};
+use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 
 use ndarray::Array2;
 
 use hnsw::helpers::args::parse_args_bf;
-use hnsw::helpers::data::split_vector;
+use hnsw::helpers::data::split_ids;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
 
-fn main() {
-    let (dim, lim, nb_threads) = parse_args_bf();
+fn main() -> std::io::Result<()> {
+    let (dim, lim, nb_threads) = match parse_args_bf() {
+        Ok(args) => args,
+        Err(err) => {
+            println!("Help: brute_force");
+            println!("dim[int] limit[int] number_of_threads[int]");
+            println!("{}", err);
+            return Ok(());
+        }
+    };
 
     // TODO: delete files in dir if dir exists.
-    let _ = create_dir(format!(
+    let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/bf_rust/dim{dim}_lim{lim}"
     ));
 
@@ -22,19 +29,17 @@ fn main() {
         load_glove_array(dim, lim, true, 0).unwrap();
 
     let embeddings = Arc::new(embeddings);
-
-    let (tx, rx) = mpsc::channel();
+    let mut children = vec![];
 
     for i in 0..nb_threads {
-        let tx = tx.clone();
-        let nb_nns = 10;
+        let nb_nns = 1000;
 
         let embs = embeddings.clone();
-        let indices: Vec<i32> = (0..lim).collect();
+        let indices: Vec<usize> = (0..lim).collect();
 
-        let indices_split = split_vector(indices, nb_threads, i);
+        let indices_split = split_ids(indices, nb_threads, i);
 
-        thread::spawn(move || -> std::io::Result<()> {
+        children.push(thread::spawn(move || -> std::io::Result<()> {
             let bf_data = brute_force_nns(nb_nns, &embs, indices_split, i);
             let file_name =
                 format!("/home/gamal/glove_dataset/bf_rust/dim{dim}_lim{lim}/split_{i}.json");
@@ -42,14 +47,13 @@ fn main() {
             let mut writer = BufWriter::new(file);
             serde_json::to_writer(&mut writer, &bf_data)?;
             writer.flush()?;
-
-            tx.send(()).unwrap();
-
             Ok(())
-        });
+        }));
     }
 
-    for _ in 0..nb_threads {
-        rx.recv().unwrap();
+    for child in children {
+        let _ = child.join();
     }
+
+    Ok(())
 }
