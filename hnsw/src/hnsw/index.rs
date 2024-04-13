@@ -17,13 +17,14 @@ use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
+use super::points::Payload;
+
 #[derive(Debug)]
 pub struct HNSW {
     params: Params,
     ep: usize,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
     pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
-    // pub bencher: RefCell<Bencher>,
 }
 
 impl HNSW {
@@ -34,7 +35,6 @@ impl HNSW {
             ep: 0,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
-            // bencher: RefCell::new(Bencher::new()),
         }
     }
 
@@ -44,7 +44,6 @@ impl HNSW {
             ep: 0,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
-            // bencher: RefCell::new(Bencher::new()),
         }
     }
 
@@ -67,6 +66,7 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         n: usize,
         ef: usize,
+        filters: &Option<Vec<Payload>>,
     ) -> Vec<usize> {
         let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
@@ -74,11 +74,17 @@ impl HNSW {
         let nb_layer = self.layers.len();
 
         for layer_nb in (0..nb_layer).rev() {
-            ep = self.search_layer(&self.layers.get(&(layer_nb)).unwrap(), vector, &mut ep, 1);
+            ep = self.search_layer(
+                &self.layers.get(&(layer_nb)).unwrap(),
+                vector,
+                &mut ep,
+                1,
+                filters,
+            );
         }
 
         let layer_0 = &self.layers.get(&0).unwrap();
-        let neighbors = self.search_layer(layer_0, vector, &mut ep, ef);
+        let neighbors = self.search_layer(layer_0, vector, &mut ep, ef, filters);
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
@@ -107,7 +113,7 @@ impl HNSW {
 
         for layer_nb in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
-            ep = self.search_layer(layer, vector, &mut ep, 1);
+            ep = self.search_layer(layer, vector, &mut ep, 1, &None);
         }
         ep
     }
@@ -124,7 +130,13 @@ impl HNSW {
         for layer_nb in (0..bound).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
 
-            ep = self.search_layer(layer, &point.vector.view(), &mut ep, self.params.ef_cons);
+            ep = self.search_layer(
+                layer,
+                &point.vector.view(),
+                &mut ep,
+                self.params.ef_cons,
+                &None,
+            );
 
             let neighbors_to_connect = self.select_heuristic(
                 &layer,
@@ -350,20 +362,36 @@ impl HNSW {
         &mut self,
         vectors: &Array<f32, Dim<[usize; 2]>>,
         checkpoint: bool,
+        payloads: Option<Vec<Payload>>,
     ) -> std::io::Result<()> {
         let lim = vectors.dim().0;
         let dim = self.params.dim;
         let m = self.params.m;
         let efcons = self.params.ef_cons;
 
-        let points: Vec<(Point, usize)> = (0..vectors.dim().0)
-            .map(|idx| {
-                (
-                    Point::new(idx, vectors.slice(s![idx, ..]), None, None),
-                    self.get_new_node_layer(),
-                )
-            })
-            .collect();
+        let points: Vec<(Point, usize)> = match payloads {
+            Some(payloads) => (0..vectors.dim().0)
+                .map(|idx| {
+                    (
+                        Point::new(
+                            idx,
+                            vectors.slice(s![idx, ..]),
+                            None,
+                            Some(HashMap::from([("word".to_string(), payloads[idx].clone())])),
+                        ),
+                        self.get_new_node_layer(),
+                    )
+                })
+                .collect(),
+            None => (0..vectors.dim().0)
+                .map(|idx| {
+                    (
+                        Point::new(idx, vectors.slice(s![idx, ..]), None, None),
+                        self.get_new_node_layer(),
+                    )
+                })
+                .collect(),
+        };
 
         let checkpoint_path =
             format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}_efcons{efcons}");
@@ -483,6 +511,7 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
+        filters: &Option<Vec<Payload>>,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
@@ -497,6 +526,15 @@ impl HNSW {
             }
 
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
+                let passes_filters = match filters {
+                    None => true,
+                    Some(payloads) => {
+                        let point = layer.node(neighbor).payload
+                        for payload in payloads {
+                            
+                        }
+                    }
+                }
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
                     let neighbor_vec = &layer.node(neighbor).vector.view();
@@ -661,8 +699,10 @@ impl HNSW {
                     .expect("Could not parse u8 from file name.");
                 let content: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)> =
                     serde_json::from_reader(reader)?;
-                self.layers
-                    .insert(layer_nb as usize, Graph::from_layer_data(self.params.dim, content));
+                self.layers.insert(
+                    layer_nb as usize,
+                    Graph::from_layer_data(self.params.dim, content),
+                );
             }
         }
         Ok(())

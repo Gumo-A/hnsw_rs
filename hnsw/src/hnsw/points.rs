@@ -8,7 +8,7 @@ pub struct Point {
     pub id: usize,
     pub vector: Array<f32, Dim<[usize; 1]>>,
     pub neighbors: HashSet<usize, BuildNoHashHasher<usize>>,
-    pub payload: Option<HashMap<String, bool>>,
+    pub payload: Option<HashMap<String, Payload>>,
 }
 
 impl Point {
@@ -16,7 +16,7 @@ impl Point {
         id: usize,
         vector: ArrayView<f32, Dim<[usize; 1]>>,
         neighbors: Option<HashSet<usize, BuildNoHashHasher<usize>>>,
-        payload: Option<HashMap<String, bool>>,
+        payload: Option<HashMap<String, Payload>>,
     ) -> Point {
         Point {
             id,
@@ -25,4 +25,11 @@ impl Point {
             payload,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum Payload {
+    StringPayload(String),
+    BoolPayload(bool),
+    NumericPayload(f32),
 }

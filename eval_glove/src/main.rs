@@ -2,10 +2,10 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::index::HNSW;
+use hnsw::{helpers::args::parse_args_eval, hnsw::points::Payload};
 
 use ndarray::{s, Array2};
 
@@ -32,9 +32,15 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let mut index = HNSW::build_index_par(m, &embeddings);
-    // let mut index = HNSW::new(m, None, dim);
-    // index.build_index(&embeddings, false)?;
+    let payloads = Vec::from_iter(
+        words
+            .iter()
+            .map(|x| Payload::StringPayload(x.clone().to_string())),
+    );
+
+    // let mut index = HNSW::build_index_par(m, &embeddings);
+    let mut index = HNSW::new(m, None, dim);
+    index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
     estimate_recall(&mut index, &embeddings, &bf_data);
 
@@ -44,7 +50,7 @@ fn main() -> std::io::Result<()> {
             break;
         }
         let vector = embeddings.slice(s![idx, ..]);
-        let anns = index.ann_by_vector(&vector, 10, 16);
+        let anns = index.ann_by_vector(&vector, 10, 16, &None);
         println!("ANNs of {}", words[idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
@@ -81,7 +87,7 @@ fn estimate_recall(
 
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = embeddings.slice(s![idx, ..]);
-            let anns = index.ann_by_vector(&vector, 10, ef);
+            let anns = index.ann_by_vector(&vector, 10, ef, &None);
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()

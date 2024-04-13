@@ -55,7 +55,7 @@ mod tests {
 
         let n = 10;
         let vector = index.layers.get(&0).unwrap().node(n).vector.to_owned();
-        let anns = index.ann_by_vector(&vector.view(), 10, 16);
+        let anns = index.ann_by_vector(&vector.view(), 10, 16, &None);
         println!("ANNs of {:?}", n);
         for e in anns {
             println!("{:?}", e);
@@ -66,7 +66,7 @@ mod tests {
     fn build_multithreaded() {
         let mut index = HNSW::new(12, None, 100);
         index
-            .build_index(&Array2::zeros((10, 100)), false)
+            .build_index(&Array2::zeros((10, 100)), false, None)
             .expect("Error");
     }
 }
