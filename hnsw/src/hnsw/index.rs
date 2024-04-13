@@ -1,10 +1,8 @@
-use rand::seq::SliceRandom;
-use rand::thread_rng;
-
 use crate::graph::Graph;
 use crate::helpers::data::split_ids;
 // use crate::helpers::bench::Bencher;
 use crate::helpers::distance::v2v_dist;
+use crate::points::Point;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, ArrayView, Dim};
@@ -100,13 +98,13 @@ impl HNSW {
             ep = self.search_layer(&self.layers.get(&(layer_nb)).unwrap(), vector, &mut ep, 1);
         }
 
-        let neighbors = self.search_layer(&self.layers.get(&0).unwrap(), vector, &mut ep, ef);
+        let layer_0 = &self.layers.get(&0).unwrap();
+        let neighbors = self.search_layer(layer_0, vector, &mut ep, ef);
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
-                let dist = (v2v_dist(vector, &self.layers.get(&0).unwrap().node(*x).1.view())
-                    * 10_000.0)
-                    .trunc() as usize;
+                let dist = v2v_dist(vector, &layer_0.node(*x).vector.view());
+                let dist = (dist * 10_000.0).trunc() as usize;
                 (dist, *x)
             }));
 
@@ -137,8 +135,7 @@ impl HNSW {
 
     fn step_2(
         &self,
-        node_id: usize,
-        vector: &ArrayView<f32, Dim<[usize; 1]>>,
+        point: &Point,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
     ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
@@ -148,17 +145,17 @@ impl HNSW {
         for layer_nb in (0..bound).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
 
-            ep = self.search_layer(layer, &vector, &mut ep, self.ef_cons);
+            ep = self.search_layer(layer, &point.vector.view(), &mut ep, self.ef_cons);
 
             let neighbors_to_connect =
-                self.select_heuristic(&layer, vector, &mut ep, self.m, false, true);
+                self.select_heuristic(&layer, &point.vector.view(), &mut ep, self.m, false, true);
             let prune_results = self.prune_connexions(layer_nb, &neighbors_to_connect);
 
             insertion_results.insert(layer_nb, HashMap::new());
             insertion_results
                 .get_mut(&layer_nb)
                 .unwrap()
-                .insert(node_id, neighbors_to_connect);
+                .insert(point.id, neighbors_to_connect);
             insertion_results
                 .get_mut(&layer_nb)
                 .unwrap()
@@ -180,7 +177,7 @@ impl HNSW {
             if ((layer_nb == 0) & (layer.degree(*neighbor) > self.mmax0))
                 | ((layer_nb > 0) & (layer.degree(*neighbor) > self.mmax))
             {
-                let neighbor_vec = &layer.node(*neighbor).1.view();
+                let neighbor_vec = &layer.node(*neighbor).vector.view();
                 let mut old_neighbors: HashSet<usize, BuildNoHashHasher<usize>> =
                     HashSet::with_hasher(BuildNoHashHasher::default());
                 old_neighbors.clone_from(layer.neighbors(*neighbor));
@@ -225,7 +222,7 @@ impl HNSW {
                 continue;
             }
 
-            let e_vector = &layer.node(e).1.view();
+            let e_vector = &layer.node(e).vector.view();
             let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
             selected_set.extend(selected.values());
             let (dist_from_s, _) = self
@@ -253,13 +250,8 @@ impl HNSW {
         result
     }
 
-    pub fn insert(
-        &mut self,
-        node_id: usize,
-        vector: &ArrayView<f32, Dim<[usize; 1]>>,
-        level: Option<usize>,
-    ) -> bool {
-        if self.node_ids.contains(&node_id) {
+    pub fn insert(&mut self, point: &Point, level: Option<usize>) -> bool {
+        if self.node_ids.contains(&point.id) {
             return false;
         }
 
@@ -270,15 +262,15 @@ impl HNSW {
 
         let max_layer_nb = self.layers.len() - 1;
 
-        let ep = self.step_1(&vector, max_layer_nb, current_layer_nb);
-        let insertion_results = self.step_2(node_id, &vector, ep, current_layer_nb);
+        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb);
+        let insertion_results = self.step_2(&point, ep, current_layer_nb);
 
-        self.node_ids.insert(node_id);
+        self.node_ids.insert(point.id);
         for (layer_nb, node_data) in insertion_results.iter() {
             let layer = self.layers.get_mut(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
-                if *node == node_id {
-                    layer.add_node(node_id, vector);
+                if *node == point.id {
+                    layer.add_node(point.id, &point.vector.view());
                 }
                 for old_neighbor in layer.neighbors(*node).clone() {
                     layer.remove_edge(*node, old_neighbor);
@@ -291,42 +283,42 @@ impl HNSW {
         if current_layer_nb > max_layer_nb {
             for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
                 let mut layer = Graph::new();
-                layer.add_node(node_id, vector);
+                layer.add_node(point.id, &point.vector.view());
                 self.layers.insert(layer_nb, layer);
-                self.node_ids.insert(node_id);
+                self.node_ids.insert(point.id);
             }
-            self.ep = node_id;
+            self.ep = point.id;
         }
         true
     }
 
     pub fn insert_par(
         index: &Arc<RwLock<Self>>,
-        ids_levels: Vec<(usize, usize)>,
-        vectors: &Array<f32, Dim<[usize; 2]>>,
+        points: Arc<Vec<(Point, usize)>>,
+        point_ids: Vec<usize>,
         bar: ProgressBar,
     ) {
         let mut batch = Vec::new();
-        let batch_size = 36;
-        for (idx, (node_id, current_layer_nb)) in ids_levels.iter().enumerate() {
+        let batch_size = 16;
+        for (idx, point_id) in point_ids.iter().enumerate() {
             bar.inc(1);
+            let (point, current_layer_nb) = &points[*point_id];
             let read_ref = index.read();
-            if read_ref.node_ids.contains(&node_id) {
+            if read_ref.node_ids.contains(&point.id) {
                 continue;
             }
             let max_layer_nb = read_ref.layers.len() - 1;
-            let vector = &vectors.slice(s![*node_id, ..]);
-            let ep = read_ref.step_1(vector, max_layer_nb, *current_layer_nb);
-            let insertion_results = read_ref.step_2(*node_id, vector, ep, *current_layer_nb);
+            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb);
+            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb);
             batch.push(insertion_results);
-            drop(read_ref);
 
-            let last_idx = idx == (ids_levels.len() - 1);
+            let last_idx = idx == (point_ids.len() - 1);
             let new_layer = current_layer_nb > &max_layer_nb;
             let full_batch = batch.len() >= batch_size;
             let have_to_write: bool = last_idx | new_layer | full_batch;
 
             let mut write_ref = if have_to_write {
+                drop(read_ref);
                 index.write()
             } else {
                 continue;
@@ -336,7 +328,8 @@ impl HNSW {
                     write_ref.node_ids.extend(node_data.keys());
                     let layer = write_ref.layers.get_mut(&layer_nb).unwrap();
                     for (node, neighbors) in node_data.iter() {
-                        layer.add_node(*node, &vectors.slice(s![*node, ..]));
+                        let (point, _) = &points[*node];
+                        layer.add_node(*node, &point.vector.view());
                         for old_neighbor in layer.neighbors(*node).clone() {
                             layer.remove_edge(*node, old_neighbor);
                         }
@@ -346,33 +339,32 @@ impl HNSW {
                     }
                 }
             }
-            if current_layer_nb > &max_layer_nb {
+            if new_layer {
                 for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
                     let mut layer = Graph::new();
-                    layer.add_node(*node_id, vector);
+                    layer.add_node(point.id, &point.vector.view());
                     write_ref.layers.insert(layer_nb, layer);
-                    write_ref.node_ids.insert(*node_id);
+                    write_ref.node_ids.insert(point.id);
                 }
-                write_ref.ep = *node_id;
+                write_ref.ep = point.id;
             }
             batch.clear();
         }
     }
 
-    fn first_insert(&mut self, node_id: usize, vector: &ArrayView<f32, Dim<[usize; 1]>>) {
+    fn first_insert(&mut self, point: &Point) {
         assert_eq!(self.node_ids.len(), 0);
         assert_eq!(self.layers.len(), 0);
 
         let mut layer = Graph::new();
-        layer.add_node(node_id, vector);
+        layer.add_node(point.id, &point.vector.view());
         self.layers.insert(0, layer);
-        self.node_ids.insert(node_id);
-        self.ep = node_id;
+        self.node_ids.insert(point.id);
+        self.ep = point.id;
     }
 
     pub fn build_index(
         &mut self,
-        node_ids: Vec<usize>,
         vectors: &Array<f32, Dim<[usize; 2]>>,
         checkpoint: bool,
     ) -> std::io::Result<()> {
@@ -380,6 +372,15 @@ impl HNSW {
         let dim = self.dim;
         let m = self.m;
         let efcons = self.ef_cons;
+
+        let points: Vec<(Point, usize)> = (0..vectors.dim().0)
+            .map(|idx| {
+                (
+                    Point::new(idx, vectors.slice(s![idx, ..]), None, None),
+                    self.get_new_node_layer(),
+                )
+            })
+            .collect();
 
         let checkpoint_path =
             format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}_efcons{efcons}");
@@ -391,34 +392,21 @@ impl HNSW {
             self.print_params();
         } else {
             println!("No checkpoint was loaded, building self from scratch.");
-            self.first_insert(node_ids[0], &vectors.slice(s![0, ..]));
+            self.first_insert(&points[0].0);
         };
-
-        let mut nodes_remaining = HashSet::with_hasher(BuildNoHashHasher::default());
-        nodes_remaining.extend(node_ids.iter());
-        let nodes_remaining: Vec<usize> = nodes_remaining
-            .difference(&self.node_ids)
-            .map(|x| *x)
-            .collect();
-
-        let mut vector_levels: Vec<(usize, usize)> = nodes_remaining
-            .iter()
-            .map(|x| (*x, self.get_new_node_layer()))
-            .collect();
-        vector_levels.shuffle(&mut thread_rng());
 
         let nb_nodes = self.node_ids.len();
         let remaining = lim - nb_nodes;
         let bar = get_progress_bar(remaining, false);
-        for (node_id, level) in vector_levels.iter() {
-            let inserted = self.insert(*node_id, &vectors.slice(s![*node_id, ..]), Some(*level));
+        for (point, level) in points.iter() {
+            let inserted = self.insert(point, Some(*level));
             if inserted {
                 bar.inc(1);
             } else {
                 bar.reset_eta();
             }
             if checkpoint {
-                if ((*node_id != 0) & (node_id % 10_000 == 0) & (inserted)) | (*node_id == lim - 1)
+                if ((point.id != 0) & (point.id % 10_000 == 0) & (inserted)) | (point.id == lim - 1)
                 {
                     println!("Checkpointing in {checkpoint_path}");
                     self.save(&checkpoint_path)?;
@@ -435,96 +423,30 @@ impl HNSW {
         Ok(())
     }
 
-    // pub fn build_index_par_copy(
-    //     m: usize,
-    //     node_ids: Vec<usize>,
-    //     vectors: Array<f32, Dim<[usize; 2]>>,
-    // ) -> Self {
-    //     let (_lim, dim) = vectors.dim();
-    //     let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
-
-    //     index
-    //         .write()
-    //         .first_insert(node_ids[0], &vectors.slice(s![0, ..]).to_owned());
-
-    //     let mut handlers = vec![];
-
-    //     // let nb_threads = 20;
-    //     let nb_threads = std::thread::available_parallelism().unwrap().get();
-    //     for thread_nb in 0..nb_threads {
-    //         let node_ids_split = split_ids(node_ids.clone(), nb_threads as u8, thread_nb as u8);
-    //         let vector_levels: Vec<(usize, usize)> = node_ids_split
-    //             .iter()
-    //             .map(|x| (*x, index.read().get_new_node_layer()))
-    //             .collect();
-    //         let index_ref = index.clone();
-    //         let vectors_ref = vectors.clone();
-    //         if thread_nb == (nb_threads - 1) {
-    //             let bar = get_progress_bar(vector_levels.len());
-    //             handlers.push(std::thread::spawn(move || {
-    //                 for (node_id, level) in vector_levels.iter() {
-    //                     let inserted = Self::insert_par(
-    //                         &index_ref,
-    //                         // *node_id,
-    //                         // &vectors_ref.slice(s![*node_id, ..]).to_owned(),
-    //                         &vector_levels,
-    //                         &vectors_ref.to_owned(),
-    //                         Some(*level),
-    //                     );
-    //                     if inserted {
-    //                         bar.inc(1);
-    //                     }
-    //                 }
-    //             }));
-    //         } else {
-    //             handlers.push(std::thread::spawn(move || {
-    //                 for (node_id, level) in vector_levels.iter() {
-    //                     let _ = Self::insert_par(
-    //                         &index_ref,
-    //                         *node_id,
-    //                         // &vectors_ref.slice(s![*node_id, ..]).to_owned(),
-    //                         &vectors_ref.to_owned(),
-    //                         Some(*level),
-    //                     );
-    //                 }
-    //             }));
-    //         }
-    //     }
-    //     for handle in handlers {
-    //         let _ = handle.join().unwrap();
-    //     }
-    //     Arc::try_unwrap(index).unwrap().into_inner()
-    // }
-
-    pub fn build_index_par(
-        m: usize,
-        node_ids: Vec<usize>,
-        vectors: &Array<f32, Dim<[usize; 2]>>,
-    ) -> Self {
-        let (_lim, dim) = vectors.dim();
+    pub fn build_index_par(m: usize, vectors: &Array<f32, Dim<[usize; 2]>>) -> Self {
+        let (lim, dim) = vectors.dim();
         let index = Arc::new(RwLock::new(Self::new(m, None, dim)));
         // let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
-        let vectors = Arc::new(vectors.to_owned());
-
-        index
-            .write()
-            .first_insert(node_ids[0], &vectors.slice(s![0, ..]));
+        let points: Vec<(Point, usize)> = (0..lim)
+            .map(|idx| {
+                (
+                    Point::new(idx, vectors.slice(s![idx, ..]), None, None),
+                    index.read().get_new_node_layer(),
+                )
+            })
+            .collect();
+        index.write().first_insert(&points[0].0);
+        let points = Arc::new(points);
 
         let mut handlers = vec![];
-
         let nb_threads = std::thread::available_parallelism().unwrap().get();
         for thread_nb in 0..nb_threads {
-            let node_ids_split = split_ids(node_ids.clone(), nb_threads as u8, thread_nb as u8);
-            let mut vector_levels: Vec<(usize, usize)> = node_ids_split
-                .iter()
-                .map(|x| (*x, index.read().get_new_node_layer()))
-                .collect();
-            vector_levels.sort_by_key(|x| x.1);
+            let point_ids: Vec<usize> = split_ids((0..lim).collect(), nb_threads, thread_nb);
             let index_ref = index.clone();
-            let vectors_ref = vectors.clone();
-            let bar = get_progress_bar(vector_levels.len(), thread_nb != (nb_threads - 1));
+            let points_ref = points.clone();
+            let bar = get_progress_bar(point_ids.len(), thread_nb != (nb_threads - 1));
             handlers.push(std::thread::spawn(move || {
-                Self::insert_par(&index_ref, vector_levels, &vectors_ref, bar);
+                Self::insert_par(&index_ref, points_ref, point_ids, bar);
             }));
         }
         for handle in handlers {
@@ -546,7 +468,7 @@ impl HNSW {
     ) -> BTreeMap<usize, usize> {
         let result = others.iter().map(|idx| {
             (
-                (v2v_dist(vector, &layer.node(*idx).1.view()) * 10_000.0).trunc() as usize,
+                (v2v_dist(vector, &layer.node(*idx).vector.view()) * 10_000.0).trunc() as usize,
                 *idx,
             )
         });
@@ -575,7 +497,7 @@ impl HNSW {
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
-                    let neighbor_vec = &layer.node(neighbor).1.view();
+                    let neighbor_vec = &layer.node(neighbor).vector.view();
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
                     let n2q_dist = (v2v_dist(&vector, neighbor_vec) * 10_000.0).trunc() as usize;
@@ -630,8 +552,8 @@ impl HNSW {
             > = HashMap::new();
 
             for (node_id, node_data) in self.layers.get(&(layer_nb)).unwrap().nodes.iter() {
-                let neighbors: &HashSet<usize, BuildNoHashHasher<usize>> = &node_data.0;
-                let vector: Vec<f32> = node_data.1.to_vec();
+                let neighbors: &HashSet<usize, BuildNoHashHasher<usize>> = &node_data.neighbors;
+                let vector: Vec<f32> = node_data.vector.to_vec();
                 layer_data.insert(*node_id, (neighbors, vector));
             }
             serde_json::to_writer(&mut writer, &layer_data)?;

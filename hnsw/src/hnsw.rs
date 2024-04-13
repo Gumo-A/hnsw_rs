@@ -4,7 +4,7 @@ pub mod index;
 #[cfg(test)]
 mod tests {
 
-    use crate::hnsw::index::HNSW;
+    use crate::{hnsw::index::HNSW, points::Point};
     use ndarray::{Array1, Array2};
     use rand::Rng;
 
@@ -27,12 +27,15 @@ mod tests {
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector.view(), None);
+            let point = Point::new(i, vector.view(), None, None);
+            index.insert(&point, Some(0));
         }
 
         let already_in_index = 0;
         let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-        index.insert(already_in_index, &vector.view(), None);
+        let point = Point::new(already_in_index, vector.view(), None, None);
+        index.insert(&point, Some(0));
+        // index.insert(already_in_index, &vector.view(), None);
         assert_eq!(index.node_ids.len(), n);
     }
 
@@ -45,11 +48,12 @@ mod tests {
 
         for i in 0..n {
             let vector = Array1::from_vec((0..dim).map(|_| rng.gen::<f32>()).collect());
-            index.insert(i.try_into().unwrap(), &vector.view(), None);
+            let point = Point::new(i, vector.view(), None, None);
+            index.insert(&point, Some(0));
         }
 
         let n = 10;
-        let vector = index.layers.get(&0).unwrap().node(n).1.to_owned();
+        let vector = index.layers.get(&0).unwrap().node(n).vector.to_owned();
         let anns = index.ann_by_vector(&vector.view(), 10, 16);
         println!("ANNs of {:?}", n);
         for e in anns {
@@ -61,7 +65,7 @@ mod tests {
     fn build_multithreaded() {
         let mut index = HNSW::new(12, None, 100);
         index
-            .build_index(Vec::from_iter(0..10), &Array2::zeros((10, 100)), false)
+            .build_index(&Array2::zeros((10, 100)), false)
             .expect("Error");
     }
 }

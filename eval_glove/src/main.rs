@@ -32,46 +32,23 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let node_ids: Vec<usize> = (0..lim).map(|x| x as usize).collect();
-    let mut index = HNSW::build_index_par(m, node_ids, &embeddings);
+    let mut index = HNSW::build_index_par(m, &embeddings);
     // let mut index = HNSW::new(m, None, dim);
-    // index.build_index(node_ids, &embeddings, false)?;
+    // index.build_index(&embeddings, false)?;
     index.print_params();
-    // let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     estimate_recall(&mut index, &embeddings, &bf_data);
 
-    for (i, idx) in bf_data.keys().enumerate() {
+    // for (i, idx) in bf_data.keys().enumerate() {
+    for (i, idx) in (120..126).enumerate() {
         if i > 3 {
             break;
         }
-        let vector = embeddings.slice(s![*idx, ..]);
+        let vector = embeddings.slice(s![idx, ..]);
         let anns = index.ann_by_vector(&vector, 10, 16);
-        println!("ANNs of {}", words[*idx]);
+        println!("ANNs of {}", words[idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
     }
-    // estimate_recall(&mut index, &embeddings, &bf_data);
-    // return Ok(());
-
-    // let function = "while block 2";
-    // let fracs = index.bencher.borrow().get_frac_of(function, vec![]);
-    // let mut total = 0.0;
-    // for (key, frac) in fracs.iter() {
-    //     println!("{key} was {frac} of {function}");
-    //     total += frac;
-    // }
-    // println!("Sum of these fractions is {total}");
-    // let mean = *index.bencher.borrow().get_means().get(function).unwrap();
-    // println!("Mean execution time of {function} is {mean}");
-    // let tot_time_function = *index.bencher.borrow().get_sums().get(function).unwrap();
-    // println!("Total execution time of {function} is {tot_time_function}");
-    // let tot_time_insert = *index.bencher.borrow().get_sums().get("insert").unwrap();
-    // println!("Total execution time of insert is {tot_time_insert}");
-    // println!(
-    //     "{function} was then {} of insert",
-    //     tot_time_function / tot_time_insert
-    // );
-
     let end = Instant::now();
     println!(
         "Elapsed time: {}s",

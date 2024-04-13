@@ -1,25 +1,17 @@
-use crate::helpers::distance::norm_vector;
+use crate::points::Point;
 use ndarray::{Array, ArrayView, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct Graph {
-    pub nodes: HashMap<
-        usize,
-        (
-            HashSet<usize, BuildNoHashHasher<usize>>,
-            Array<f32, Dim<[usize; 1]>>,
-        ),
-    >,
-    pub self_connexions: bool,
+    pub nodes: HashMap<usize, Point>,
 }
 
 impl Graph {
     pub fn new() -> Self {
         Graph {
             nodes: HashMap::new(),
-            self_connexions: false,
         }
     }
     pub fn from_layer_data(
@@ -31,29 +23,22 @@ impl Graph {
             let vector = Array::from_shape_vec((dim,), node_data.1.clone())
                 .expect("Could not load a vector.");
             let neighbors = node_data.0.clone();
-            nodes.insert(*node_id, (neighbors, vector));
+            let point = Point::new(*node_id, vector.view(), Some(neighbors), None);
+            nodes.insert(*node_id, point);
         }
 
-        Self {
-            nodes,
-            self_connexions: false,
-        }
+        Self { nodes }
     }
     pub fn add_node(&mut self, node_id: usize, vector: &ArrayView<f32, Dim<[usize; 1]>>) {
         if !self.nodes.contains_key(&node_id) {
-            self.nodes.insert(
-                node_id,
-                (
-                    HashSet::with_hasher(BuildNoHashHasher::default()),
-                    norm_vector(vector).to_owned(),
-                ),
-            );
+            self.nodes
+                .insert(node_id, Point::new(node_id, *vector, None, None));
         }
     }
 
     pub fn add_edge(&mut self, node_a: usize, node_b: usize) {
         if (!self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b))
-            | ((node_a == node_b) & !self.self_connexions)
+            | (node_a == node_b)
         {
             return ();
         }
@@ -61,13 +46,13 @@ impl Graph {
             .nodes
             .get_mut(&node_a)
             .expect(format!("Could not get the value of node {node_a}").as_str());
-        a_neighbors.0.insert(node_b);
+        a_neighbors.neighbors.insert(node_b);
 
         let b_neighbors = self
             .nodes
             .get_mut(&node_b)
             .expect(format!("Could not get the value of node {node_b}").as_str());
-        b_neighbors.0.insert(node_a);
+        b_neighbors.neighbors.insert(node_a);
     }
 
     pub fn remove_edge(&mut self, node_a: usize, node_b: usize) {
@@ -75,13 +60,13 @@ impl Graph {
             .nodes
             .get_mut(&node_a)
             .expect(format!("Could not get neighbors of {node_a}").as_str());
-        a_neighbors.0.remove(&node_b);
+        a_neighbors.neighbors.remove(&node_b);
 
         let b_neighbors = self
             .nodes
             .get_mut(&node_b)
             .expect(format!("Could not get neighbors of {node_b}").as_str());
-        b_neighbors.0.remove(&node_a);
+        b_neighbors.neighbors.remove(&node_a);
     }
 
     pub fn neighbors(&self, node_id: usize) -> &HashSet<usize, BuildNoHashHasher<usize>> {
@@ -89,16 +74,10 @@ impl Graph {
             .nodes
             .get(&node_id)
             .expect(format!("Could not get the neighbors of {node_id}").as_str())
-            .0
+            .neighbors
     }
 
-    pub fn node(
-        &self,
-        node_id: usize,
-    ) -> &(
-        HashSet<usize, BuildNoHashHasher<usize>>,
-        Array<f32, Dim<[usize; 1]>>,
-    ) {
+    pub fn node(&self, node_id: usize) -> &Point {
         match self.nodes.get(&node_id) {
             Some(node) => node,
             None => {
@@ -106,8 +85,6 @@ impl Graph {
                     "{node_id} not found in graph. This graph has {} nodes",
                     self.nb_nodes()
                 );
-                // let nodes: Vec<&usize> = self.nodes.keys().collect();
-                // println!("{:?}", nodes);
                 panic!();
             }
         }
@@ -117,7 +94,7 @@ impl Graph {
         self.nodes
             .get(&node_id)
             .expect("Could not get the neighbors of {node_id}")
-            .0
+            .neighbors
             .len() as usize
     }
 

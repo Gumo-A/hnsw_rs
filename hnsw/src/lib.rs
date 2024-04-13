@@ -1,6 +1,7 @@
 pub mod graph;
 pub mod helpers;
 pub mod hnsw;
+pub mod points;
 
 #[cfg(test)]
 mod tests {
@@ -50,7 +51,6 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut g = Graph {
             nodes: HashMap::new(),
-            self_connexions: false,
         };
 
         let nodes = Vec::from_iter(0..n);
@@ -74,7 +74,6 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut g = Graph {
             nodes: HashMap::new(),
-            self_connexions: false,
         };
 
         let nodes = Vec::from_iter(0..n);
@@ -110,7 +109,6 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut g = Graph {
             nodes: HashMap::new(),
-            self_connexions: false,
         };
 
         let nodes = Vec::from_iter(0..n);
@@ -125,7 +123,8 @@ mod tests {
             g.add_node(*node, &vector.view());
         }
 
-        let mut dist = helpers::distance::v2v_dist(&g.node(0).1.view(), &g.node(0).1.view());
+        let mut dist =
+            helpers::distance::v2v_dist(&g.node(0).vector.view(), &g.node(0).vector.view());
         dist = (dist * 10000.0).round() / 10000.0;
 
         assert_eq!(dist, 0.0);
