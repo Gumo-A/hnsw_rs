@@ -1,8 +1,8 @@
-use crate::graph::Graph;
-use crate::helpers::data::split_ids;
-// use crate::helpers::bench::Bencher;
+use crate::helpers::data::split;
 use crate::helpers::distance::v2v_dist;
-use crate::points::Point;
+use crate::hnsw::graph::Graph;
+use crate::hnsw::params::Params;
+use crate::hnsw::points::Point;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, ArrayView, Dim};
@@ -19,50 +19,29 @@ use std::path::Path;
 
 #[derive(Debug)]
 pub struct HNSW {
-    m: usize,
-    mmax: usize,
-    mmax0: usize,
-    ml: f32,
-    ef_cons: usize,
+    params: Params,
     ep: usize,
-    dim: usize,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
     pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
     // pub bencher: RefCell<Bencher>,
 }
 
 impl HNSW {
-    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
-        Self {
-            m,
-            mmax: m + m / 2,
-            mmax0: m * 2,
-            ml: 1.0 / (m as f32).log(std::f32::consts::E),
-            ef_cons: ef_cons.unwrap_or(m * 2),
+    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> HNSW {
+        let params = Params::from_m_efcons(m, ef_cons.unwrap_or(2 * m), dim);
+        HNSW {
+            params,
             ep: 0,
-            dim,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
             // bencher: RefCell::new(Bencher::new()),
         }
     }
 
-    pub fn from_params(
-        m: usize,
-        mmax: Option<usize>,
-        mmax0: Option<usize>,
-        ml: Option<f32>,
-        ef_cons: Option<usize>,
-        dim: usize,
-    ) -> Self {
-        Self {
-            m,
-            mmax: mmax.unwrap_or(m + m / 2),
-            mmax0: mmax0.unwrap_or(m * 2),
-            ml: ml.unwrap_or(1.0 / (m as f32).log(std::f32::consts::E)),
-            ef_cons: ef_cons.unwrap_or(m * 2),
+    pub fn from_params(params: Params) -> HNSW {
+        HNSW {
+            params,
             ep: 0,
-            dim,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
             // bencher: RefCell::new(Bencher::new()),
@@ -70,11 +49,11 @@ impl HNSW {
     }
 
     pub fn print_params(&self) {
-        println!("m = {}", self.m);
-        println!("mmax = {}", self.mmax);
-        println!("mmax0 = {}", self.mmax0);
-        println!("ml = {}", self.ml);
-        println!("ef_cons = {}", self.ef_cons);
+        println!("m = {}", self.params.m);
+        println!("mmax = {}", self.params.mmax);
+        println!("mmax0 = {}", self.params.mmax0);
+        println!("ml = {}", self.params.ml);
+        println!("ef_cons = {}", self.params.ef_cons);
         println!("Nb. layers = {}", self.layers.len());
         println!("Nb. of nodes = {}", self.node_ids.len());
         for (idx, layer) in self.layers.iter() {
@@ -145,10 +124,16 @@ impl HNSW {
         for layer_nb in (0..bound).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
 
-            ep = self.search_layer(layer, &point.vector.view(), &mut ep, self.ef_cons);
+            ep = self.search_layer(layer, &point.vector.view(), &mut ep, self.params.ef_cons);
 
-            let neighbors_to_connect =
-                self.select_heuristic(&layer, &point.vector.view(), &mut ep, self.m, false, true);
+            let neighbors_to_connect = self.select_heuristic(
+                &layer,
+                &point.vector.view(),
+                &mut ep,
+                self.params.m,
+                false,
+                true,
+            );
             let prune_results = self.prune_connexions(layer_nb, &neighbors_to_connect);
 
             insertion_results.insert(layer_nb, HashMap::new());
@@ -170,12 +155,16 @@ impl HNSW {
         connexions_made: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>> {
         let mut prune_results = HashMap::new();
-        let limit = if layer_nb == 0 { self.mmax0 } else { self.mmax };
+        let limit = if layer_nb == 0 {
+            self.params.mmax0
+        } else {
+            self.params.mmax
+        };
 
         for neighbor in connexions_made.iter() {
             let layer = &self.layers.get(&layer_nb).unwrap();
-            if ((layer_nb == 0) & (layer.degree(*neighbor) > self.mmax0))
-                | ((layer_nb > 0) & (layer.degree(*neighbor) > self.mmax))
+            if ((layer_nb == 0) & (layer.degree(*neighbor) > self.params.mmax0))
+                | ((layer_nb > 0) & (layer.degree(*neighbor) > self.params.mmax))
             {
                 let neighbor_vec = &layer.node(*neighbor).vector.view();
                 let mut old_neighbors: HashSet<usize, BuildNoHashHasher<usize>> =
@@ -292,17 +281,11 @@ impl HNSW {
         true
     }
 
-    pub fn insert_par(
-        index: &Arc<RwLock<Self>>,
-        points: Arc<Vec<(Point, usize)>>,
-        point_ids: Vec<usize>,
-        bar: ProgressBar,
-    ) {
+    pub fn insert_par(index: &Arc<RwLock<Self>>, points: Vec<(Point, usize)>, bar: ProgressBar) {
         let mut batch = Vec::new();
         let batch_size = 16;
-        for (idx, point_id) in point_ids.iter().enumerate() {
+        for (idx, (point, current_layer_nb)) in points.iter().enumerate() {
             bar.inc(1);
-            let (point, current_layer_nb) = &points[*point_id];
             let read_ref = index.read();
             if read_ref.node_ids.contains(&point.id) {
                 continue;
@@ -310,9 +293,9 @@ impl HNSW {
             let max_layer_nb = read_ref.layers.len() - 1;
             let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb);
             let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb);
-            batch.push(insertion_results);
+            batch.push((idx, insertion_results));
 
-            let last_idx = idx == (point_ids.len() - 1);
+            let last_idx = idx == (points.len() - 1);
             let new_layer = current_layer_nb > &max_layer_nb;
             let full_batch = batch.len() >= batch_size;
             let have_to_write: bool = last_idx | new_layer | full_batch;
@@ -323,12 +306,12 @@ impl HNSW {
             } else {
                 continue;
             };
-            for i in batch.iter() {
-                for (layer_nb, node_data) in i.iter() {
+            for (point_nb, batch_data) in batch.iter() {
+                for (layer_nb, node_data) in batch_data.iter() {
                     write_ref.node_ids.extend(node_data.keys());
                     let layer = write_ref.layers.get_mut(&layer_nb).unwrap();
                     for (node, neighbors) in node_data.iter() {
-                        let (point, _) = &points[*node];
+                        let (point, _) = &points[*point_nb];
                         layer.add_node(*node, &point.vector.view());
                         for old_neighbor in layer.neighbors(*node).clone() {
                             layer.remove_edge(*node, old_neighbor);
@@ -345,8 +328,8 @@ impl HNSW {
                     layer.add_node(point.id, &point.vector.view());
                     write_ref.layers.insert(layer_nb, layer);
                     write_ref.node_ids.insert(point.id);
+                    write_ref.ep = point.id;
                 }
-                write_ref.ep = point.id;
             }
             batch.clear();
         }
@@ -369,9 +352,9 @@ impl HNSW {
         checkpoint: bool,
     ) -> std::io::Result<()> {
         let lim = vectors.dim().0;
-        let dim = self.dim;
-        let m = self.m;
-        let efcons = self.ef_cons;
+        let dim = self.params.dim;
+        let m = self.params.m;
+        let efcons = self.params.ef_cons;
 
         let points: Vec<(Point, usize)> = (0..vectors.dim().0)
             .map(|idx| {
@@ -424,10 +407,10 @@ impl HNSW {
     }
 
     pub fn build_index_par(m: usize, vectors: &Array<f32, Dim<[usize; 2]>>) -> Self {
+        let nb_threads = std::thread::available_parallelism().unwrap().get();
         let (lim, dim) = vectors.dim();
-        let index = Arc::new(RwLock::new(Self::new(m, None, dim)));
-        // let index = Arc::new(RwLock::new(Self::new(m, Some(500), dim)));
-        let points: Vec<(Point, usize)> = (0..lim)
+        let index = Arc::new(RwLock::new(HNSW::new(m, None, dim)));
+        let mut points: Vec<(Point, usize)> = (0..lim)
             .map(|idx| {
                 (
                     Point::new(idx, vectors.slice(s![idx, ..]), None, None),
@@ -436,28 +419,47 @@ impl HNSW {
             })
             .collect();
         index.write().first_insert(&points[0].0);
-        let points = Arc::new(points);
+        points.sort_by_key(|x| x.1);
+        let mut points_split = split(points, nb_threads);
 
         let mut handlers = vec![];
-        let nb_threads = std::thread::available_parallelism().unwrap().get();
         for thread_nb in 0..nb_threads {
-            let point_ids: Vec<usize> = split_ids((0..lim).collect(), nb_threads, thread_nb);
             let index_ref = index.clone();
-            let points_ref = points.clone();
-            let bar = get_progress_bar(point_ids.len(), thread_nb != (nb_threads - 1));
+            let points_ref = points_split.pop().unwrap();
+            // let bar = get_progress_bar(points_ref.len(), thread_nb != (nb_threads - 1));
+            let bar = get_progress_bar(points_ref.len(), thread_nb != 0);
             handlers.push(std::thread::spawn(move || {
-                Self::insert_par(&index_ref, points_ref, point_ids, bar);
+                Self::insert_par(&index_ref, points_ref, bar);
             }));
         }
         for handle in handlers {
             let _ = handle.join().unwrap();
         }
+        let mut index_ref = index.write();
+        for idx in 0..lim {
+            if !index_ref.node_ids.contains(&idx) {
+                let point = Point::new(idx, vectors.slice(s![idx, ..]), None, None);
+                index_ref.insert(&point, Some(0));
+                if index_ref.ep == idx {
+                    let nb_layers = index_ref.layers.len();
+                    index_ref.ep = *index_ref
+                        .layers
+                        .get(&(nb_layers - 1))
+                        .unwrap()
+                        .nodes
+                        .keys()
+                        .next()
+                        .unwrap();
+                }
+            }
+        }
+        drop(index_ref);
         Arc::try_unwrap(index).unwrap().into_inner()
     }
 
     fn get_new_node_layer(&self) -> usize {
         let mut rng = rand::thread_rng();
-        (-rng.gen::<f32>().log(std::f32::consts::E) * self.ml).floor() as usize
+        (-rng.gen::<f32>().log(std::f32::consts::E) * self.params.ml).floor() as usize
     }
 
     fn sort_by_distance(
@@ -532,13 +534,13 @@ impl HNSW {
         let params_file = File::create(path.join("params.json"))?;
         let mut writer = BufWriter::new(params_file);
         let params: HashMap<&str, f32> = HashMap::from([
-            ("m", self.m as f32),
-            ("mmax", self.mmax as f32),
-            ("mmax0", self.mmax0 as f32),
-            ("ef_cons", self.ef_cons as f32),
-            ("ml", self.ml as f32),
+            ("m", self.params.m as f32),
+            ("mmax", self.params.mmax as f32),
+            ("mmax0", self.params.mmax0 as f32),
+            ("ef_cons", self.params.ef_cons as f32),
+            ("ml", self.params.ml as f32),
             ("ep", self.ep as f32),
-            ("dim", self.dim as f32),
+            ("dim", self.params.dim as f32),
         ]);
         serde_json::to_writer(&mut writer, &params)?;
         writer.flush()?;
@@ -610,18 +612,19 @@ impl HNSW {
             }
         }
 
-        Ok(Self {
-            m: *params.get("m").unwrap() as usize,
-            mmax: *params.get("mmax").unwrap() as usize,
-            mmax0: *params.get("mmax0").unwrap() as usize,
-            ml: *params.get("ml").unwrap() as f32,
-            ef_cons: *params.get("ef_cons").unwrap() as usize,
+        let hnsw_params = Params::from(
+            *params.get("m").unwrap() as usize,
+            Some(*params.get("ef_cons").unwrap() as usize),
+            Some(*params.get("mmax").unwrap() as usize),
+            Some(*params.get("mmax0").unwrap() as usize),
+            Some(*params.get("ml").unwrap() as f32),
+            *params.get("dim").unwrap() as usize,
+        );
+        Ok(HNSW {
+            params: hnsw_params,
             ep: *params.get("ep").unwrap() as usize,
             node_ids,
             layers,
-            dim: *params.get("dim").unwrap() as usize,
-            // rng: rand::thread_rng(),
-            // bencher: RefCell::new(Bencher::new()),
         })
     }
 
@@ -635,13 +638,13 @@ impl HNSW {
             let reader = BufReader::new(file);
             if file_name.file_name().to_str().unwrap().contains("params") {
                 let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
-                self.m = *content.get("m").unwrap() as usize;
-                self.mmax = *content.get("mmax").unwrap() as usize;
-                self.mmax0 = *content.get("mmax0").unwrap() as usize;
+                self.params.m = *content.get("m").unwrap() as usize;
+                self.params.mmax = *content.get("mmax").unwrap() as usize;
+                self.params.mmax0 = *content.get("mmax0").unwrap() as usize;
                 self.ep = *content.get("ep").unwrap() as usize;
-                self.ef_cons = *content.get("ef_cons").unwrap() as usize;
-                self.dim = *content.get("dim").unwrap() as usize;
-                self.ml = *content.get("ml").unwrap() as f32;
+                self.params.ef_cons = *content.get("ef_cons").unwrap() as usize;
+                self.params.dim = *content.get("dim").unwrap() as usize;
+                self.params.ml = *content.get("ml").unwrap() as f32;
             } else if file_name.file_name().to_str().unwrap().contains("node_ids") {
                 let content: HashSet<usize, BuildNoHashHasher<usize>> =
                     serde_json::from_reader(reader)?;
@@ -659,7 +662,7 @@ impl HNSW {
                 let content: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)> =
                     serde_json::from_reader(reader)?;
                 self.layers
-                    .insert(layer_nb as usize, Graph::from_layer_data(self.dim, content));
+                    .insert(layer_nb as usize, Graph::from_layer_data(self.params.dim, content));
             }
         }
         Ok(())

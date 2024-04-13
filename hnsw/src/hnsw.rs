@@ -1,21 +1,22 @@
-pub mod filter;
+pub mod graph;
 pub mod index;
+pub mod params;
+pub mod points;
 
 #[cfg(test)]
 mod tests {
 
-    use crate::{hnsw::index::HNSW, points::Point};
+    use crate::hnsw::{index::HNSW, points::Point};
     use ndarray::{Array1, Array2};
     use rand::Rng;
 
+    use super::params::Params;
+
     #[test]
     fn hnsw_construction() {
-        let _index: HNSW = HNSW::new(12, None, 100);
-        let _index: HNSW = HNSW::from_params(12, Some(9), None, None, None, 100);
-        let _index: HNSW = HNSW::from_params(12, None, Some(18), None, None, 100);
-        let _index: HNSW = HNSW::from_params(12, None, None, Some(0.25), None, 100);
-        let _index: HNSW = HNSW::from_params(12, None, None, None, Some(100), 100);
-        let _index: HNSW = HNSW::from_params(12, Some(9), Some(18), Some(0.25), Some(100), 100);
+        let params = Params::from_m(12, 100);
+        let _index: HNSW = HNSW::new(params.m, None, params.dim);
+        let _index: HNSW = HNSW::from_params(params);
     }
 
     #[test]

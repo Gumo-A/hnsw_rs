@@ -3,6 +3,8 @@ use std::fs::{self, ReadDir};
 use std::fs::{DirEntry, File};
 use std::io::{BufReader, Result};
 
+use crate::hnsw::points::Point;
+
 pub fn split_ids(ids: Vec<usize>, nb_splits: usize, split_to_compute: usize) -> Vec<usize> {
     let mut split_vector: Vec<Vec<usize>> = Vec::new();
 
@@ -26,6 +28,31 @@ pub fn split_ids(ids: Vec<usize>, nb_splits: usize, split_to_compute: usize) -> 
     assert!(sum_lens == ids.len(), "sum: {sum_lens}");
 
     split_vector[split_to_compute].to_owned()
+}
+
+pub fn split(base_vec: Vec<(Point, usize)>, nb_splits: usize) -> Vec<Vec<(Point, usize)>> {
+    let mut split_vector: Vec<Vec<(Point, usize)>> = Vec::new();
+
+    let per_split = base_vec.len() / nb_splits;
+
+    let mut buffer = 0;
+    for idx in 0..nb_splits {
+        if idx == nb_splits - 1 {
+            split_vector.push(base_vec[buffer..].to_vec());
+            continue;
+        }
+        split_vector.push(base_vec[buffer..(buffer + per_split)].to_vec());
+        buffer += per_split;
+    }
+
+    let mut sum_lens = 0;
+    for i in split_vector.iter() {
+        sum_lens += i.len();
+    }
+
+    assert!(sum_lens == base_vec.len(), "sum: {sum_lens}");
+
+    split_vector
 }
 
 pub fn load_bf_data(dim: usize, lim: usize) -> Result<HashMap<usize, Vec<usize>>> {

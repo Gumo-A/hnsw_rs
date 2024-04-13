@@ -1,4 +1,4 @@
-use crate::points::Point;
+use crate::hnsw::points::Point;
 use ndarray::{Array, ArrayView, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
@@ -31,8 +31,8 @@ impl Graph {
     }
     pub fn add_node(&mut self, node_id: usize, vector: &ArrayView<f32, Dim<[usize; 1]>>) {
         if !self.nodes.contains_key(&node_id) {
-            self.nodes
-                .insert(node_id, Point::new(node_id, *vector, None, None));
+            let point = Point::new(node_id, *vector, None, None);
+            self.nodes.insert(node_id, point);
         }
     }
 

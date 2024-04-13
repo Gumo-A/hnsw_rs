@@ -1,16 +1,16 @@
-pub mod graph;
+// pub mod graph;
 pub mod helpers;
 pub mod hnsw;
-pub mod points;
+// pub mod points;
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use graph::Graph;
     use helpers::data::load_bf_data;
     use helpers::glove::load_glove_array;
+    use hnsw::graph::Graph;
     use ndarray::{Array1, Array2};
     use rand::Rng;
 

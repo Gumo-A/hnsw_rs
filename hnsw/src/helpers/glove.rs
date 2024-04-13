@@ -62,7 +62,7 @@ pub fn brute_force_nns(
     nb_of_nn: usize,
     embeddings: &Array2<f32>,
     indices: Vec<usize>,
-    pros_nb: u8,
+    pros_nb: usize,
 ) -> HashMap<usize, Vec<usize>> {
     let bar = if pros_nb != 0 {
         let bar = ProgressBar::hidden();

@@ -1,6 +1,6 @@
 use std::env;
 
-pub fn parse_args_bf() -> Result<(usize, usize, u8), &'static str> {
+pub fn parse_args_bf() -> Result<(usize, usize, usize), &'static str> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 4 {
@@ -9,7 +9,7 @@ pub fn parse_args_bf() -> Result<(usize, usize, u8), &'static str> {
     let dim = args[1].parse::<usize>().expect("Could not parse dimention");
     let lim = args[2].parse::<usize>().expect("Could not parse limit");
     let splits = args[3]
-        .parse::<u8>()
+        .parse::<usize>()
         .expect("Could not parse number of splits");
     Ok((dim, lim, splits))
 }
