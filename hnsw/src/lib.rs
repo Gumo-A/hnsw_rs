@@ -7,6 +7,8 @@ pub mod hnsw;
 mod tests {
     use std::collections::HashMap;
 
+    use crate::hnsw::points::Point;
+
     use super::*;
     use helpers::data::load_bf_data;
     use helpers::glove::load_glove_array;
@@ -62,7 +64,8 @@ mod tests {
         }
 
         for (node, vector) in nodes.iter().zip(node_vectors) {
-            g.add_node(*node, &vector.view())
+            let point = Point::new(*node, vector.view(), None, None);
+            g.add_node(&point);
         }
 
         assert_eq!(g.nb_nodes(), n as usize);
@@ -85,7 +88,8 @@ mod tests {
         }
 
         for (node, vector) in nodes.iter().zip(node_vectors) {
-            g.add_node(*node, &vector.view())
+            let point = Point::new(*node, vector.view(), None, None);
+            g.add_node(&point);
         }
 
         let mut edges: Vec<(usize, usize)> = (0..n * 2)
@@ -120,7 +124,8 @@ mod tests {
         }
 
         for (node, vector) in nodes.iter().zip(node_vectors) {
-            g.add_node(*node, &vector.view());
+            let point = Point::new(*node, vector.view(), None, None);
+            g.add_node(&point);
         }
 
         let mut dist =

@@ -1,5 +1,5 @@
 use crate::hnsw::points::Point;
-use ndarray::{Array, ArrayView, Dim};
+use ndarray::Array;
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
@@ -9,7 +9,7 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub fn new() -> Self {
+    pub fn new() -> Graph {
         Graph {
             nodes: HashMap::new(),
         }
@@ -17,7 +17,7 @@ impl Graph {
     pub fn from_layer_data(
         dim: usize,
         data: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)>,
-    ) -> Self {
+    ) -> Graph {
         let mut nodes = HashMap::new();
         for (node_id, node_data) in data.iter() {
             let vector = Array::from_shape_vec((dim,), node_data.1.clone())
@@ -27,12 +27,11 @@ impl Graph {
             nodes.insert(*node_id, point);
         }
 
-        Self { nodes }
+        Graph { nodes }
     }
-    pub fn add_node(&mut self, node_id: usize, vector: &ArrayView<f32, Dim<[usize; 1]>>) {
-        if !self.nodes.contains_key(&node_id) {
-            let point = Point::new(node_id, *vector, None, None);
-            self.nodes.insert(node_id, point);
+    pub fn add_node(&mut self, point: &Point) {
+        if !self.nodes.contains_key(&point.id) {
+            self.nodes.insert(point.id, point.clone());
         }
     }
 

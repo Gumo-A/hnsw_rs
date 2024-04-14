@@ -1,3 +1,4 @@
+use hnsw::hnsw::points::PayloadType;
 use rand::Rng;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -32,17 +33,21 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let payloads = Vec::from_iter(
-        words
-            .iter()
-            .map(|x| Payload::StringPayload(x.clone().to_string())),
-    );
+    let payloads = Vec::from_iter(words.iter().map(|x| Payload {
+        data: HashMap::from([(
+            "starts_with_e".to_string(),
+            PayloadType::BoolPayload(x.starts_with('e')),
+        )]),
+    }));
 
     // let mut index = HNSW::build_index_par(m, &embeddings);
     let mut index = HNSW::new(m, None, dim);
     index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
-    estimate_recall(&mut index, &embeddings, &bf_data);
+    let filters = Some(Payload {
+        data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
+    });
+    estimate_recall(&mut index, &embeddings, &bf_data, None);
 
     // for (i, idx) in bf_data.keys().enumerate() {
     for (i, idx) in (120..126).enumerate() {
@@ -50,7 +55,7 @@ fn main() -> std::io::Result<()> {
             break;
         }
         let vector = embeddings.slice(s![idx, ..]);
-        let anns = index.ann_by_vector(&vector, 10, 16, &None);
+        let anns = index.ann_by_vector(&vector, 10, 16, &filters);
         println!("ANNs of {}", words[idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
@@ -67,6 +72,7 @@ fn estimate_recall(
     index: &mut HNSW,
     embeddings: &Array2<f32>,
     bf_data: &HashMap<usize, Vec<usize>>,
+    filters: Option<Payload>,
 ) {
     let mut rng = rand::thread_rng();
     let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);
@@ -87,7 +93,7 @@ fn estimate_recall(
 
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = embeddings.slice(s![idx, ..]);
-            let anns = index.ann_by_vector(&vector, 10, ef, &None);
+            let anns = index.ann_by_vector(&vector, 10, ef, &filters);
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()

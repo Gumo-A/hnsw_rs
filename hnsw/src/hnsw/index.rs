@@ -2,7 +2,7 @@ use crate::helpers::data::split;
 use crate::helpers::distance::v2v_dist;
 use crate::hnsw::graph::Graph;
 use crate::hnsw::params::Params;
-use crate::hnsw::points::Point;
+use crate::hnsw::points::{Payload, PayloadType, Point};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, ArrayView, Dim};
@@ -16,8 +16,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
-
-use super::points::Payload;
 
 #[derive(Debug)]
 pub struct HNSW {
@@ -66,7 +64,7 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         n: usize,
         ef: usize,
-        filters: &Option<Vec<Payload>>,
+        filters: &Option<Payload>,
     ) -> Vec<usize> {
         let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
@@ -271,7 +269,7 @@ impl HNSW {
             let layer = self.layers.get_mut(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
                 if *node == point.id {
-                    layer.add_node(point.id, &point.vector.view());
+                    layer.add_node(point);
                 }
                 for old_neighbor in layer.neighbors(*node).clone() {
                     layer.remove_edge(*node, old_neighbor);
@@ -284,7 +282,7 @@ impl HNSW {
         if current_layer_nb > max_layer_nb {
             for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
                 let mut layer = Graph::new();
-                layer.add_node(point.id, &point.vector.view());
+                layer.add_node(point);
                 self.layers.insert(layer_nb, layer);
                 self.node_ids.insert(point.id);
             }
@@ -324,7 +322,7 @@ impl HNSW {
                     let layer = write_ref.layers.get_mut(&layer_nb).unwrap();
                     for (node, neighbors) in node_data.iter() {
                         let (point, _) = &points[*point_nb];
-                        layer.add_node(*node, &point.vector.view());
+                        layer.add_node(point);
                         for old_neighbor in layer.neighbors(*node).clone() {
                             layer.remove_edge(*node, old_neighbor);
                         }
@@ -337,7 +335,7 @@ impl HNSW {
             if new_layer {
                 for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
                     let mut layer = Graph::new();
-                    layer.add_node(point.id, &point.vector.view());
+                    layer.add_node(point);
                     write_ref.layers.insert(layer_nb, layer);
                     write_ref.node_ids.insert(point.id);
                     write_ref.ep = point.id;
@@ -352,7 +350,7 @@ impl HNSW {
         assert_eq!(self.layers.len(), 0);
 
         let mut layer = Graph::new();
-        layer.add_node(point.id, &point.vector.view());
+        layer.add_node(point);
         self.layers.insert(0, layer);
         self.node_ids.insert(point.id);
         self.ep = point.id;
@@ -377,7 +375,7 @@ impl HNSW {
                             idx,
                             vectors.slice(s![idx, ..]),
                             None,
-                            Some(HashMap::from([("word".to_string(), payloads[idx].clone())])),
+                            Some(payloads[idx].clone()),
                         ),
                         self.get_new_node_layer(),
                     )
@@ -511,7 +509,7 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
-        filters: &Option<Vec<Payload>>,
+        filters: &Option<Payload>,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
@@ -526,25 +524,20 @@ impl HNSW {
             }
 
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
-                let passes_filters = match filters {
-                    None => true,
-                    Some(payloads) => {
-                        let point = layer.node(neighbor).payload
-                        for payload in payloads {
-                            
-                        }
-                    }
-                }
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
-                    let neighbor_vec = &layer.node(neighbor).vector.view();
+                    let neighbor_point = &layer.node(neighbor);
+                    let can_select = evaluate_filters(neighbor_point, filters);
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
-                    let n2q_dist = (v2v_dist(&vector, neighbor_vec) * 10_000.0).trunc() as usize;
+                    let n2q_dist = (v2v_dist(&vector, &neighbor_point.vector.view()) * 10_000.0)
+                        .trunc() as usize;
 
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
-                        selected.insert(n2q_dist, neighbor);
+                        if can_select {
+                            selected.insert(n2q_dist, neighbor);
+                        }
 
                         if selected.len() > ef {
                             selected.pop_last().unwrap();
@@ -722,4 +715,49 @@ fn get_progress_bar(remaining: usize, hidden: bool) -> ProgressBar {
                 .unwrap());
     bar.set_message(format!("Inserting vectors"));
     bar
+}
+
+fn evaluate_filters(point: &Point, filters: &Option<Payload>) -> bool {
+    match filters {
+        None => true,
+        Some(payload) => {
+            for (key, filter_payload) in payload.data.iter() {
+                if point.payload.as_ref().unwrap().data.contains_key(key) {
+                    let point_payload = point.payload.as_ref().unwrap().data.get(key).unwrap();
+                    match (point_payload, filter_payload) {
+                        (
+                            PayloadType::StringPayload(point_val),
+                            PayloadType::StringPayload(filter_val),
+                        ) => {
+                            if point_val == filter_val {
+                                continue;
+                            }
+                        }
+                        (
+                            PayloadType::BoolPayload(point_val),
+                            PayloadType::BoolPayload(filter_val),
+                        ) => {
+                            if point_val == filter_val {
+                                continue;
+                            }
+                        }
+                        (
+                            PayloadType::NumericPayload(point_val),
+                            PayloadType::NumericPayload(filter_val),
+                        ) => {
+                            if point_val == filter_val {
+                                continue;
+                            }
+                        }
+                        (_, _) => {
+                            return false;
+                        }
+                    }
+                } else {
+                    return false;
+                }
+            }
+            true
+        }
+    }
 }
