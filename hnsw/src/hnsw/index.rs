@@ -105,13 +105,14 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         max_layer_nb: usize,
         current_layer_number: usize,
+        filters: &Option<Payload>,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
 
         for layer_nb in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
-            ep = self.search_layer(layer, vector, &mut ep, 1, &None);
+            ep = self.search_layer(layer, vector, &mut ep, 1, &filters);
         }
         ep
     }
@@ -121,6 +122,7 @@ impl HNSW {
         point: &Point,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
+        filters: &Option<Payload>,
     ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
         let mut insertion_results = HashMap::new();
         let bound = (current_layer_number + 1).min(self.layers.len());
@@ -133,7 +135,7 @@ impl HNSW {
                 &point.vector.view(),
                 &mut ep,
                 self.params.ef_cons,
-                &None,
+                &filters,
             );
 
             let neighbors_to_connect = self.select_heuristic(
@@ -261,8 +263,8 @@ impl HNSW {
 
         let max_layer_nb = self.layers.len() - 1;
 
-        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb);
-        let insertion_results = self.step_2(&point, ep, current_layer_nb);
+        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb, &None);
+        let insertion_results = self.step_2(&point, ep, current_layer_nb, &None);
 
         self.node_ids.insert(point.id);
         for (layer_nb, node_data) in insertion_results.iter() {
@@ -301,8 +303,8 @@ impl HNSW {
                 continue;
             }
             let max_layer_nb = read_ref.layers.len() - 1;
-            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb);
-            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb);
+            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb, &None);
+            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb, &None);
             batch.push((idx, insertion_results));
 
             let last_idx = idx == (points.len() - 1);
@@ -527,7 +529,6 @@ impl HNSW {
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
                     let neighbor_point = &layer.node(neighbor);
-                    let can_select = evaluate_filters(neighbor_point, filters);
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
                     let n2q_dist = (v2v_dist(&vector, &neighbor_point.vector.view()) * 10_000.0)
@@ -535,6 +536,7 @@ impl HNSW {
 
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
+                        let can_select = evaluate_filters(neighbor_point, filters);
                         if can_select {
                             selected.insert(n2q_dist, neighbor);
                         }
@@ -737,7 +739,7 @@ fn evaluate_filters(point: &Point, filters: &Option<Payload>) -> bool {
                             PayloadType::BoolPayload(point_val),
                             PayloadType::BoolPayload(filter_val),
                         ) => {
-                            if point_val == filter_val {
+                            if *point_val == *filter_val {
                                 continue;
                             }
                         }
