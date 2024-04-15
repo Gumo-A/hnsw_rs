@@ -34,10 +34,20 @@ fn main() -> std::io::Result<()> {
     };
 
     let payloads = Vec::from_iter(words.iter().map(|x| Payload {
-        data: HashMap::from([(
-            "starts_with_e".to_string(),
-            PayloadType::BoolPayload(x.starts_with('e')),
-        )]),
+        data: HashMap::from([
+            (
+                "word_len".to_string(),
+                PayloadType::NumericPayload(x.len() as f32),
+            ),
+            // (
+            //     "starts_with_e".to_string(),
+            //     PayloadType::BoolPayload(x.starts_with('e')),
+            // ),
+            // (
+            //     "ends_with_e".to_string(),
+            //     PayloadType::BoolPayload(x.ends_with('e')),
+            // ),
+        ]),
     }));
 
     // let mut index = HNSW::build_index_par(m, &embeddings);
@@ -45,7 +55,11 @@ fn main() -> std::io::Result<()> {
     index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
     let filters = Some(Payload {
-        data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
+        data: HashMap::from([
+            ("word_len".to_string(), PayloadType::NumericPayload(5.0)),
+            // ("starts_with_e".to_string(), PayloadType::BoolPayload(true)),
+            // ("ends_with_e".to_string(), PayloadType::BoolPayload(true)),
+        ]),
     });
     estimate_recall(&mut index, &embeddings, &bf_data, None);
 

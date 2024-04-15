@@ -77,7 +77,7 @@ impl HNSW {
                 vector,
                 &mut ep,
                 1,
-                filters,
+                &None,
             );
         }
 
@@ -521,7 +521,7 @@ impl HNSW {
 
             let (f2q_dist, _) = selected.last_key_value().unwrap();
 
-            if &cand2query_dist > f2q_dist {
+            if (&cand2query_dist > f2q_dist) & filters.is_none() {
                 break;
             }
 
@@ -536,6 +536,8 @@ impl HNSW {
 
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
+                        // TODO: this is a very naive way of applying filters,
+                        // must make it more robust.
                         let can_select = evaluate_filters(neighbor_point, filters);
                         if can_select {
                             selected.insert(n2q_dist, neighbor);
@@ -731,24 +733,24 @@ fn evaluate_filters(point: &Point, filters: &Option<Payload>) -> bool {
                             PayloadType::StringPayload(point_val),
                             PayloadType::StringPayload(filter_val),
                         ) => {
-                            if point_val == filter_val {
-                                continue;
+                            if point_val != filter_val {
+                                return false;
                             }
                         }
                         (
                             PayloadType::BoolPayload(point_val),
                             PayloadType::BoolPayload(filter_val),
                         ) => {
-                            if *point_val == *filter_val {
-                                continue;
+                            if *point_val != *filter_val {
+                                return false;
                             }
                         }
                         (
                             PayloadType::NumericPayload(point_val),
                             PayloadType::NumericPayload(filter_val),
                         ) => {
-                            if point_val == filter_val {
-                                continue;
+                            if point_val != filter_val {
+                                return false;
                             }
                         }
                         (_, _) => {
