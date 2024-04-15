@@ -63,6 +63,7 @@ pub fn brute_force_nns(
     embeddings: &Array2<f32>,
     indices: Vec<usize>,
     pros_nb: usize,
+    words: Vec<String>,
 ) -> HashMap<usize, Vec<usize>> {
     let bar = if pros_nb != 0 {
         let bar = ProgressBar::hidden();
@@ -86,8 +87,14 @@ pub fn brute_force_nns(
             &embeddings.slice(s![.., ..]),
             nb_of_nn.try_into().unwrap(),
         );
-        let index: usize = *idx as usize;
-        brute_force_results.insert(index, nns.iter().map(|x| x.0).collect());
+        let index = *idx as usize;
+        brute_force_results.insert(
+            index,
+            nns.iter()
+                .map(|x| x.0)
+                .filter(|x| words[*x].starts_with('e'))
+                .collect(),
+        );
         bar.inc(1);
     }
 

@@ -12,6 +12,12 @@ use ndarray::{s, Array2};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+// enum Filter {
+//     PayloadFilter(Payload),
+//     ClosureFilter(closure_returns_bool),
+//     None,
+// }
+
 fn main() -> std::io::Result<()> {
     let start = Instant::now();
     let (dim, lim, m) = match parse_args_eval() {
@@ -35,14 +41,11 @@ fn main() -> std::io::Result<()> {
 
     let payloads = Vec::from_iter(words.iter().map(|x| Payload {
         data: HashMap::from([
+            ("word".to_string(), PayloadType::StringPayload(x.clone())),
             (
-                "word_len".to_string(),
-                PayloadType::NumericPayload(x.len() as f32),
+                "starts_with_e".to_string(),
+                PayloadType::BoolPayload(x.starts_with('e')),
             ),
-            // (
-            //     "starts_with_e".to_string(),
-            //     PayloadType::BoolPayload(x.starts_with('e')),
-            // ),
             // (
             //     "ends_with_e".to_string(),
             //     PayloadType::BoolPayload(x.ends_with('e')),
@@ -50,29 +53,38 @@ fn main() -> std::io::Result<()> {
         ]),
     }));
 
-    // let mut index = HNSW::build_index_par(m, &embeddings);
-    let mut index = HNSW::new(m, None, dim);
-    index.build_index(&embeddings, false, Some(payloads))?;
+    let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
+    // let mut index = HNSW::new(m, None, dim);
+    // index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
     let filters = Some(Payload {
         data: HashMap::from([
-            ("word_len".to_string(), PayloadType::NumericPayload(5.0)),
-            // ("starts_with_e".to_string(), PayloadType::BoolPayload(true)),
+            // ("word_len".to_string(), PayloadType::NumericPayload(5.0)),
+            ("starts_with_e".to_string(), PayloadType::BoolPayload(true)),
             // ("ends_with_e".to_string(), PayloadType::BoolPayload(true)),
         ]),
     });
-    estimate_recall(&mut index, &embeddings, &bf_data, None);
+    estimate_recall(&mut index, &embeddings, &bf_data, &filters);
 
-    // for (i, idx) in bf_data.keys().enumerate() {
-    for (i, idx) in (110..115).enumerate() {
+    for (i, idx) in bf_data.keys().enumerate() {
+        // for (i, idx) in (110..115).enumerate() {
         if i > 3 {
             break;
         }
-        let vector = embeddings.slice(s![idx, ..]);
+        let vector = embeddings.slice(s![*idx, ..]);
         let anns = index.ann_by_vector(&vector, 10, 16, &filters);
-        println!("ANNs of {}", words[idx]);
+        println!("ANNs of {}", words[*idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
+        println!("True NN of {}", words[*idx]);
+        let true_nns: Vec<String> = bf_data
+            .get(&idx)
+            .unwrap()
+            .iter()
+            .map(|x| words[*x].clone())
+            .take(10)
+            .collect();
+        println!("{:?}", true_nns);
     }
     let end = Instant::now();
     println!(
@@ -86,7 +98,7 @@ fn estimate_recall(
     index: &mut HNSW,
     embeddings: &Array2<f32>,
     bf_data: &HashMap<usize, Vec<usize>>,
-    filters: Option<Payload>,
+    filters: &Option<Payload>,
 ) {
     let mut rng = rand::thread_rng();
     let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);

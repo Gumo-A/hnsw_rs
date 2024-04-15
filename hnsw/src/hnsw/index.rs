@@ -434,14 +434,24 @@ impl HNSW {
         Ok(())
     }
 
-    pub fn build_index_par(m: usize, vectors: &Array<f32, Dim<[usize; 2]>>) -> Self {
+    pub fn build_index_par(
+        m: usize,
+        vectors: &Array<f32, Dim<[usize; 2]>>,
+        filters: &Option<Vec<Payload>>,
+    ) -> Self {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
         let (lim, dim) = vectors.dim();
         let index = Arc::new(RwLock::new(HNSW::new(m, None, dim)));
+        let filters = filters.as_ref().unwrap();
         let mut points: Vec<(Point, usize)> = (0..lim)
             .map(|idx| {
                 (
-                    Point::new(idx, vectors.slice(s![idx, ..]), None, None),
+                    Point::new(
+                        idx,
+                        vectors.slice(s![idx, ..]),
+                        None,
+                        Some(filters[idx].clone()),
+                    ),
                     index.read().get_new_node_layer(),
                 )
             })
