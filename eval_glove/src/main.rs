@@ -41,15 +41,16 @@ fn main() -> std::io::Result<()> {
 
     let payloads = Vec::from_iter(words.iter().map(|x| Payload {
         data: HashMap::from([
+            // TODO: Make it possible to filter by passing a closure.
+            // I should be able to pass a closure that evaluates a point's
+            // content/only the payload and returns a bool.
+            // This will allow for easier filtering on complex conditions.
+            // Ex: |point| {if point.word starts_with 'a' & point.type == noun}
             ("word".to_string(), PayloadType::StringPayload(x.clone())),
             (
                 "starts_with_e".to_string(),
                 PayloadType::BoolPayload(x.starts_with('e')),
             ),
-            // (
-            //     "ends_with_e".to_string(),
-            //     PayloadType::BoolPayload(x.ends_with('e')),
-            // ),
         ]),
     }));
 
@@ -58,11 +59,7 @@ fn main() -> std::io::Result<()> {
     // index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
     let filters = Some(Payload {
-        data: HashMap::from([
-            // ("word_len".to_string(), PayloadType::NumericPayload(5.0)),
-            ("starts_with_e".to_string(), PayloadType::BoolPayload(true)),
-            // ("ends_with_e".to_string(), PayloadType::BoolPayload(true)),
-        ]),
+        data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     });
     estimate_recall(&mut index, &embeddings, &bf_data, &filters);
 
