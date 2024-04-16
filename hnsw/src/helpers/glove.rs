@@ -92,7 +92,7 @@ pub fn brute_force_nns(
             index,
             nns.iter()
                 .map(|x| x.0)
-                .filter(|x| words[*x].starts_with('e'))
+                // .filter(|x| words[*x].starts_with('e'))
                 .collect(),
         );
         bar.inc(1);

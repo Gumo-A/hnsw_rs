@@ -2,7 +2,7 @@ use crate::helpers::data::split;
 use crate::helpers::distance::v2v_dist;
 use crate::hnsw::graph::Graph;
 use crate::hnsw::params::Params;
-use crate::hnsw::points::{Payload, PayloadType, Point};
+use crate::hnsw::points::{Payload, Point};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, ArrayView, Dim};
@@ -16,6 +16,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
+
+use super::points::Filter;
 
 #[derive(Debug)]
 pub struct HNSW {
@@ -59,13 +61,16 @@ impl HNSW {
         println!("ep: {:?}", self.ep);
     }
 
-    pub fn ann_by_vector(
+    pub fn ann_by_vector<F>(
         &self,
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         n: usize,
         ef: usize,
-        filters: &Option<Payload>,
-    ) -> Vec<usize> {
+        filters: &Option<Filter<F>>,
+    ) -> Vec<usize>
+    where
+        F: Fn(Payload) -> bool,
+    {
         let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
@@ -100,13 +105,16 @@ impl HNSW {
         anns
     }
 
-    fn step_1(
+    fn step_1<F>(
         &self,
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         max_layer_nb: usize,
         current_layer_number: usize,
-        filters: &Option<Payload>,
-    ) -> HashSet<usize, BuildNoHashHasher<usize>> {
+        filters: &Option<Filter<F>>,
+    ) -> HashSet<usize, BuildNoHashHasher<usize>>
+    where
+        F: Fn(Payload) -> bool,
+    {
         let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
 
@@ -117,13 +125,16 @@ impl HNSW {
         ep
     }
 
-    fn step_2(
+    fn step_2<F>(
         &self,
         point: &Point,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
-        filters: &Option<Payload>,
-    ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
+        filters: &Option<Filter<F>>,
+    ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>>
+    where
+        F: Fn(Payload) -> bool,
+    {
         let mut insertion_results = HashMap::new();
         let bound = (current_layer_number + 1).min(self.layers.len());
 
@@ -515,14 +526,17 @@ impl HNSW {
         BTreeMap::from_iter(result)
     }
 
-    fn search_layer(
+    fn search_layer<F>(
         &self,
         layer: &Graph,
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
-        filters: &Option<Payload>,
-    ) -> HashSet<usize, BuildNoHashHasher<usize>> {
+        filters: &Option<Filter<F>>,
+    ) -> HashSet<usize, BuildNoHashHasher<usize>>
+    where
+        F: Fn(Payload) -> bool,
+    {
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
 
@@ -548,7 +562,7 @@ impl HNSW {
                         candidates.insert(n2q_dist, neighbor);
                         // TODO: this is a very naive way of applying filters,
                         // must make it more robust.
-                        let can_select = evaluate_filters(neighbor_point, filters);
+                        let can_select = neighbor_point.filter_closure(filters);
                         if can_select {
                             selected.insert(n2q_dist, neighbor);
                         }
@@ -738,34 +752,8 @@ fn evaluate_filters(point: &Point, filters: &Option<Payload>) -> bool {
             for (key, filter_payload) in payload.data.iter() {
                 if point.payload.as_ref().unwrap().data.contains_key(key) {
                     let point_payload = point.payload.as_ref().unwrap().data.get(key).unwrap();
-                    match (point_payload, filter_payload) {
-                        (
-                            PayloadType::StringPayload(point_val),
-                            PayloadType::StringPayload(filter_val),
-                        ) => {
-                            if point_val != filter_val {
-                                return false;
-                            }
-                        }
-                        (
-                            PayloadType::BoolPayload(point_val),
-                            PayloadType::BoolPayload(filter_val),
-                        ) => {
-                            if *point_val != *filter_val {
-                                return false;
-                            }
-                        }
-                        (
-                            PayloadType::NumericPayload(point_val),
-                            PayloadType::NumericPayload(filter_val),
-                        ) => {
-                            if point_val != filter_val {
-                                return false;
-                            }
-                        }
-                        (_, _) => {
-                            return false;
-                        }
+                    if point_payload != filter_payload {
+                        return false;
                     }
                 } else {
                     return false;

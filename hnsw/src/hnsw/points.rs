@@ -25,16 +25,45 @@ impl Point {
             payload,
         }
     }
+
+    pub fn filter_closure<F>(&self, f: &Option<Filter<F>>) -> bool
+    where
+        F: Fn(Payload) -> bool,
+    {
+        match self.payload {
+            None => false,
+            Some(val) => match f {
+                None => true,
+                Some(filter) => match filter {
+                    Filter::NoFilter => true,
+                    Filter::ClosureFilter(f) => f(val)
+                },
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
-pub enum PayloadType {
-    StringPayload(String),
-    BoolPayload(bool),
-    NumericPayload(f32),
+pub enum Filter<F>
+where
+    F: Fn(Payload) -> bool,
+{
+    NoFilter,
+    ClosureFilter(F),
 }
+
+// Too complicated to implement, so I'll just
+// make strings the only allowed value for payloads.
+// I'd like to make something similar to what I tried
+// here though.
+// #[derive(Debug, Clone)]
+// pub enum PayloadType {
+//     StringPayload(String),
+//     BoolPayload(bool),
+//     NumericPayload(f32),
+// }
 
 #[derive(Debug, Clone)]
 pub struct Payload {
-    pub data: HashMap<String, PayloadType>,
+    pub data: HashMap<String, String>,
+    // pub data: HashMap<String, PayloadType>,
 }

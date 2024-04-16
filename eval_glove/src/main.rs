@@ -12,12 +12,6 @@ use ndarray::{s, Array2};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-// enum Filter {
-//     PayloadFilter(Payload),
-//     ClosureFilter(closure_returns_bool),
-//     None,
-// }
-
 fn main() -> std::io::Result<()> {
     let start = Instant::now();
     let (dim, lim, m) = match parse_args_eval() {
@@ -40,28 +34,20 @@ fn main() -> std::io::Result<()> {
     };
 
     let payloads = Vec::from_iter(words.iter().map(|x| Payload {
-        data: HashMap::from([
-            // TODO: Make it possible to filter by passing a closure.
-            // I should be able to pass a closure that evaluates a point's
-            // content/only the payload and returns a bool.
-            // This will allow for easier filtering on complex conditions.
-            // Ex: |point| {if point.word starts_with 'a' & point.type == noun}
-            ("word".to_string(), PayloadType::StringPayload(x.clone())),
-            (
-                "starts_with_e".to_string(),
-                PayloadType::BoolPayload(x.starts_with('e')),
-            ),
-        ]),
+        data: HashMap::from([("word".to_string(), PayloadType::StringPayload(x.clone()))]),
     }));
 
     let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
     // let mut index = HNSW::new(m, None, dim);
     // index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
-    let filters = Some(Payload {
-        data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
-    });
-    estimate_recall(&mut index, &embeddings, &bf_data, &filters);
+    let filters = |payload: Payload| -> bool {
+        match payload.data.get("word") {
+            None => false,
+            Some(val) => val.starts_with(['a', 'e', 'i', 'o', 'u']),
+        }
+    };
+    estimate_recall(&mut index, &embeddings, &bf_data, &None);
 
     for (i, idx) in bf_data.keys().enumerate() {
         // for (i, idx) in (110..115).enumerate() {
@@ -69,7 +55,8 @@ fn main() -> std::io::Result<()> {
             break;
         }
         let vector = embeddings.slice(s![*idx, ..]);
-        let anns = index.ann_by_vector(&vector, 10, 16, &filters);
+        // let anns = index.ann_by_vector(&vector, 10, 16, &filters);
+        let anns = index.ann_by_vector(&vector, 10, 16, &None);
         println!("ANNs of {}", words[*idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);
