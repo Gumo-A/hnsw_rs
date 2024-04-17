@@ -1,4 +1,4 @@
-use hnsw::hnsw::points::PayloadType;
+use hnsw::hnsw::points::Filter;
 use rand::Rng;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -34,14 +34,14 @@ fn main() -> std::io::Result<()> {
     };
 
     let payloads = Vec::from_iter(words.iter().map(|x| Payload {
-        data: HashMap::from([("word".to_string(), PayloadType::StringPayload(x.clone()))]),
+        data: HashMap::from([("word".to_string(), x.clone())]),
     }));
 
     let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
     // let mut index = HNSW::new(m, None, dim);
     // index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
-    let filters = |payload: Payload| -> bool {
+    let filters = |payload: &Payload| -> bool {
         match payload.data.get("word") {
             None => false,
             Some(val) => val.starts_with(['a', 'e', 'i', 'o', 'u']),
@@ -56,7 +56,7 @@ fn main() -> std::io::Result<()> {
         }
         let vector = embeddings.slice(s![*idx, ..]);
         // let anns = index.ann_by_vector(&vector, 10, 16, &filters);
-        let anns = index.ann_by_vector(&vector, 10, 16, &None);
+        let anns = index.ann_by_vector(&vector, 10, 16, &Some(filters));
         println!("ANNs of {}", words[*idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);

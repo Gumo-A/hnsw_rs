@@ -17,7 +17,7 @@ use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
-use super::points::Filter;
+use super::points::Filtering;
 
 #[derive(Debug)]
 pub struct HNSW {
@@ -61,15 +61,15 @@ impl HNSW {
         println!("ep: {:?}", self.ep);
     }
 
-    pub fn ann_by_vector<F>(
+    pub fn ann_by_vector(
         &self,
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         n: usize,
         ef: usize,
-        filters: &Option<Filter<F>>,
+        filters: &Option<F>,
     ) -> Vec<usize>
-    where
-        F: Fn(Payload) -> bool,
+// where
+        // F: Fn(&Payload) -> bool,
     {
         let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
@@ -105,36 +105,28 @@ impl HNSW {
         anns
     }
 
-    fn step_1<F>(
+    fn step_1(
         &self,
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         max_layer_nb: usize,
         current_layer_number: usize,
-        filters: &Option<Filter<F>>,
-    ) -> HashSet<usize, BuildNoHashHasher<usize>>
-    where
-        F: Fn(Payload) -> bool,
-    {
+    ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
 
         for layer_nb in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
-            ep = self.search_layer(layer, vector, &mut ep, 1, &filters);
+            ep = self.search_layer(layer, vector, &mut ep, 1, &None);
         }
         ep
     }
 
-    fn step_2<F>(
+    fn step_2(
         &self,
         point: &Point,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
-        filters: &Option<Filter<F>>,
-    ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>>
-    where
-        F: Fn(Payload) -> bool,
-    {
+    ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
         let mut insertion_results = HashMap::new();
         let bound = (current_layer_number + 1).min(self.layers.len());
 
@@ -146,7 +138,7 @@ impl HNSW {
                 &point.vector.view(),
                 &mut ep,
                 self.params.ef_cons,
-                &filters,
+                &None,
             );
 
             let neighbors_to_connect = self.select_heuristic(
@@ -274,8 +266,8 @@ impl HNSW {
 
         let max_layer_nb = self.layers.len() - 1;
 
-        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb, &None);
-        let insertion_results = self.step_2(&point, ep, current_layer_nb, &None);
+        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb);
+        let insertion_results = self.step_2(&point, ep, current_layer_nb);
 
         self.node_ids.insert(point.id);
         for (layer_nb, node_data) in insertion_results.iter() {
@@ -314,8 +306,8 @@ impl HNSW {
                 continue;
             }
             let max_layer_nb = read_ref.layers.len() - 1;
-            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb, &None);
-            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb, &None);
+            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb);
+            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb);
             batch.push((idx, insertion_results));
 
             let last_idx = idx == (points.len() - 1);
@@ -526,16 +518,16 @@ impl HNSW {
         BTreeMap::from_iter(result)
     }
 
-    fn search_layer<F>(
+    fn search_layer(
         &self,
         layer: &Graph,
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
-        filters: &Option<Filter<F>>,
+        filters: &Option<F>,
     ) -> HashSet<usize, BuildNoHashHasher<usize>>
-    where
-        F: Fn(Payload) -> bool,
+// where
+    //     F: Fn(&Payload) -> bool,
     {
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
@@ -562,7 +554,10 @@ impl HNSW {
                         candidates.insert(n2q_dist, neighbor);
                         // TODO: this is a very naive way of applying filters,
                         // must make it more robust.
-                        let can_select = neighbor_point.filter_closure(filters);
+                        let can_select = match filters {
+                            None => true,
+                            Some(func) => neighbor_point.apply_filter(func),
+                        };
                         if can_select {
                             selected.insert(n2q_dist, neighbor);
                         }
