@@ -55,7 +55,6 @@ fn main() -> std::io::Result<()> {
     estimate_recall(&mut index, &embeddings, &bf_data, &None);
 
     for (i, idx) in bf_data.keys().enumerate() {
-        // for (i, idx) in (110..115).enumerate() {
         if i > 3 {
             break;
         }
