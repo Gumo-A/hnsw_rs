@@ -1,4 +1,3 @@
-use hnsw::hnsw::points::Filter;
 use rand::Rng;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -6,7 +5,10 @@ use std::time::Instant;
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::index::HNSW;
-use hnsw::{helpers::args::parse_args_eval, hnsw::points::Payload};
+use hnsw::{
+    helpers::args::parse_args_eval,
+    hnsw::points::{Payload, PayloadType},
+};
 
 use ndarray::{s, Array2};
 
@@ -34,19 +36,22 @@ fn main() -> std::io::Result<()> {
     };
 
     let payloads = Vec::from_iter(words.iter().map(|x| Payload {
-        data: HashMap::from([("word".to_string(), x.clone())]),
+        data: HashMap::from([
+            ("word".to_string(), PayloadType::StringPayload(x.clone())),
+            (
+                "starts_with_e".to_string(),
+                PayloadType::BoolPayload(x.starts_with('e')),
+            ),
+        ]),
     }));
 
     let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
     // let mut index = HNSW::new(m, None, dim);
     // index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
-    let filters = |payload: &Payload| -> bool {
-        match payload.data.get("word") {
-            None => false,
-            Some(val) => val.starts_with(['a', 'e', 'i', 'o', 'u']),
-        }
-    };
+    let filters = Some(Payload {
+        data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
+    });
     estimate_recall(&mut index, &embeddings, &bf_data, &None);
 
     for (i, idx) in bf_data.keys().enumerate() {
@@ -55,8 +60,7 @@ fn main() -> std::io::Result<()> {
             break;
         }
         let vector = embeddings.slice(s![*idx, ..]);
-        // let anns = index.ann_by_vector(&vector, 10, 16, &filters);
-        let anns = index.ann_by_vector(&vector, 10, 16, &Some(filters));
+        let anns = index.ann_by_vector(&vector, 10, 16, &filters);
         println!("ANNs of {}", words[*idx]);
         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
         println!("{:?}", anns_words);

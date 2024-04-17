@@ -2,7 +2,7 @@ use crate::helpers::data::split;
 use crate::helpers::distance::v2v_dist;
 use crate::hnsw::graph::Graph;
 use crate::hnsw::params::Params;
-use crate::hnsw::points::{Payload, Point};
+use crate::hnsw::points::{Payload, PayloadType, Point};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, ArrayView, Dim};
@@ -16,8 +16,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
-
-use super::points::Filtering;
 
 #[derive(Debug)]
 pub struct HNSW {
@@ -66,11 +64,8 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         n: usize,
         ef: usize,
-        filters: &Option<F>,
-    ) -> Vec<usize>
-// where
-        // F: Fn(&Payload) -> bool,
-    {
+        filters: &Option<Payload>,
+    ) -> Vec<usize> {
         let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
@@ -110,6 +105,7 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         max_layer_nb: usize,
         current_layer_number: usize,
+        filters: &Option<Payload>,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
@@ -126,6 +122,7 @@ impl HNSW {
         point: &Point,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
+        filters: &Option<Payload>,
     ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
         let mut insertion_results = HashMap::new();
         let bound = (current_layer_number + 1).min(self.layers.len());
@@ -266,8 +263,8 @@ impl HNSW {
 
         let max_layer_nb = self.layers.len() - 1;
 
-        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb);
-        let insertion_results = self.step_2(&point, ep, current_layer_nb);
+        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb, &None);
+        let insertion_results = self.step_2(&point, ep, current_layer_nb, &None);
 
         self.node_ids.insert(point.id);
         for (layer_nb, node_data) in insertion_results.iter() {
@@ -306,8 +303,8 @@ impl HNSW {
                 continue;
             }
             let max_layer_nb = read_ref.layers.len() - 1;
-            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb);
-            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb);
+            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb, &None);
+            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb, &None);
             batch.push((idx, insertion_results));
 
             let last_idx = idx == (points.len() - 1);
@@ -524,11 +521,8 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
-        filters: &Option<F>,
-    ) -> HashSet<usize, BuildNoHashHasher<usize>>
-// where
-    //     F: Fn(&Payload) -> bool,
-    {
+        filters: &Option<Payload>,
+    ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
 
@@ -554,10 +548,7 @@ impl HNSW {
                         candidates.insert(n2q_dist, neighbor);
                         // TODO: this is a very naive way of applying filters,
                         // must make it more robust.
-                        let can_select = match filters {
-                            None => true,
-                            Some(func) => neighbor_point.apply_filter(func),
-                        };
+                        let can_select = evaluate_filters(neighbor_point, filters);
                         if can_select {
                             selected.insert(n2q_dist, neighbor);
                         }
@@ -747,8 +738,34 @@ fn evaluate_filters(point: &Point, filters: &Option<Payload>) -> bool {
             for (key, filter_payload) in payload.data.iter() {
                 if point.payload.as_ref().unwrap().data.contains_key(key) {
                     let point_payload = point.payload.as_ref().unwrap().data.get(key).unwrap();
-                    if point_payload != filter_payload {
-                        return false;
+                    match (point_payload, filter_payload) {
+                        (
+                            PayloadType::StringPayload(point_val),
+                            PayloadType::StringPayload(filter_val),
+                        ) => {
+                            if point_val != filter_val {
+                                return false;
+                            }
+                        }
+                        (
+                            PayloadType::BoolPayload(point_val),
+                            PayloadType::BoolPayload(filter_val),
+                        ) => {
+                            if *point_val != *filter_val {
+                                return false;
+                            }
+                        }
+                        (
+                            PayloadType::NumericPayload(point_val),
+                            PayloadType::NumericPayload(filter_val),
+                        ) => {
+                            if point_val != filter_val {
+                                return false;
+                            }
+                        }
+                        (_, _) => {
+                            return false;
+                        }
                     }
                 } else {
                     return false;
