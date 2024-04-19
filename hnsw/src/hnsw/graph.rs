@@ -44,13 +44,13 @@ impl Graph {
         let a_neighbors = self
             .nodes
             .get_mut(&node_a)
-            .expect(format!("Could not get the value of node {node_a}").as_str());
+            .expect(format!("Could not get point {node_a}").as_str());
         a_neighbors.neighbors.insert(node_b);
 
         let b_neighbors = self
             .nodes
             .get_mut(&node_b)
-            .expect(format!("Could not get the value of node {node_b}").as_str());
+            .expect(format!("Could not get point {node_b}").as_str());
         b_neighbors.neighbors.insert(node_a);
     }
 

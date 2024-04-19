@@ -8,6 +8,10 @@ edition = "2021"
 [dependencies]
 hnsw = { path = "../hnsw"}
 indicatif = "0.17.8"
-ndarray = "0.15.6"
+ndarray = { version = "0.15.6", features = ["serde"] }
+# ndarray-linalg = { version = "0.16", features = ["intel-mkl-static"] }
+# ndarray = { version = "0.15.6", features = ["blas", "serde"] }
+# blas-src = { version = "0.10", features = ["openblas"] }
+# openblas-src = { version = "0.10.9", features = ["cblas"]}
 rand = "0.8.5"
 rayon = "1.10.0"

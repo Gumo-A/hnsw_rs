@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+#[derive(Debug)]
 pub struct Bencher {
     pub counters: HashMap<String, usize>,
     timers: HashMap<String, Instant>,

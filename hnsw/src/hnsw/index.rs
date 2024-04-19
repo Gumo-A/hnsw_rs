@@ -1,3 +1,4 @@
+// use crate::helpers::bench::Bencher;
 use crate::helpers::data::split;
 use crate::helpers::distance::v2v_dist;
 use crate::hnsw::graph::Graph;
@@ -23,6 +24,7 @@ pub struct HNSW {
     ep: usize,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
     pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
+    // pub bencher: Bencher,
 }
 
 impl HNSW {
@@ -33,6 +35,7 @@ impl HNSW {
             ep: 0,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            // bencher: Bencher::new(),
         }
     }
 
@@ -42,6 +45,7 @@ impl HNSW {
             ep: 0,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            // bencher: Bencher::new(),
         }
     }
 
@@ -65,6 +69,7 @@ impl HNSW {
         n: usize,
         ef: usize,
         filters: &Option<Payload>,
+        // bencher: &mut Bencher,
     ) -> Vec<usize> {
         let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
@@ -78,6 +83,7 @@ impl HNSW {
                 &mut ep,
                 1,
                 &None,
+                // bencher,
             );
         }
 
@@ -87,7 +93,7 @@ impl HNSW {
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
                 let dist = v2v_dist(vector, &layer_0.node(*x).vector.view());
-                let dist = (dist * 10_000.0).trunc() as usize;
+                // let dist = (dist * 10_000.0) as usize;
                 (dist, *x)
             }));
 
@@ -105,7 +111,7 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         max_layer_nb: usize,
         current_layer_number: usize,
-        filters: &Option<Payload>,
+        // bencher: &mut Bencher,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
@@ -122,14 +128,16 @@ impl HNSW {
         point: &Point,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
-        filters: &Option<Payload>,
+        // bencher: &mut Bencher,
     ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
+        // bencher.start_timer("step_2");
         let mut insertion_results = HashMap::new();
         let bound = (current_layer_number + 1).min(self.layers.len());
 
         for layer_nb in (0..bound).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
 
+            // bencher.start_timer("search_layer");
             ep = self.search_layer(
                 layer,
                 &point.vector.view(),
@@ -137,7 +145,9 @@ impl HNSW {
                 self.params.ef_cons,
                 &None,
             );
+            // bencher.end_timer("search_layer");
 
+            // bencher.start_timer("heuristic");
             let neighbors_to_connect = self.select_heuristic(
                 &layer,
                 &point.vector.view(),
@@ -146,8 +156,13 @@ impl HNSW {
                 false,
                 true,
             );
-            let prune_results = self.prune_connexions(layer_nb, &neighbors_to_connect);
+            // bencher.end_timer("heuristic");
 
+            // bencher.start_timer("prune");
+            let prune_results = self.prune_connexions(layer_nb, &neighbors_to_connect);
+            // bencher.end_timer("prune");
+
+            // bencher.start_timer("load");
             insertion_results.insert(layer_nb, HashMap::new());
             insertion_results
                 .get_mut(&layer_nb)
@@ -157,7 +172,9 @@ impl HNSW {
                 .get_mut(&layer_nb)
                 .unwrap()
                 .extend(prune_results.iter().map(|x| (*x.0, x.1.to_owned())));
+            // bencher.end_timer("load");
         }
+        // bencher.end_timer("step_2");
         insertion_results
     }
 
@@ -252,6 +269,7 @@ impl HNSW {
     }
 
     pub fn insert(&mut self, point: &Point, level: Option<usize>) -> bool {
+        // bencher.start_timer("insert");
         if self.node_ids.contains(&point.id) {
             return false;
         }
@@ -263,9 +281,15 @@ impl HNSW {
 
         let max_layer_nb = self.layers.len() - 1;
 
-        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb, &None);
-        let insertion_results = self.step_2(&point, ep, current_layer_nb, &None);
+        // bencher.start_timer("step_1");
+        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb);
+        // bencher.end_timer("step_1");
 
+        // bencher.start_timer("step_2");
+        let insertion_results = self.step_2(&point, ep, current_layer_nb);
+        // bencher.end_timer("step_2");
+
+        // bencher.start_timer("load_data");
         self.node_ids.insert(point.id);
         for (layer_nb, node_data) in insertion_results.iter() {
             let layer = self.layers.get_mut(&layer_nb).unwrap();
@@ -290,6 +314,8 @@ impl HNSW {
             }
             self.ep = point.id;
         }
+        // bencher.end_timer("load_data");
+        // bencher.end_timer("insert");
         true
     }
 
@@ -303,8 +329,8 @@ impl HNSW {
                 continue;
             }
             let max_layer_nb = read_ref.layers.len() - 1;
-            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb, &None);
-            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb, &None);
+            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb);
+            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb);
             batch.push((idx, insertion_results));
 
             let last_idx = idx == (points.len() - 1);
@@ -363,6 +389,7 @@ impl HNSW {
         vectors: &Array<f32, Dim<[usize; 2]>>,
         checkpoint: bool,
         payloads: Option<Vec<Payload>>,
+        // bencher: &mut Bencher,
     ) -> std::io::Result<()> {
         let lim = vectors.dim().0;
         let dim = self.params.dim;
@@ -506,12 +533,9 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> BTreeMap<usize, usize> {
-        let result = others.iter().map(|idx| {
-            (
-                (v2v_dist(vector, &layer.node(*idx).vector.view()) * 10_000.0).trunc() as usize,
-                *idx,
-            )
-        });
+        let result = others
+            .iter()
+            .map(|idx| (v2v_dist(vector, &layer.node(*idx).vector.view()), *idx));
         BTreeMap::from_iter(result)
     }
 
@@ -522,11 +546,17 @@ impl HNSW {
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
         filters: &Option<Payload>,
+        // bencher: &mut Bencher,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
+        // bencher.start_timer("search_layer");
+
+        // bencher.start_timer("initial_sort");
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
+        // bencher.end_timer("initial_sort");
 
         while candidates.len() > 0 {
+            // bencher.start_timer("while_1");
             let (cand2query_dist, candidate) = candidates.pop_first().unwrap();
 
             let (f2q_dist, _) = selected.last_key_value().unwrap();
@@ -535,15 +565,20 @@ impl HNSW {
                 break;
             }
 
+            // bencher.end_timer("while_1");
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if !ep.contains(&neighbor) {
                     ep.insert(neighbor);
                     let neighbor_point = &layer.node(neighbor);
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
-                    let n2q_dist = (v2v_dist(&vector, &neighbor_point.vector.view()) * 10_000.0)
-                        .trunc() as usize;
 
+                    // bencher.start_timer("while_2_1");
+                    let n2q_dist = v2v_dist(&vector, &neighbor_point.vector.view());
+
+                    // bencher.end_timer("while_2_1");
+
+                    // bencher.start_timer("while_2_2");
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
                         // TODO: this is a very naive way of applying filters,
@@ -557,13 +592,17 @@ impl HNSW {
                             selected.pop_last().unwrap();
                         }
                     }
+                    // bencher.end_timer("while_2_2");
                 }
             }
         }
+        // bencher.start_timer("end_results");
         let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
         for val in selected.values() {
             result.insert(*val);
         }
+        // bencher.end_timer("end_results");
+        // bencher.end_timer("search_layer");
         result
     }
 
@@ -670,6 +709,7 @@ impl HNSW {
             ep: *params.get("ep").unwrap() as usize,
             node_ids,
             layers,
+            // bencher: Bencher::new(),
         })
     }
 

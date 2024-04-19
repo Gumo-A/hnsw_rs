@@ -1,3 +1,4 @@
+use hnsw::helpers::bench::Bencher;
 use rand::Rng;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -47,38 +48,50 @@ fn main() -> std::io::Result<()> {
 
     let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
     // let mut index = HNSW::new(m, None, dim);
+    // let bencher = Bencher::new();
     // index.build_index(&embeddings, false, Some(payloads))?;
     index.print_params();
-    let filters = Some(Payload {
-        data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
-    });
+    // print_benching(&bencher, "search_layer");
+    // let filters = Some(Payload {
+    //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
+    // });
     estimate_recall(&mut index, &embeddings, &bf_data, &None);
 
-    for (i, idx) in bf_data.keys().enumerate() {
-        if i > 3 {
-            break;
-        }
-        let vector = embeddings.slice(s![*idx, ..]);
-        let anns = index.ann_by_vector(&vector, 10, 16, &filters);
-        println!("ANNs of {}", words[*idx]);
-        let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
-        println!("{:?}", anns_words);
-        println!("True NN of {}", words[*idx]);
-        let true_nns: Vec<String> = bf_data
-            .get(&idx)
-            .unwrap()
-            .iter()
-            .map(|x| words[*x].clone())
-            .take(10)
-            .collect();
-        println!("{:?}", true_nns);
-    }
+    // for (i, idx) in bf_data.keys().enumerate() {
+    //     if i > 3 {
+    //         break;
+    //     }
+    //     let vector = embeddings.slice(s![*idx, ..]);
+    //     let anns = index.ann_by_vector(&vector, 10, 16, &filters);
+    //     println!("ANNs of {}", words[*idx]);
+    //     let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
+    //     println!("{:?}", anns_words);
+    //     println!("True NN of {}", words[*idx]);
+    //     let true_nns: Vec<String> = bf_data
+    //         .get(&idx)
+    //         .unwrap()
+    //         .iter()
+    //         .map(|x| words[*x].clone())
+    //         .take(10)
+    //         .collect();
+    //     println!("{:?}", true_nns);
+    // }
     let end = Instant::now();
     println!(
         "Elapsed time: {}s",
         start.elapsed().as_secs() - end.elapsed().as_secs()
     );
     Ok(())
+}
+
+fn print_benching(bencher: &Bencher, base: &str) {
+    let fracs = bencher.get_frac_of(base, vec![]);
+    let mut tot = 0.0;
+    for (key, val) in fracs.iter() {
+        println!("{key} if {val} of {base}");
+        tot += val;
+    }
+    println!("Sum of fracs is {tot}");
 }
 
 fn estimate_recall(

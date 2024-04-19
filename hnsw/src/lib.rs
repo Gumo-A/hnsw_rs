@@ -128,10 +128,8 @@ mod tests {
             g.add_node(&point);
         }
 
-        let mut dist =
-            helpers::distance::v2v_dist(&g.node(0).vector.view(), &g.node(0).vector.view());
-        dist = (dist * 10000.0).round() / 10000.0;
+        let dist = helpers::distance::v2v_dist(&g.node(0).vector.view(), &g.node(0).vector.view());
 
-        assert_eq!(dist, 0.0);
+        assert_eq!(dist, 0);
     }
 }
