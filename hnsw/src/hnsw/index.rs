@@ -1,4 +1,4 @@
-// use crate::helpers::bench::Bencher;
+use crate::helpers::bench::Bencher;
 use crate::helpers::data::split;
 use crate::helpers::distance::v2v_dist;
 use crate::hnsw::graph::Graph;
@@ -69,7 +69,7 @@ impl HNSW {
         n: usize,
         ef: usize,
         filters: &Option<Payload>,
-        // bencher: &mut Bencher,
+        bencher: &mut Bencher,
     ) -> Vec<usize> {
         let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
@@ -83,12 +83,12 @@ impl HNSW {
                 &mut ep,
                 1,
                 &None,
-                // bencher,
+                bencher,
             );
         }
 
         let layer_0 = &self.layers.get(&0).unwrap();
-        let neighbors = self.search_layer(layer_0, vector, &mut ep, ef, filters);
+        let neighbors = self.search_layer(layer_0, vector, &mut ep, ef, filters, bencher);
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
@@ -111,14 +111,14 @@ impl HNSW {
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
         max_layer_nb: usize,
         current_layer_number: usize,
-        // bencher: &mut Bencher,
+        bencher: &mut Bencher,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
 
         for layer_nb in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
-            ep = self.search_layer(layer, vector, &mut ep, 1, &None);
+            ep = self.search_layer(layer, vector, &mut ep, 1, &None, bencher);
         }
         ep
     }
@@ -128,7 +128,7 @@ impl HNSW {
         point: &Point,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
-        // bencher: &mut Bencher,
+        bencher: &mut Bencher,
     ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
         // bencher.start_timer("step_2");
         let mut insertion_results = HashMap::new();
@@ -144,6 +144,7 @@ impl HNSW {
                 &mut ep,
                 self.params.ef_cons,
                 &None,
+                bencher,
             );
             // bencher.end_timer("search_layer");
 
@@ -233,20 +234,16 @@ impl HNSW {
         let mut visited = BTreeMap::new();
         let mut selected = BTreeMap::new();
 
+        let (dist_e, e) = candidates.pop_first().unwrap();
+        selected.insert(dist_e, e);
         while (candidates.len() > 0) & (selected.len() < m) {
             let (dist_e, e) = candidates.pop_first().unwrap();
-            if selected.len() == 0 {
-                selected.insert(dist_e, e);
-                continue;
-            }
-
             let e_vector = &layer.node(e).vector.view();
-            let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
-            selected_set.extend(selected.values());
-            let (dist_from_s, _) = self
-                .sort_by_distance(layer, &e_vector, &selected_set)
-                .pop_first()
-                .unwrap();
+
+            // let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
+            // selected_set.extend(selected.values());
+            let (dist_from_s, _) =
+                self.get_nearest(layer, &e_vector, selected.values().map(|x| *x));
 
             if dist_e < dist_from_s {
                 selected.insert(dist_e, e);
@@ -268,7 +265,7 @@ impl HNSW {
         result
     }
 
-    pub fn insert(&mut self, point: &Point, level: Option<usize>) -> bool {
+    pub fn insert(&mut self, point: &Point, level: Option<usize>, bencher: &mut Bencher) -> bool {
         // bencher.start_timer("insert");
         if self.node_ids.contains(&point.id) {
             return false;
@@ -282,11 +279,16 @@ impl HNSW {
         let max_layer_nb = self.layers.len() - 1;
 
         // bencher.start_timer("step_1");
-        let ep = self.step_1(&point.vector.view(), max_layer_nb, current_layer_nb);
+        let ep = self.step_1(
+            &point.vector.view(),
+            max_layer_nb,
+            current_layer_nb,
+            bencher,
+        );
         // bencher.end_timer("step_1");
 
         // bencher.start_timer("step_2");
-        let insertion_results = self.step_2(&point, ep, current_layer_nb);
+        let insertion_results = self.step_2(&point, ep, current_layer_nb, bencher);
         // bencher.end_timer("step_2");
 
         // bencher.start_timer("load_data");
@@ -319,60 +321,76 @@ impl HNSW {
         true
     }
 
-    pub fn insert_par(index: &Arc<RwLock<Self>>, points: Vec<(Point, usize)>, bar: ProgressBar) {
-        let mut batch = Vec::new();
-        let batch_size = 16;
-        for (idx, (point, current_layer_nb)) in points.iter().enumerate() {
-            bar.inc(1);
-            let read_ref = index.read();
-            if read_ref.node_ids.contains(&point.id) {
-                continue;
-            }
-            let max_layer_nb = read_ref.layers.len() - 1;
-            let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *current_layer_nb);
-            let insertion_results = read_ref.step_2(&point, ep, *current_layer_nb);
-            batch.push((idx, insertion_results));
+    // pub fn insert_par(index: &Arc<RwLock<Self>>, points: Vec<(Point, usize)>, bar: ProgressBar) {
+    //     let mut batch = Vec::new();
+    //     let batch_size = 16;
+    //     for (idx, (point, point_max_layer)) in points.iter().enumerate() {
+    //         let read_ref = index.read();
+    //         if read_ref.node_ids.contains(&point.id) {
+    //             continue;
+    //         }
+    //         let max_layer_nb = read_ref.layers.len() - 1;
+    //         let ep = read_ref.step_1(&point.vector.view(), max_layer_nb, *point_max_layer);
+    //         let insertion_results = read_ref.step_2(&point, ep, *point_max_layer);
+    //         batch.push((idx, insertion_results));
 
-            let last_idx = idx == (points.len() - 1);
-            let new_layer = current_layer_nb > &max_layer_nb;
-            let full_batch = batch.len() >= batch_size;
-            let have_to_write: bool = last_idx | new_layer | full_batch;
+    //         let last_idx = idx == (points.len() - 1);
+    //         let new_layer = point_max_layer > &max_layer_nb;
+    //         let full_batch = batch.len() >= batch_size;
+    //         let have_to_write: bool = last_idx | new_layer | full_batch;
 
-            let mut write_ref = if have_to_write {
-                drop(read_ref);
-                index.write()
-            } else {
-                continue;
-            };
-            for (point_nb, batch_data) in batch.iter() {
-                for (layer_nb, node_data) in batch_data.iter() {
-                    write_ref.node_ids.extend(node_data.keys());
-                    let layer = write_ref.layers.get_mut(&layer_nb).unwrap();
-                    for (node, neighbors) in node_data.iter() {
-                        let (point, _) = &points[*point_nb];
-                        layer.add_node(point);
-                        for old_neighbor in layer.neighbors(*node).clone() {
-                            layer.remove_edge(*node, old_neighbor);
-                        }
-                        for neighbor in neighbors.iter() {
-                            layer.add_edge(*node, *neighbor);
-                        }
+    //         let mut write_ref = if have_to_write {
+    //             drop(read_ref);
+    //             index.write()
+    //         } else {
+    //             continue;
+    //         };
+    //         write_ref.write_batch(&batch, &points);
+    //         if new_layer {
+    //             for layer_nb in max_layer_nb + 1..point_max_layer + 1 {
+    //                 let mut layer = Graph::new();
+    //                 layer.add_node(point);
+    //                 write_ref.layers.insert(layer_nb, layer);
+    //                 write_ref.node_ids.insert(point.id);
+    //                 write_ref.ep = point.id;
+    //             }
+    //         }
+    //         if !bar.is_hidden() {
+    //             bar.inc(batch.len() as u64);
+    //         }
+    //         batch.clear();
+    //     }
+    // }
+
+    fn write_batch(
+        &mut self,
+        batch: &Vec<(
+            usize,
+            HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>>,
+        )>,
+        points: &Vec<(Point, usize)>,
+    ) {
+        for (point_nb, batch_data) in batch.iter() {
+            for (layer_nb, node_data) in batch_data.iter() {
+                self.node_ids.extend(node_data.keys());
+                let layer = self.layers.get_mut(&layer_nb).unwrap();
+                for (node, neighbors) in node_data.iter() {
+                    let (point, _) = &points[*point_nb];
+                    layer.add_node(point);
+                    for old_neighbor in layer.neighbors(*node).clone() {
+                        // if neighbors.contains(&old_neighbor) {
+                        //     // neighbors.remove(&old_neighbor);
+                        //     continue;
+                        // }
+                        layer.remove_edge(*node, old_neighbor);
+                    }
+                    for neighbor in neighbors.iter() {
+                        layer.add_edge(*node, *neighbor);
                     }
                 }
             }
-            if new_layer {
-                for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
-                    let mut layer = Graph::new();
-                    layer.add_node(point);
-                    write_ref.layers.insert(layer_nb, layer);
-                    write_ref.node_ids.insert(point.id);
-                    write_ref.ep = point.id;
-                }
-            }
-            batch.clear();
         }
     }
-
     fn first_insert(&mut self, point: &Point) {
         assert_eq!(self.node_ids.len(), 0);
         assert_eq!(self.layers.len(), 0);
@@ -389,7 +407,7 @@ impl HNSW {
         vectors: &Array<f32, Dim<[usize; 2]>>,
         checkpoint: bool,
         payloads: Option<Vec<Payload>>,
-        // bencher: &mut Bencher,
+        bencher: &mut Bencher,
     ) -> std::io::Result<()> {
         let lim = vectors.dim().0;
         let dim = self.params.dim;
@@ -437,7 +455,7 @@ impl HNSW {
         let remaining = lim - nb_nodes;
         let bar = get_progress_bar(remaining, false);
         for (point, level) in points.iter() {
-            let inserted = self.insert(point, Some(*level));
+            let inserted = self.insert(point, Some(*level), bencher);
             if inserted {
                 bar.inc(1);
             } else {
@@ -461,66 +479,64 @@ impl HNSW {
         Ok(())
     }
 
-    pub fn build_index_par(
-        m: usize,
-        vectors: &Array<f32, Dim<[usize; 2]>>,
-        filters: &Option<Vec<Payload>>,
-    ) -> Self {
-        let nb_threads = std::thread::available_parallelism().unwrap().get();
-        let (lim, dim) = vectors.dim();
-        let index = Arc::new(RwLock::new(HNSW::new(m, None, dim)));
-        let filters = filters.as_ref().unwrap();
-        let mut points: Vec<(Point, usize)> = (0..lim)
-            .map(|idx| {
-                (
-                    Point::new(
-                        idx,
-                        vectors.slice(s![idx, ..]),
-                        None,
-                        Some(filters[idx].clone()),
-                    ),
-                    index.read().get_new_node_layer(),
-                )
-            })
-            .collect();
-        index.write().first_insert(&points[0].0);
-        points.sort_by_key(|x| x.1);
-        let mut points_split = split(points, nb_threads);
+    // pub fn build_index_par(
+    //     m: usize,
+    //     vectors: &Array<f32, Dim<[usize; 2]>>,
+    //     filters: &Option<Vec<Payload>>,
+    // ) -> Self {
+    //     let nb_threads = std::thread::available_parallelism().unwrap().get();
+    //     let (lim, dim) = vectors.dim();
+    //     let index = Arc::new(RwLock::new(HNSW::new(m, None, dim)));
+    //     let filters = filters.as_ref().unwrap();
+    //     let points: Vec<(Point, usize)> = (0..lim)
+    //         .map(|idx| {
+    //             (
+    //                 Point::new(
+    //                     idx,
+    //                     vectors.slice(s![idx, ..]),
+    //                     None,
+    //                     Some(filters[idx].clone()),
+    //                 ),
+    //                 index.read().get_new_node_layer(),
+    //             )
+    //         })
+    //         .collect();
+    //     index.write().first_insert(&points[0].0);
+    //     let mut points_split = split(points, nb_threads);
 
-        let mut handlers = vec![];
-        for thread_nb in 0..nb_threads {
-            let index_ref = index.clone();
-            let points_ref = points_split.pop().unwrap();
-            // let bar = get_progress_bar(points_ref.len(), thread_nb != (nb_threads - 1));
-            let bar = get_progress_bar(points_ref.len(), thread_nb != 0);
-            handlers.push(std::thread::spawn(move || {
-                Self::insert_par(&index_ref, points_ref, bar);
-            }));
-        }
-        for handle in handlers {
-            let _ = handle.join().unwrap();
-        }
-        let mut index_ref = index.write();
-        for idx in 0..lim {
-            if !index_ref.node_ids.contains(&idx) {
-                let point = Point::new(idx, vectors.slice(s![idx, ..]), None, None);
-                index_ref.insert(&point, Some(0));
-                if index_ref.ep == idx {
-                    let nb_layers = index_ref.layers.len();
-                    index_ref.ep = *index_ref
-                        .layers
-                        .get(&(nb_layers - 1))
-                        .unwrap()
-                        .nodes
-                        .keys()
-                        .next()
-                        .unwrap();
-                }
-            }
-        }
-        drop(index_ref);
-        Arc::try_unwrap(index).unwrap().into_inner()
-    }
+    //     let mut handlers = vec![];
+    //     for thread_nb in 0..nb_threads {
+    //         let index_ref = index.clone();
+    //         let points_ref = points_split.pop().unwrap();
+    //         let bar = get_progress_bar(points_ref.len(), thread_nb != 0);
+    //         handlers.push(std::thread::spawn(move || {
+    //             Self::insert_par(&index_ref, points_ref, bar);
+    //         }));
+    //     }
+    //     for handle in handlers {
+    //         let _ = handle.join().unwrap();
+    //     }
+    //     let mut index_ref = index.write();
+    //     for idx in 0..lim {
+    //         if !index_ref.node_ids.contains(&idx) {
+    //             let point = Point::new(idx, vectors.slice(s![idx, ..]), None, None);
+    //             index_ref.insert(&point, Some(0));
+    //             if index_ref.ep == idx {
+    //                 let nb_layers = index_ref.layers.len();
+    //                 index_ref.ep = *index_ref
+    //                     .layers
+    //                     .get(&(nb_layers - 1))
+    //                     .unwrap()
+    //                     .nodes
+    //                     .keys()
+    //                     .next()
+    //                     .unwrap();
+    //             }
+    //         }
+    //     }
+    //     drop(index_ref);
+    //     Arc::try_unwrap(index).unwrap().into_inner()
+    // }
 
     fn get_new_node_layer(&self) -> usize {
         let mut rng = rand::thread_rng();
@@ -531,12 +547,28 @@ impl HNSW {
         &self,
         layer: &Graph,
         vector: &ArrayView<f32, Dim<[usize; 1]>>,
+        // others: &T,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> BTreeMap<usize, usize> {
         let result = others
             .iter()
             .map(|idx| (v2v_dist(vector, &layer.node(*idx).vector.view()), *idx));
         BTreeMap::from_iter(result)
+    }
+
+    fn get_nearest<I>(
+        &self,
+        layer: &Graph,
+        vector: &ArrayView<f32, Dim<[usize; 1]>>,
+        others: I,
+    ) -> (usize, usize)
+    where
+        I: Iterator<Item = usize>,
+    {
+        others
+            .map(|idx| (v2v_dist(vector, &layer.node(idx).vector.view()), idx))
+            .min_by_key(|x| x.0)
+            .unwrap()
     }
 
     fn search_layer(
@@ -546,43 +578,39 @@ impl HNSW {
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
         filters: &Option<Payload>,
-        // bencher: &mut Bencher,
+        bencher: &mut Bencher,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
-        // bencher.start_timer("search_layer");
+        bencher.start_timer("search_layer");
 
-        // bencher.start_timer("initial_sort");
+        bencher.start_timer("initial_sort");
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
-        // bencher.end_timer("initial_sort");
+        bencher.end_timer("initial_sort");
 
-        while candidates.len() > 0 {
-            // bencher.start_timer("while_1");
-            let (cand2query_dist, candidate) = candidates.pop_first().unwrap();
+        while let Some((cand2q_dist, candidate)) = candidates.pop_first() {
+            bencher.start_timer("while_1");
 
-            let (f2q_dist, _) = selected.last_key_value().unwrap();
+            let (furthest2q_dist, _) = selected.last_key_value().unwrap();
 
-            if (&cand2query_dist > f2q_dist) & filters.is_none() {
+            if (&cand2q_dist > furthest2q_dist) & filters.is_none() {
                 break;
             }
 
-            // bencher.end_timer("while_1");
+            bencher.end_timer("while_1");
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
-                if !ep.contains(&neighbor) {
-                    ep.insert(neighbor);
+                if ep.insert(neighbor) {
                     let neighbor_point = &layer.node(neighbor);
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 
-                    // bencher.start_timer("while_2_1");
+                    bencher.start_timer("while_2_1");
                     let n2q_dist = v2v_dist(&vector, &neighbor_point.vector.view());
 
-                    // bencher.end_timer("while_2_1");
+                    bencher.end_timer("while_2_1");
 
-                    // bencher.start_timer("while_2_2");
+                    bencher.start_timer("while_2_2");
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
-                        // TODO: this is a very naive way of applying filters,
-                        // must make it more robust.
                         let can_select = evaluate_filters(neighbor_point, filters);
                         if can_select {
                             selected.insert(n2q_dist, neighbor);
@@ -592,17 +620,15 @@ impl HNSW {
                             selected.pop_last().unwrap();
                         }
                     }
-                    // bencher.end_timer("while_2_2");
+                    bencher.end_timer("while_2_2");
                 }
             }
         }
-        // bencher.start_timer("end_results");
+        bencher.start_timer("end_results");
         let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
-        for val in selected.values() {
-            result.insert(*val);
-        }
-        // bencher.end_timer("end_results");
-        // bencher.end_timer("search_layer");
+        result.extend(selected.values());
+        bencher.end_timer("end_results");
+        bencher.end_timer("search_layer");
         result
     }
 

@@ -25,7 +25,7 @@ impl Point {
     ) -> Point {
         Point {
             id,
-            vector: norm_vector(&vector.view()),
+            vector: norm_vector(&vector),
             neighbors: neighbors.unwrap_or(HashSet::with_hasher(BuildNoHashHasher::default())),
             payload,
         }

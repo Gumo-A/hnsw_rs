@@ -30,9 +30,10 @@ impl Graph {
         Graph { nodes }
     }
     pub fn add_node(&mut self, point: &Point) {
-        if !self.nodes.contains_key(&point.id) {
-            self.nodes.insert(point.id, point.clone());
-        }
+        // if !self.nodes.contains_key(&point.id) {
+        let point = point.clone();
+        self.nodes.insert(point.id, point);
+        // }
     }
 
     pub fn add_edge(&mut self, node_a: usize, node_b: usize) {

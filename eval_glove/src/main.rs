@@ -46,12 +46,12 @@ fn main() -> std::io::Result<()> {
         ]),
     }));
 
-    let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
-    // let mut index = HNSW::new(m, None, dim);
-    // let bencher = Bencher::new();
-    // index.build_index(&embeddings, false, Some(payloads))?;
+    // let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
+    let mut index = HNSW::new(m, None, dim);
+    let mut bencher = Bencher::new();
+    index.build_index(&embeddings, false, Some(payloads), &mut bencher)?;
     index.print_params();
-    // print_benching(&bencher, "search_layer");
+    print_benching(&bencher, "search_layer");
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     // });
@@ -88,7 +88,7 @@ fn print_benching(bencher: &Bencher, base: &str) {
     let fracs = bencher.get_frac_of(base, vec![]);
     let mut tot = 0.0;
     for (key, val) in fracs.iter() {
-        println!("{key} if {val} of {base}");
+        println!("{key} is {val} of {base}");
         tot += val;
     }
     println!("Sum of fracs is {tot}");
@@ -113,13 +113,14 @@ fn estimate_recall(
         );
         bar.set_message(format!("Finding ANNs ef={ef}"));
 
+        let mut bencher = Bencher::new();
         let mut recall_10: HashMap<usize, f32> = HashMap::new();
         for _ in (0..sample_size).enumerate() {
             bar.inc(1);
 
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = embeddings.slice(s![idx, ..]);
-            let anns = index.ann_by_vector(&vector, 10, ef, &filters);
+            let anns = index.ann_by_vector(&vector, 10, ef, &filters, &mut bencher);
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()
