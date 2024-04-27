@@ -27,7 +27,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
+    let (_, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
     let bf_data = match load_bf_data(dim, lim) {
         Ok(data) => data,
         Err(err) => {
@@ -36,22 +36,10 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let payloads = Vec::from_iter(words.iter().map(|x| Payload {
-        data: HashMap::from([
-            ("word".to_string(), PayloadType::StringPayload(x.clone())),
-            (
-                "starts_with_e".to_string(),
-                PayloadType::BoolPayload(x.starts_with('e')),
-            ),
-        ]),
-    }));
-
-    // let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
-    let mut index = HNSW::new(m, None, dim);
-    let mut bencher = Bencher::new();
-    index.build_index(&embeddings, false, Some(payloads), &mut bencher)?;
+    let mut index = HNSW::build_index_par(m, &embeddings, &None);
+    // let mut index = HNSW::new(m, None, dim);
+    // index.build_index(&embeddings, false, None)?;
     index.print_params();
-    print_benching(&bencher, "search_layer");
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     // });
@@ -113,14 +101,13 @@ fn estimate_recall(
         );
         bar.set_message(format!("Finding ANNs ef={ef}"));
 
-        let mut bencher = Bencher::new();
         let mut recall_10: HashMap<usize, f32> = HashMap::new();
         for _ in (0..sample_size).enumerate() {
             bar.inc(1);
 
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = embeddings.slice(s![idx, ..]);
-            let anns = index.ann_by_vector(&vector, 10, ef, &filters, &mut bencher);
+            let anns = index.ann_by_vector(&vector, 10, ef, &filters);
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()

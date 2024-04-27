@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 indicatif = "0.17.8"
-openblas-src = { version = "0.10.9", features = ["cblas"]}
 nohash-hasher = "0.2.0"
 parking_lot = "0.12.1"
 rand = "0.8.5"
@@ -17,3 +16,5 @@ ndarray = { version = "0.15.6", features = ["serde"] }
 # ndarray-linalg = { version = "0.16", features = ["intel-mkl-static"] }
 # ndarray = { version = "0.15.6", features = ["blas", "serde"] }
 # blas-src = { version = "0.10", features = ["openblas"] }
+# openblas-src = { version = "0.10.9", features = ["cblas"]}
+
