@@ -2,6 +2,7 @@ use crate::helpers::bench::Bencher;
 use crate::helpers::data::split;
 use crate::helpers::distance::v2v_dist;
 use crate::hnsw::graph::Graph;
+use crate::hnsw::lvq::LVQVec;
 use crate::hnsw::params::Params;
 use crate::hnsw::points::{Payload, PayloadType, Point};
 
