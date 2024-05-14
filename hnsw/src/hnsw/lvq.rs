@@ -52,6 +52,23 @@ pub fn Q(vector: &Vec<f32>, bits: usize) -> LVQVec {
     }
 }
 
+pub fn minmax_scaler(vector: &Vec<f32>) -> Vec<u8> {
+    let upper_bound: f32 = *vector
+        .iter()
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap();
+    let lower_bound: f32 = *vector
+        .iter()
+        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap();
+
+    let quantized: Vec<u8> = vector
+        .iter()
+        .map(|x| (255.0 * (x - lower_bound) / (upper_bound - lower_bound)) as u8)
+        .collect();
+    quantized
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,13 +81,11 @@ mod tests {
         let quantized = Q(&test_vec, 8);
         let q = &quantized.quantized_vec;
         let recontructed = quantized.reconstruct();
+        let minmaxscale = minmax_scaler(&test_vec);
 
         println!("{:?}", test_vec);
-        println!("{:?}", quantized);
+        println!("{:?}", quantized.quantized_vec);
+        println!("{:?}", minmaxscale);
         println!("{:?}", recontructed);
-
-        println!("{}", std::mem::size_of_val(&*test_vec));
-        println!("{}", std::mem::size_of_val(&*q));
-        println!("{}", std::mem::size_of_val(&*recontructed));
     }
 }
