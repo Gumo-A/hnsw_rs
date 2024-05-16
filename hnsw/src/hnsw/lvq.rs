@@ -1,3 +1,7 @@
+/// TODO:
+/// Implement an F8 type for this module.
+use crate::helpers::minifloat::F8;
+
 // Only usable with bits = 8 for now
 #[derive(Debug)]
 pub struct LVQVec {
