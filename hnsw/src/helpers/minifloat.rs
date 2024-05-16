@@ -2,15 +2,20 @@
 // Write this type
 // Get inspiration from https://github.com/jdh8/minifloat-rs
 
-const EXPONENT_SIZE: u8 = 4;
-const SIGNIFICAND_SIZE: u8 = 3;
+// bits for the exponent
+const E: u8 = 4;
+// bits for the significand
+const S: u8 = 3;
 
 pub struct F8(u8);
 
-fn get_bit_at(input: u32, n: u8) -> bool {
-    if n < 32 {
-        input & (1 << n) != 0
-    } else {
-        false
+impl F8 {
+    pub fn from_f32(x: f32) -> Self {
+        let mut minifloat: u8 = if x.is_sign_positive() { 1u8 << 7 } else { 0u8 };
+
+        // TODO: Exponent translation
+        // TODO: Significand translation
+
+        F8(minifloat)
     }
 }
