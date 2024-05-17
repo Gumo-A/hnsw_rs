@@ -6,9 +6,12 @@ pub struct CompressedVec {
     upper: f32,
     lower: f32,
     vec: Vec<u8>,
+    delta: f32,
 }
 
 impl CompressedVec {
+    // TODO:
+    // Write tests to benchmark distance computation time.
     pub fn new(vector: &Vec<f32>) -> Self {
         let upper_bound: f32 = *vector
             .iter()
@@ -19,6 +22,8 @@ impl CompressedVec {
             .min_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap();
 
+        let delta = (upper_bound - lower_bound) / 255.0;
+
         let scaled: Vec<u8> = vector
             .iter()
             .map(|x| (255.0 * (x - lower_bound) / (upper_bound - lower_bound)).round() as u8)
@@ -27,7 +32,16 @@ impl CompressedVec {
             upper: upper_bound,
             lower: lower_bound,
             vec: scaled,
+            delta,
         }
+    }
+    pub fn dist2vec(&self, vector: &Vec<f32>) -> f32 {
+        let mut result: f32 = 0.0;
+        for (x, y) in self.vec.iter().zip(vector) {
+            let decompressed = ((*x as f32) * self.delta) + self.lower;
+            result += (decompressed - y).powi(2);
+        }
+        result
     }
 }
 
