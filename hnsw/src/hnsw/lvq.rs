@@ -2,6 +2,35 @@
 /// Implement an F8 type for this module.
 use crate::helpers::minifloat::F8;
 
+pub struct CompressedVec {
+    upper: f32,
+    lower: f32,
+    vec: Vec<u8>,
+}
+
+impl CompressedVec {
+    pub fn new(vector: &Vec<f32>) -> Self {
+        let upper_bound: f32 = *vector
+            .iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let lower_bound: f32 = *vector
+            .iter()
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+
+        let scaled: Vec<u8> = vector
+            .iter()
+            .map(|x| (255.0 * (x - lower_bound) / (upper_bound - lower_bound)).round() as u8)
+            .collect();
+        CompressedVec {
+            upper: upper_bound,
+            lower: lower_bound,
+            vec: scaled,
+        }
+    }
+}
+
 // Only usable with bits = 8 for now
 #[derive(Debug)]
 pub struct LVQVec {

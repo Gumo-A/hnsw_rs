@@ -583,13 +583,13 @@ impl HNSW {
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         bencher.start_timer("search_layer");
 
-        bencher.start_timer("initial_sort");
+        // bencher.start_timer("initial_sort");
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
-        bencher.end_timer("initial_sort");
+        // bencher.end_timer("initial_sort");
 
         while let Some((cand2q_dist, candidate)) = candidates.pop_first() {
-            bencher.start_timer("while_1");
+            // bencher.start_timer("while_1");
 
             let (furthest2q_dist, _) = selected.last_key_value().unwrap();
 
@@ -597,19 +597,42 @@ impl HNSW {
                 break;
             }
 
-            bencher.end_timer("while_1");
+            // let cand_neighbors: HashSet<usize, BuildNoHashHasher<usize>> = layer
+            //     .neighbors(candidate)
+            //     .iter()
+            //     .filter(|x| ep.insert(**x))
+            //     .map(|x| *x)
+            //     .collect();
+            // let cand_neighbors_sorted = self.sort_by_distance(layer, vector, &cand_neighbors);
+
+            // for (n2q_dist, neighbor) in cand_neighbors_sorted.iter() {
+            //     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
+
+            //     if (n2q_dist < f2q_dist) | (selected.len() < ef) {
+            //         candidates.insert(*n2q_dist, *neighbor);
+            //         selected.insert(*n2q_dist, *neighbor);
+
+            //         if selected.len() > ef {
+            //             selected.pop_last().unwrap();
+            //         }
+            //         continue;
+            //     }
+            //     break;
+            // }
+
+            // bencher.end_timer("while_1");
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if ep.insert(neighbor) {
                     let neighbor_point = &layer.node(neighbor);
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 
-                    bencher.start_timer("while_2_1");
+                    // bencher.start_timer("while_2_1");
                     let n2q_dist = v2v_dist(&vector, &neighbor_point.vector.view());
 
-                    bencher.end_timer("while_2_1");
+                    // bencher.end_timer("while_2_1");
 
-                    bencher.start_timer("while_2_2");
+                    // bencher.start_timer("while_2_2");
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
                         let can_select = evaluate_filters(neighbor_point, filters);
@@ -621,14 +644,14 @@ impl HNSW {
                             selected.pop_last().unwrap();
                         }
                     }
-                    bencher.end_timer("while_2_2");
+                    // bencher.end_timer("while_2_2");
                 }
             }
         }
-        bencher.start_timer("end_results");
+        // bencher.start_timer("end_results");
         let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
         result.extend(selected.values());
-        bencher.end_timer("end_results");
+        // bencher.end_timer("end_results");
         bencher.end_timer("search_layer");
         result
     }
