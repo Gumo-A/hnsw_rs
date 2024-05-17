@@ -1,4 +1,9 @@
+use crate::hnsw::lvq::CompressedVec;
 use ndarray::{Array, Array1, ArrayView, Dim};
+
+pub fn l2_compressed(vector: &Vec<f32>, compressed: &CompressedVec) -> usize {
+    (compressed.dist2vec(vector) * 10_000.0) as usize
+}
 
 pub fn v2v_dist(a: &ArrayView<f32, Dim<[usize; 1]>>, b: &ArrayView<f32, Dim<[usize; 1]>>) -> usize {
     ((1.0 - a.dot(b)) * 10_000.0) as usize

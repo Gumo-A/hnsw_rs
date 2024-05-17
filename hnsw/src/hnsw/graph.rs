@@ -3,6 +3,8 @@ use ndarray::Array;
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
+use super::lvq::CompressedVec;
+
 #[derive(Debug)]
 pub struct Graph {
     pub nodes: HashMap<usize, Point>,
@@ -20,10 +22,9 @@ impl Graph {
     ) -> Graph {
         let mut nodes = HashMap::new();
         for (node_id, node_data) in data.iter() {
-            let vector = Array::from_shape_vec((dim,), node_data.1.clone())
-                .expect("Could not load a vector.");
+            let vector = CompressedVec::new(&node_data.1);
             let neighbors = node_data.0.clone();
-            let point = Point::new(*node_id, vector.view(), Some(neighbors), None);
+            let point = Point::new(*node_id, vector, Some(neighbors), None);
             nodes.insert(*node_id, point);
         }
 

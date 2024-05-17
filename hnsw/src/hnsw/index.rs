@@ -1,6 +1,6 @@
 use crate::helpers::bench::Bencher;
 use crate::helpers::data::split;
-use crate::helpers::distance::v2v_dist;
+use crate::helpers::distance::{l2_compressed, v2v_dist};
 use crate::hnsw::graph::Graph;
 use crate::hnsw::lvq::LVQVec;
 use crate::hnsw::params::Params;
@@ -66,7 +66,7 @@ impl HNSW {
 
     pub fn ann_by_vector(
         &self,
-        vector: &ArrayView<f32, Dim<[usize; 1]>>,
+        vector: &Vec<f32>,
         n: usize,
         ef: usize,
         filters: &Option<Payload>,
@@ -93,7 +93,7 @@ impl HNSW {
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
-                let dist = v2v_dist(vector, &layer_0.node(*x).vector.view());
+                let dist = l2_compressed(vector, &layer_0.node(*x).vector);
                 // let dist = (dist * 10_000.0) as usize;
                 (dist, *x)
             }));
@@ -109,7 +109,7 @@ impl HNSW {
 
     fn step_1(
         &self,
-        vector: &ArrayView<f32, Dim<[usize; 1]>>,
+        vector: &Vec<f32>,
         max_layer_nb: usize,
         current_layer_number: usize,
         bencher: &mut Bencher,
@@ -141,7 +141,7 @@ impl HNSW {
             // bencher.start_timer("search_layer");
             ep = self.search_layer(
                 layer,
-                &point.vector.view(),
+                &point.vector,
                 &mut ep,
                 self.params.ef_cons,
                 &None,
@@ -150,14 +150,8 @@ impl HNSW {
             // bencher.end_timer("search_layer");
 
             // bencher.start_timer("heuristic");
-            let neighbors_to_connect = self.select_heuristic(
-                &layer,
-                &point.vector.view(),
-                &mut ep,
-                self.params.m,
-                false,
-                true,
-            );
+            let neighbors_to_connect =
+                self.select_heuristic(&layer, &point.vector, &mut ep, self.params.m, false, true);
             // bencher.end_timer("heuristic");
 
             // bencher.start_timer("prune");
@@ -197,7 +191,7 @@ impl HNSW {
             if ((layer_nb == 0) & (layer.degree(*neighbor) > self.params.mmax0))
                 | ((layer_nb > 0) & (layer.degree(*neighbor) > self.params.mmax))
             {
-                let neighbor_vec = &layer.node(*neighbor).vector.view();
+                let neighbor_vec = &layer.node(*neighbor).vector;
                 let mut old_neighbors: HashSet<usize, BuildNoHashHasher<usize>> =
                     HashSet::with_hasher(BuildNoHashHasher::default());
                 old_neighbors.clone_from(layer.neighbors(*neighbor));
@@ -218,7 +212,7 @@ impl HNSW {
     fn select_heuristic(
         &self,
         layer: &Graph,
-        vector: &ArrayView<f32, Dim<[usize; 1]>>,
+        vector: &Vec<f32>,
         cands_idx: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         m: usize,
         extend_cands: bool,
@@ -239,7 +233,7 @@ impl HNSW {
         selected.insert(dist_e, e);
         while (candidates.len() > 0) & (selected.len() < m) {
             let (dist_e, e) = candidates.pop_first().unwrap();
-            let e_vector = &layer.node(e).vector.view();
+            let e_vector = &layer.node(e).vector;
 
             // let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
             // selected_set.extend(selected.values());
@@ -280,12 +274,7 @@ impl HNSW {
         let max_layer_nb = self.layers.len() - 1;
 
         // bencher.start_timer("step_1");
-        let ep = self.step_1(
-            &point.vector.view(),
-            max_layer_nb,
-            current_layer_nb,
-            bencher,
-        );
+        let ep = self.step_1(&point.vector, max_layer_nb, current_layer_nb, bencher);
         // bencher.end_timer("step_1");
 
         // bencher.start_timer("step_2");
@@ -547,27 +536,22 @@ impl HNSW {
     fn sort_by_distance(
         &self,
         layer: &Graph,
-        vector: &ArrayView<f32, Dim<[usize; 1]>>,
+        vector: &Vec<f32>,
         // others: &T,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> BTreeMap<usize, usize> {
         let result = others
             .iter()
-            .map(|idx| (v2v_dist(vector, &layer.node(*idx).vector.view()), *idx));
+            .map(|idx| (l2_compressed(vector, &layer.node(*idx).vector), *idx));
         BTreeMap::from_iter(result)
     }
 
-    fn get_nearest<I>(
-        &self,
-        layer: &Graph,
-        vector: &ArrayView<f32, Dim<[usize; 1]>>,
-        others: I,
-    ) -> (usize, usize)
+    fn get_nearest<I>(&self, layer: &Graph, vector: &Vec<f32>, others: I) -> (usize, usize)
     where
         I: Iterator<Item = usize>,
     {
         others
-            .map(|idx| (v2v_dist(vector, &layer.node(idx).vector.view()), idx))
+            .map(|idx| (l2_compressed(vector, &layer.node(idx).vector), idx))
             .min_by_key(|x| x.0)
             .unwrap()
     }
@@ -575,7 +559,7 @@ impl HNSW {
     fn search_layer(
         &self,
         layer: &Graph,
-        vector: &ArrayView<f32, Dim<[usize; 1]>>,
+        vector: &Vec<f32>,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
         filters: &Option<Payload>,
