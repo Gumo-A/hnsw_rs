@@ -1,17 +1,12 @@
 use hnsw::helpers::bench::Bencher;
 use rand::Rng;
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use hnsw::helpers::data::load_bf_data;
+// use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::index::HNSW;
-use hnsw::{
-    helpers::args::parse_args_eval,
-    hnsw::points::{Payload, PayloadType},
-};
-
-use ndarray::{s, Array2};
+use hnsw::{helpers::args::parse_args_eval, hnsw::points::Payload};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -27,35 +22,25 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
-    let bf_data = match load_bf_data(dim, lim) {
-        Ok(data) => data,
-        Err(err) => {
-            println!("Error loading bf data: {err}");
-            return Ok(());
-        }
-    };
-
-    let payloads = Vec::from_iter(words.iter().map(|x| Payload {
-        data: HashMap::from([
-            ("word".to_string(), PayloadType::StringPayload(x.clone())),
-            (
-                "starts_with_e".to_string(),
-                PayloadType::BoolPayload(x.starts_with('e')),
-            ),
-        ]),
-    }));
+    let (_, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
+    // let bf_data = match load_bf_data(dim, lim) {
+    //     Ok(data) => data,
+    //     Err(err) => {
+    //         println!("Error loading bf data: {err}");
+    //         return Ok(());
+    //     }
+    // };
 
     // let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
     let mut index = HNSW::new(m, None, dim);
     let mut bencher = Bencher::new();
-    index.build_index(&embeddings, false, Some(payloads), &mut bencher)?;
+    index.build_index(embeddings, false, None, &mut bencher)?;
     index.print_params();
-    print_benching(&bencher, "search_layer");
+    // print_benching(&bencher, "search_layer");
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     // });
-    estimate_recall(&mut index, &embeddings, &bf_data, &None);
+    // estimate_recall(&mut index, &embeddings, &bf_data, &None);
 
     // for (i, idx) in bf_data.keys().enumerate() {
     //     if i > 3 {
@@ -81,6 +66,7 @@ fn main() -> std::io::Result<()> {
         "Elapsed time: {}s",
         start.elapsed().as_secs() - end.elapsed().as_secs()
     );
+    std::thread::sleep(Duration::from_secs(10));
     Ok(())
 }
 
@@ -96,7 +82,7 @@ fn print_benching(bencher: &Bencher, base: &str) {
 
 fn estimate_recall(
     index: &mut HNSW,
-    embeddings: &Array2<f32>,
+    embeddings: &Vec<Vec<f32>>,
     bf_data: &HashMap<usize, Vec<usize>>,
     filters: &Option<Payload>,
 ) {
@@ -119,7 +105,7 @@ fn estimate_recall(
             bar.inc(1);
 
             let idx = rng.gen_range(0..(index.node_ids.len()));
-            let vector = embeddings.slice(s![idx, ..]);
+            let vector = &embeddings[idx];
             let anns = index.ann_by_vector(&vector, 10, ef, &filters, &mut bencher);
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)

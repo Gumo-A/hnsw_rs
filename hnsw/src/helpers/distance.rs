@@ -1,12 +1,16 @@
-use crate::hnsw::lvq::CompressedVec;
+use crate::hnsw::lvq::LVQVec;
 use ndarray::{Array, Array1, ArrayView, Dim};
 
-pub fn l2_compressed(vector: &Vec<f32>, compressed: &CompressedVec) -> usize {
-    (compressed.dist2vec(vector) * 10_000.0) as usize
+pub fn l2_compressed(vector: &LVQVec, compressed: &LVQVec) -> usize {
+    (compressed.dist2other(vector) * 10_000.0) as usize
 }
 
-pub fn v2v_dist(a: &ArrayView<f32, Dim<[usize; 1]>>, b: &ArrayView<f32, Dim<[usize; 1]>>) -> usize {
-    ((1.0 - a.dot(b)) * 10_000.0) as usize
+pub fn v2v_dist(a: &Vec<f32>, b: &Vec<f32>) -> usize {
+    let mut result: f32 = 0.0;
+    for (x, y) in a.iter().zip(b) {
+        result += (x - y).powi(2);
+    }
+    (result * 10_000.0) as usize
 }
 
 pub fn v2m_dist(

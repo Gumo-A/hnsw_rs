@@ -11,11 +11,13 @@ pub fn load_glove_array(
     lim: usize,
     normalize: bool,
     pros_nb: usize,
-) -> Result<(Vec<String>, Array2<f32>)> {
+    // ) -> Result<(Vec<String>, Array2<f32>)> {
+) -> Result<(Vec<String>, Vec<Vec<f32>>)> {
     let file = File::open(format!("/home/gamal/glove_dataset/glove.6B.{dim}d.txt"))?;
     let reader = BufReader::new(file);
 
-    let mut embeddings = Array2::zeros((lim.try_into().unwrap(), dim.try_into().unwrap()));
+    // let mut embeddings = Array2::zeros((lim.try_into().unwrap(), dim.try_into().unwrap()));
+    let mut embeddings: Vec<Vec<f32>> = Vec::new();
     let mut words: Vec<String> = Vec::new();
 
     let bar = if pros_nb != 0 {
@@ -43,16 +45,26 @@ pub fn load_glove_array(
 
         let word = parts.next().expect("Empty line");
 
-        let values = parts.map(|s| s.parse::<f32>().expect("Could not parse float"));
+        let mut values: Vec<f32> = parts
+            .map(|s| s.parse::<f32>().expect("Could not parse float"))
+            .collect();
         let norm: f32 = if normalize {
-            values.clone().map(|x| x.powf(2.0)).sum::<f32>().powf(0.5)
+            values
+                .clone()
+                .iter()
+                .map(|x| x.powf(2.0))
+                .sum::<f32>()
+                .powf(0.5)
         } else {
             1.0
         };
-        for (jdx, val) in values.enumerate() {
-            let entry = embeddings.get_mut((idx, jdx)).unwrap();
-            *entry = val / norm
-        }
+        values = values.iter().map(|x| x / norm).collect();
+        embeddings.push(values);
+        // for (jdx, val) in values.enumerate() {
+        //     let entry = embeddings.get_mut((idx, jdx)).unwrap();
+        //     *entry = val / norm
+        // }
+
         words.push(word.to_string());
     }
     Ok((words, embeddings))

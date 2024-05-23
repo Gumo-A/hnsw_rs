@@ -3,4 +3,3 @@ pub mod bench;
 pub mod data;
 pub mod distance;
 pub mod glove;
-pub mod minifloat;

@@ -1,17 +1,12 @@
-/// TODO:
-/// Implement an F8 type for this module.
-use crate::helpers::minifloat::F8;
-
 #[derive(Debug, Clone)]
-pub struct CompressedVec {
-    upper: f32,
-    lower: f32,
-    vec: Vec<u8>,
+pub struct LVQVec {
     delta: f32,
+    lower: f32,
+    quantized_vec: Vec<u8>,
 }
 
-impl CompressedVec {
-    pub fn new(vector: &Vec<f32>) -> Self {
+impl LVQVec {
+    pub fn new(vector: &Vec<f32>, bits: usize) -> LVQVec {
         let upper_bound: f32 = *vector
             .iter()
             .max_by(|a, b| a.partial_cmp(b).unwrap())
@@ -20,99 +15,51 @@ impl CompressedVec {
             .iter()
             .min_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap();
+        let delta: f32 = (upper_bound - lower_bound) / (2.0f32.powi(bits as i32) - 1.0);
 
-        let delta = (upper_bound - lower_bound) / 255.0;
-
-        let scaled: Vec<u8> = vector
+        let quantized: Vec<u8> = vector
             .iter()
-            .map(|x| (255.0 * (x - lower_bound) / (upper_bound - lower_bound)) as u8)
+            .map(|x| {
+                let mut buffer: f32 = (x - lower_bound) / delta;
+                buffer += 0.5f32;
+                buffer.floor() as u8
+            })
             .collect();
-        CompressedVec {
-            upper: upper_bound,
-            lower: lower_bound,
-            vec: scaled,
+
+        LVQVec {
             delta,
+            lower: lower_bound,
+            quantized_vec: quantized,
         }
     }
+
+    pub fn reconstruct(&self) -> Vec<f32> {
+        let recontructed: Vec<f32> = self
+            .quantized_vec
+            .iter()
+            .map(|x| ((*x as f32) * self.delta) + self.lower)
+            .collect();
+        recontructed
+    }
+
     pub fn dist2vec(&self, vector: &Vec<f32>) -> f32 {
         let mut result: f32 = 0.0;
-        for (x, y) in self.vec.iter().zip(vector) {
+        for (x, y) in self.quantized_vec.iter().zip(vector) {
             let decompressed = ((*x as f32) * self.delta) + self.lower;
             result += (decompressed - y).powi(2);
         }
         result
     }
-}
 
-// Only usable with bits = 8 for now
-#[derive(Debug)]
-pub struct LVQVec {
-    upper: f32,
-    lower: f32,
-    quantized_vec: Vec<u8>,
-}
-
-impl LVQVec {
-    pub fn reconstruct(&self) -> Vec<f32> {
-        let recontructed: Vec<f32> = self
-            .quantized_vec
-            .iter()
-            .map(|x| self.lower + ((*x as f32) * (self.upper - self.lower) / 255.0f32))
-            .collect();
-        recontructed
+    pub fn dist2other(&self, other: &Self) -> f32 {
+        let mut result: f32 = 0.0;
+        for (x_u8, y_u8) in self.quantized_vec.iter().zip(other.quantized_vec.iter()) {
+            let x_f32 = ((*x_u8 as f32) * self.delta) + self.lower;
+            let y_f32 = ((*y_u8 as f32) * other.delta) + other.lower;
+            result += (x_f32 - y_f32).powi(2);
+        }
+        result
     }
-}
-
-// Scalar quantization as defined in the paper
-pub fn Q(vector: &Vec<f32>, bits: usize) -> LVQVec {
-    let upper_bound: f32 = *vector
-        .iter()
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap();
-    let lower_bound: f32 = *vector
-        .iter()
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap();
-    let delta: f32 = (upper_bound - lower_bound) / (2.0f32.powi(bits as i32) - 1.0);
-
-    let quantized_inter: Vec<f32> = vector
-        .iter()
-        .map(|x| {
-            let mut buffer: f32 = (x - lower_bound) / delta;
-            buffer += 0.5f32;
-            buffer = buffer.floor() * delta;
-            buffer += lower_bound;
-            buffer
-        })
-        .collect();
-
-    let quantized: Vec<u8> = quantized_inter
-        .iter()
-        .map(|x| (255.0 * (x - lower_bound) / (upper_bound - lower_bound)) as u8)
-        .collect();
-
-    LVQVec {
-        upper: upper_bound,
-        lower: lower_bound,
-        quantized_vec: quantized,
-    }
-}
-
-pub fn minmax_scaler(vector: &Vec<f32>) -> Vec<u8> {
-    let upper_bound: f32 = *vector
-        .iter()
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap();
-    let lower_bound: f32 = *vector
-        .iter()
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap();
-
-    let quantized: Vec<u8> = vector
-        .iter()
-        .map(|x| (255.0 * (x - lower_bound) / (upper_bound - lower_bound)) as u8)
-        .collect();
-    quantized
 }
 
 #[cfg(test)]
@@ -137,9 +84,12 @@ mod tests {
     fn compressed_distance() {
         let mut rng = rand::thread_rng();
         let dim = 100;
+
         let vecs = gen_rand_vecs(dim, 10);
-        let compressed = Vec::from_iter(vecs.iter().map(|x| CompressedVec::new(x)));
+        let compressed = Vec::from_iter(vecs.iter().map(|x| LVQVec::new(x, 8)));
+
         let query = (0..dim).map(|_| rng.gen::<f32>()).collect();
+
         for comp in compressed {
             let dist = comp.dist2vec(&query);
             println!("Compressed: {dist}");
@@ -159,11 +109,11 @@ mod tests {
     fn compressed_distance_bench() {
         let mut rng = rand::thread_rng();
         let dim = 1000;
-        let n = 400_000;
+        let n = 40_000;
         println!("Generating random vectors");
         let vecs = gen_rand_vecs(dim, n);
         println!("Compressing vectors");
-        let compressed = Vec::from_iter(vecs.iter().map(|x| CompressedVec::new(x)));
+        let compressed = Vec::from_iter(vecs.iter().map(|x| LVQVec::new(x, 8)));
         let query = (0..dim).map(|_| rng.gen::<f32>()).collect();
 
         let start = Instant::now();
@@ -193,15 +143,13 @@ mod tests {
     #[test]
     fn quantization() {
         let mut rng = rand::thread_rng();
-        let test_vec = (0..100).map(|_| rng.gen::<f32>()).collect();
-        let quantized = Q(&test_vec, 8);
-        let q = &quantized.quantized_vec;
+        let test_vec = (0..10).map(|_| rng.gen::<f32>()).collect();
+        let quantized = LVQVec::new(&test_vec, 8);
+        // let q = &quantized.quantized_vec;
         let recontructed = quantized.reconstruct();
-        let minmaxscale = minmax_scaler(&test_vec);
 
-        println!("{:?}", test_vec);
-        println!("{:?}", quantized.quantized_vec);
-        println!("{:?}", minmaxscale);
-        println!("{:?}", recontructed);
+        println!("Original: {:?}", test_vec);
+        println!("Quantized: {:?}", quantized.quantized_vec);
+        println!("Reconstructed: {:?}", recontructed);
     }
 }

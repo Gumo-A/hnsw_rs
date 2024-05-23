@@ -3,7 +3,7 @@ use ndarray::{Array, ArrayView, Dim};
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
-use super::lvq::CompressedVec;
+use super::lvq::LVQVec;
 
 #[derive(Debug, Clone)]
 pub struct Payload {
@@ -13,7 +13,7 @@ pub struct Payload {
 #[derive(Debug, Clone)]
 pub struct Point {
     pub id: usize,
-    pub vector: CompressedVec,
+    pub vector: LVQVec,
     pub neighbors: HashSet<usize, BuildNoHashHasher<usize>>,
     pub payload: Option<Payload>,
 }
@@ -21,13 +21,13 @@ pub struct Point {
 impl Point {
     pub fn new(
         id: usize,
-        vector: CompressedVec,
+        vector: Vec<f32>,
         neighbors: Option<HashSet<usize, BuildNoHashHasher<usize>>>,
         payload: Option<Payload>,
     ) -> Point {
         Point {
             id,
-            vector,
+            vector: LVQVec::new(&vector, 8),
             neighbors: neighbors.unwrap_or(HashSet::with_hasher(BuildNoHashHasher::default())),
             payload,
         }
