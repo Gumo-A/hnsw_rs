@@ -23,7 +23,7 @@ impl Graph {
         let mut nodes = HashMap::new();
         for (node_id, node_data) in data.iter() {
             let neighbors = node_data.0.clone();
-            let point = Point::new(*node_id, node_data.1.clone(), Some(neighbors), None);
+            let point = Point::new(*node_id, node_data.1.clone(), Some(neighbors), None, true);
             nodes.insert(*node_id, point);
         }
 

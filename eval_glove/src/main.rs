@@ -36,7 +36,7 @@ fn main() -> std::io::Result<()> {
     let mut bencher = Bencher::new();
     index.build_index(embeddings, false, None, &mut bencher)?;
     index.print_params();
-    // print_benching(&bencher, "search_layer");
+    print_benching(&bencher, "search_layer");
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     // });
@@ -66,7 +66,7 @@ fn main() -> std::io::Result<()> {
         "Elapsed time: {}s",
         start.elapsed().as_secs() - end.elapsed().as_secs()
     );
-    std::thread::sleep(Duration::from_secs(10));
+    // std::thread::sleep(Duration::from_secs(10));
     Ok(())
 }
 

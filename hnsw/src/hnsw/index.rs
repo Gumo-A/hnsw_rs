@@ -19,6 +19,8 @@ use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
+use super::points::Vector;
+
 #[derive(Debug)]
 pub struct HNSW {
     params: Params,
@@ -77,7 +79,7 @@ impl HNSW {
         ep.insert(self.ep);
         let nb_layer = self.layers.len();
 
-        let vector = LVQVec::new(vector, 8);
+        let vector = Vector::Full(vector.clone());
 
         for layer_nb in (0..nb_layer).rev() {
             ep = self.search_layer(
@@ -95,8 +97,7 @@ impl HNSW {
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
-                let dist = l2_compressed(&vector, &layer_0.node(*x).vector);
-                // let dist = (dist * 10_000.0) as usize;
+                let dist = (&layer_0.node(*x).dist(&vector) * 10_000.0) as usize;
                 (dist, *x)
             }));
 
@@ -111,7 +112,7 @@ impl HNSW {
 
     fn step_1(
         &self,
-        vector: &LVQVec,
+        point: &Point,
         max_layer_nb: usize,
         current_layer_number: usize,
         bencher: &mut Bencher,
@@ -121,7 +122,7 @@ impl HNSW {
 
         for layer_nb in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
-            ep = self.search_layer(layer, vector, &mut ep, 1, &None, bencher);
+            ep = self.search_layer(layer, &point.vector, &mut ep, 1, &None, bencher);
         }
         ep
     }
@@ -214,7 +215,7 @@ impl HNSW {
     fn select_heuristic(
         &self,
         layer: &Graph,
-        vector: &LVQVec,
+        vector: &Vector,
         cands_idx: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         m: usize,
         extend_cands: bool,
@@ -276,7 +277,7 @@ impl HNSW {
         let max_layer_nb = self.layers.len() - 1;
 
         // bencher.start_timer("step_1");
-        let ep = self.step_1(&point.vector, max_layer_nb, current_layer_nb, bencher);
+        let ep = self.step_1(&point, max_layer_nb, current_layer_nb, bencher);
         // bencher.end_timer("step_1");
 
         // bencher.start_timer("step_2");
@@ -410,7 +411,13 @@ impl HNSW {
             Some(payloads) => (0..vectors.len())
                 .map(|idx| {
                     (
-                        Point::new(idx, vectors[idx].clone(), None, Some(payloads[idx].clone())),
+                        Point::new(
+                            idx,
+                            vectors[idx].clone(),
+                            None,
+                            Some(payloads[idx].clone()),
+                            true,
+                        ),
                         self.get_new_node_layer(),
                     )
                 })
@@ -418,13 +425,13 @@ impl HNSW {
             None => (0..vectors.len())
                 .map(|idx| {
                     (
-                        Point::new(idx, vectors[idx].clone(), None, None),
+                        Point::new(idx, vectors[idx].clone(), None, None, true),
                         self.get_new_node_layer(),
                     )
                 })
                 .collect(),
         };
-        drop(vectors);
+        // drop(vectors);
 
         let checkpoint_path =
             format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}_efcons{efcons}");
@@ -534,22 +541,22 @@ impl HNSW {
     fn sort_by_distance(
         &self,
         layer: &Graph,
-        vector: &LVQVec,
+        vector: &Vector,
         // others: &T,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> BTreeMap<usize, usize> {
         let result = others
             .iter()
-            .map(|idx| (l2_compressed(vector, &layer.node(*idx).vector), *idx));
+            .map(|idx| ((&layer.node(*idx).dist(vector) * 10_000.0) as usize, *idx));
         BTreeMap::from_iter(result)
     }
 
-    fn get_nearest<I>(&self, layer: &Graph, vector: &LVQVec, others: I) -> (usize, usize)
+    fn get_nearest<I>(&self, layer: &Graph, vector: &Vector, others: I) -> (usize, usize)
     where
         I: Iterator<Item = usize>,
     {
         others
-            .map(|idx| (l2_compressed(vector, &layer.node(idx).vector), idx))
+            .map(|idx| ((&layer.node(idx).dist(vector) * 10_000.0) as usize, idx))
             .min_by_key(|x| x.0)
             .unwrap()
     }
@@ -557,7 +564,7 @@ impl HNSW {
     fn search_layer(
         &self,
         layer: &Graph,
-        vector: &LVQVec,
+        vector: &Vector,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
         filters: &Option<Payload>,
@@ -565,13 +572,13 @@ impl HNSW {
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         bencher.start_timer("search_layer");
 
-        // bencher.start_timer("initial_sort");
+        bencher.start_timer("initial_sort");
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
-        // bencher.end_timer("initial_sort");
+        bencher.end_timer("initial_sort");
 
         while let Some((cand2q_dist, candidate)) = candidates.pop_first() {
-            // bencher.start_timer("while_1");
+            bencher.start_timer("while_1");
 
             let (furthest2q_dist, _) = selected.last_key_value().unwrap();
 
@@ -602,19 +609,18 @@ impl HNSW {
             //     break;
             // }
 
-            // bencher.end_timer("while_1");
+            bencher.end_timer("while_1");
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if ep.insert(neighbor) {
                     let neighbor_point = &layer.node(neighbor);
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 
-                    // bencher.start_timer("while_2_1");
-                    let n2q_dist = (neighbor_point.vector.dist2other(vector) * 10_000.0) as usize;
+                    bencher.start_timer("while_2_1");
+                    let n2q_dist = (neighbor_point.dist(vector) * 10_000.0) as usize;
+                    bencher.end_timer("while_2_1");
 
-                    // bencher.end_timer("while_2_1");
-
-                    // bencher.start_timer("while_2_2");
+                    bencher.start_timer("while_2_2");
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
                         let can_select = evaluate_filters(neighbor_point, filters);
@@ -626,14 +632,14 @@ impl HNSW {
                             selected.pop_last().unwrap();
                         }
                     }
-                    // bencher.end_timer("while_2_2");
+                    bencher.end_timer("while_2_2");
                 }
             }
         }
-        // bencher.start_timer("end_results");
+        bencher.start_timer("end_results");
         let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
         result.extend(selected.values());
-        // bencher.end_timer("end_results");
+        bencher.end_timer("end_results");
         bencher.end_timer("search_layer");
         result
     }
@@ -671,7 +677,10 @@ impl HNSW {
 
             for (node_id, node_data) in self.layers.get(&(layer_nb)).unwrap().nodes.iter() {
                 let neighbors: &HashSet<usize, BuildNoHashHasher<usize>> = &node_data.neighbors;
-                let vector: Vec<f32> = node_data.vector.reconstruct();
+                let vector: Vec<f32> = match &node_data.vector {
+                    Vector::Full(full) => full.clone(),
+                    Vector::Compressed(compressed) => compressed.reconstruct(),
+                };
                 layer_data.insert(*node_id, (neighbors, vector));
             }
             serde_json::to_writer(&mut writer, &layer_data)?;
