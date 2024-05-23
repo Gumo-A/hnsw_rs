@@ -1,3 +1,5 @@
+use unroll::unroll_for_loops;
+
 #[derive(Debug, Clone)]
 pub struct LVQVec {
     delta: f32,
@@ -42,6 +44,7 @@ impl LVQVec {
         recontructed
     }
 
+    #[unroll_for_loops]
     pub fn dist2vec(&self, vector: &Vec<f32>) -> f32 {
         let mut result: f32 = 0.0;
         for (x, y) in self.quantized_vec.iter().zip(vector) {
@@ -51,6 +54,7 @@ impl LVQVec {
         result
     }
 
+    #[unroll_for_loops]
     pub fn dist2other(&self, other: &Self) -> f32 {
         let mut result: f32 = 0.0;
         for (x_u8, y_u8) in self.quantized_vec.iter().zip(other.quantized_vec.iter()) {
