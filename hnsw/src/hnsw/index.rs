@@ -1,18 +1,16 @@
-use crate::helpers::bench::Bencher;
-use crate::helpers::data::split;
-use crate::helpers::distance::{l2_compressed, v2v_dist};
+// use crate::helpers::bench::Bencher;
+// use crate::helpers::data::split;
+// use crate::helpers::distance::{l2_compressed, v2v_dist};
 use crate::hnsw::graph::Graph;
-use crate::hnsw::lvq::LVQVec;
 use crate::hnsw::params::Params;
-use crate::hnsw::points::{Payload, PayloadType, Point};
+use crate::hnsw::points::Point;
 
 use indicatif::{ProgressBar, ProgressStyle};
-use ndarray::{s, Array, ArrayView, Dim};
 use nohash_hasher::BuildNoHashHasher;
-use parking_lot::RwLock;
+// use parking_lot::RwLock;
 use rand::Rng;
 use regex::Regex;
-use std::sync::Arc;
+// use std::sync::Arc;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{create_dir_all, File};
@@ -71,8 +69,7 @@ impl HNSW {
         vector: &Vec<f32>,
         n: usize,
         ef: usize,
-        filters: &Option<Payload>,
-        bencher: &mut Bencher,
+        // bencher: &mut Bencher,
     ) -> Vec<usize> {
         let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
             HashSet::with_hasher(BuildNoHashHasher::default());
@@ -87,13 +84,15 @@ impl HNSW {
                 &vector,
                 &mut ep,
                 1,
-                &None,
-                bencher,
+                // bencher,
             );
         }
 
         let layer_0 = &self.layers.get(&0).unwrap();
-        let neighbors = self.search_layer(layer_0, &vector, &mut ep, ef, filters, bencher);
+        let neighbors = self.search_layer(
+            layer_0, &vector, &mut ep, ef,
+            // bencher
+        );
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
@@ -115,14 +114,20 @@ impl HNSW {
         point: &Point,
         max_layer_nb: usize,
         current_layer_number: usize,
-        bencher: &mut Bencher,
+        // bencher: &mut Bencher,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
         let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
         ep.insert(self.ep);
 
         for layer_nb in (current_layer_number + 1..max_layer_nb + 1).rev() {
             let layer = &self.layers.get(&layer_nb).unwrap();
-            ep = self.search_layer(layer, &point.vector, &mut ep, 1, &None, bencher);
+            ep = self.search_layer(
+                layer,
+                &point.vector,
+                &mut ep,
+                1,
+                // bencher
+            );
         }
         ep
     }
@@ -132,7 +137,7 @@ impl HNSW {
         point: &Point,
         mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
         current_layer_number: usize,
-        bencher: &mut Bencher,
+        // bencher: &mut Bencher,
     ) -> HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>> {
         // bencher.start_timer("step_2");
         let mut insertion_results = HashMap::new();
@@ -147,9 +152,9 @@ impl HNSW {
                 &point.vector,
                 &mut ep,
                 self.params.ef_cons,
-                &None,
-                bencher,
+                // bencher
             );
+
             // bencher.end_timer("search_layer");
 
             // bencher.start_timer("heuristic");
@@ -263,7 +268,12 @@ impl HNSW {
         result
     }
 
-    pub fn insert(&mut self, point: &Point, level: Option<usize>, bencher: &mut Bencher) -> bool {
+    pub fn insert(
+        &mut self,
+        point: &mut Point,
+        level: Option<usize>,
+        // bencher: &mut Bencher,
+    ) -> bool {
         // bencher.start_timer("insert");
         if self.node_ids.contains(&point.id) {
             return false;
@@ -277,13 +287,24 @@ impl HNSW {
         let max_layer_nb = self.layers.len() - 1;
 
         // bencher.start_timer("step_1");
-        let ep = self.step_1(&point, max_layer_nb, current_layer_nb, bencher);
+        let ep = self.step_1(
+            &point,
+            max_layer_nb,
+            current_layer_nb,
+            // bencher
+        );
         // bencher.end_timer("step_1");
 
         // bencher.start_timer("step_2");
-        let insertion_results = self.step_2(&point, ep, current_layer_nb, bencher);
+        let insertion_results = self.step_2(
+            &point,
+            ep,
+            current_layer_nb,
+            // bencher
+        );
         // bencher.end_timer("step_2");
 
+        point.quantize();
         // bencher.start_timer("load_data");
         self.node_ids.insert(point.id);
         for (layer_nb, node_data) in insertion_results.iter() {
@@ -355,35 +376,36 @@ impl HNSW {
     //     }
     // }
 
-    fn write_batch(
-        &mut self,
-        batch: &Vec<(
-            usize,
-            HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>>,
-        )>,
-        points: &Vec<(Point, usize)>,
-    ) {
-        for (point_nb, batch_data) in batch.iter() {
-            for (layer_nb, node_data) in batch_data.iter() {
-                self.node_ids.extend(node_data.keys());
-                let layer = self.layers.get_mut(&layer_nb).unwrap();
-                for (node, neighbors) in node_data.iter() {
-                    let (point, _) = &points[*point_nb];
-                    layer.add_node(point);
-                    for old_neighbor in layer.neighbors(*node).clone() {
-                        // if neighbors.contains(&old_neighbor) {
-                        //     // neighbors.remove(&old_neighbor);
-                        //     continue;
-                        // }
-                        layer.remove_edge(*node, old_neighbor);
-                    }
-                    for neighbor in neighbors.iter() {
-                        layer.add_edge(*node, *neighbor);
-                    }
-                }
-            }
-        }
-    }
+    // fn write_batch(
+    //     &mut self,
+    //     batch: &Vec<(
+    //         usize,
+    //         HashMap<usize, HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>>,
+    //     )>,
+    //     points: &Vec<(Point, usize)>,
+    // ) {
+    //     for (point_nb, batch_data) in batch.iter() {
+    //         for (layer_nb, node_data) in batch_data.iter() {
+    //             self.node_ids.extend(node_data.keys());
+    //             let layer = self.layers.get_mut(&layer_nb).unwrap();
+    //             for (node, neighbors) in node_data.iter() {
+    //                 let (point, _) = &points[*point_nb];
+    //                 layer.add_node(point);
+    //                 for old_neighbor in layer.neighbors(*node).clone() {
+    //                     // if neighbors.contains(&old_neighbor) {
+    //                     //     // neighbors.remove(&old_neighbor);
+    //                     //     continue;
+    //                     // }
+    //                     layer.remove_edge(*node, old_neighbor);
+    //                 }
+    //                 for neighbor in neighbors.iter() {
+    //                     layer.add_edge(*node, *neighbor);
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+
     fn first_insert(&mut self, point: &Point) {
         assert_eq!(self.node_ids.len(), 0);
         assert_eq!(self.layers.len(), 0);
@@ -399,39 +421,23 @@ impl HNSW {
         &mut self,
         vectors: Vec<Vec<f32>>,
         checkpoint: bool,
-        payloads: Option<Vec<Payload>>,
-        bencher: &mut Bencher,
+        // bencher: &mut Bencher,
     ) -> std::io::Result<()> {
         let lim = vectors.len();
         let dim = self.params.dim;
         let m = self.params.m;
         let efcons = self.params.ef_cons;
 
-        let points: Vec<(Point, usize)> = match payloads {
-            Some(payloads) => (0..vectors.len())
-                .map(|idx| {
-                    (
-                        Point::new(
-                            idx,
-                            vectors[idx].clone(),
-                            None,
-                            Some(payloads[idx].clone()),
-                            true,
-                        ),
-                        self.get_new_node_layer(),
-                    )
-                })
-                .collect(),
-            None => (0..vectors.len())
-                .map(|idx| {
-                    (
-                        Point::new(idx, vectors[idx].clone(), None, None, true),
-                        self.get_new_node_layer(),
-                    )
-                })
-                .collect(),
-        };
-        // drop(vectors);
+        let mut points: Vec<(Point, usize)> = (0..vectors.len())
+            .map(|idx| {
+                (
+                    Point::new(idx, vectors[idx].clone(), None, true),
+                    self.get_new_node_layer(),
+                )
+            })
+            .collect();
+
+        drop(vectors);
 
         let checkpoint_path =
             format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}_efcons{efcons}");
@@ -449,8 +455,12 @@ impl HNSW {
         let nb_nodes = self.node_ids.len();
         let remaining = lim - nb_nodes;
         let bar = get_progress_bar(remaining, false);
-        for (point, level) in points.iter() {
-            let inserted = self.insert(point, Some(*level), bencher);
+        for (point, level) in points.iter_mut() {
+            let inserted = self.insert(
+                point,
+                Some(*level),
+                // bencher,
+            );
             if inserted {
                 bar.inc(1);
             } else {
@@ -567,22 +577,21 @@ impl HNSW {
         vector: &Vector,
         ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         ef: usize,
-        filters: &Option<Payload>,
-        bencher: &mut Bencher,
+        // bencher: &mut Bencher,
     ) -> HashSet<usize, BuildNoHashHasher<usize>> {
-        bencher.start_timer("search_layer");
+        // bencher.start_timer("search_layer");
 
-        bencher.start_timer("initial_sort");
+        // bencher.start_timer("initial_sort");
         let mut candidates = self.sort_by_distance(layer, vector, &ep);
         let mut selected = candidates.clone();
-        bencher.end_timer("initial_sort");
+        // bencher.end_timer("initial_sort");
 
         while let Some((cand2q_dist, candidate)) = candidates.pop_first() {
-            bencher.start_timer("while_1");
+            // bencher.start_timer("while_1");
 
             let (furthest2q_dist, _) = selected.last_key_value().unwrap();
 
-            if (&cand2q_dist > furthest2q_dist) & filters.is_none() {
+            if &cand2q_dist > furthest2q_dist {
                 break;
             }
 
@@ -609,38 +618,35 @@ impl HNSW {
             //     break;
             // }
 
-            bencher.end_timer("while_1");
+            // bencher.end_timer("while_1");
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if ep.insert(neighbor) {
                     let neighbor_point = &layer.node(neighbor);
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 
-                    bencher.start_timer("while_2_1");
+                    // bencher.start_timer("while_2_1");
                     let n2q_dist = (neighbor_point.dist(vector) * 10_000.0) as usize;
-                    bencher.end_timer("while_2_1");
+                    // bencher.end_timer("while_2_1");
 
-                    bencher.start_timer("while_2_2");
+                    // bencher.start_timer("while_2_2");
                     if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
                         candidates.insert(n2q_dist, neighbor);
-                        let can_select = evaluate_filters(neighbor_point, filters);
-                        if can_select {
-                            selected.insert(n2q_dist, neighbor);
-                        }
+                        selected.insert(n2q_dist, neighbor);
 
                         if selected.len() > ef {
                             selected.pop_last().unwrap();
                         }
                     }
-                    bencher.end_timer("while_2_2");
+                    // bencher.end_timer("while_2_2");
                 }
             }
         }
-        bencher.start_timer("end_results");
+        // bencher.start_timer("end_results");
         let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
         result.extend(selected.values());
-        bencher.end_timer("end_results");
-        bencher.end_timer("search_layer");
+        // bencher.end_timer("end_results");
+        // bencher.end_timer("search_layer");
         result
     }
 
@@ -810,49 +816,4 @@ fn get_progress_bar(remaining: usize, hidden: bool) -> ProgressBar {
                 .unwrap());
     bar.set_message(format!("Inserting vectors"));
     bar
-}
-
-fn evaluate_filters(point: &Point, filters: &Option<Payload>) -> bool {
-    match filters {
-        None => true,
-        Some(payload) => {
-            for (key, filter_payload) in payload.data.iter() {
-                if point.payload.as_ref().unwrap().data.contains_key(key) {
-                    let point_payload = point.payload.as_ref().unwrap().data.get(key).unwrap();
-                    match (point_payload, filter_payload) {
-                        (
-                            PayloadType::StringPayload(point_val),
-                            PayloadType::StringPayload(filter_val),
-                        ) => {
-                            if point_val != filter_val {
-                                return false;
-                            }
-                        }
-                        (
-                            PayloadType::BoolPayload(point_val),
-                            PayloadType::BoolPayload(filter_val),
-                        ) => {
-                            if *point_val != *filter_val {
-                                return false;
-                            }
-                        }
-                        (
-                            PayloadType::NumericPayload(point_val),
-                            PayloadType::NumericPayload(filter_val),
-                        ) => {
-                            if point_val != filter_val {
-                                return false;
-                            }
-                        }
-                        (_, _) => {
-                            return false;
-                        }
-                    }
-                } else {
-                    return false;
-                }
-            }
-            true
-        }
-    }
 }

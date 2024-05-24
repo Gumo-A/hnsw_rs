@@ -8,6 +8,7 @@ pub struct LVQVec {
 }
 
 impl LVQVec {
+    // Quantizes an already mean-centered vector
     pub fn new(vector: &Vec<f32>, bits: usize) -> LVQVec {
         let upper_bound: f32 = *vector
             .iter()
@@ -51,7 +52,7 @@ impl LVQVec {
             let decompressed = ((*x as f32) * self.delta) + self.lower;
             result += (decompressed - y).powi(2);
         }
-        result
+        result.sqrt()
     }
 
     #[unroll_for_loops]
@@ -62,7 +63,7 @@ impl LVQVec {
             let y_f32 = ((*y_u8 as f32) * other.delta) + other.lower;
             result += (x_f32 - y_f32).powi(2);
         }
-        result
+        result.sqrt()
     }
 }
 

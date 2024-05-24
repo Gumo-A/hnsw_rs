@@ -3,10 +3,10 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-// use hnsw::helpers::data::load_bf_data;
+use hnsw::helpers::args::parse_args_eval;
+use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::index::HNSW;
-use hnsw::{helpers::args::parse_args_eval, hnsw::points::Payload};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -23,6 +23,15 @@ fn main() -> std::io::Result<()> {
     };
 
     let (_, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
+
+    let mut mu: Vec<f32> = Vec::from_iter((0..dim).map(|_| 0.0));
+    for vector in embeddings.iter() {
+        mu.iter_mut().zip(vector).for_each(|(mean, val)| {
+            *mean += val;
+        });
+    }
+    mu.iter_mut().for_each(|mean| *mean /= lim as f32);
+
     // let bf_data = match load_bf_data(dim, lim) {
     //     Ok(data) => data,
     //     Err(err) => {
@@ -33,14 +42,23 @@ fn main() -> std::io::Result<()> {
 
     // let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
     let mut index = HNSW::new(m, None, dim);
-    let mut bencher = Bencher::new();
-    index.build_index(embeddings, false, None, &mut bencher)?;
+    // let mut bencher = Bencher::new();
+    index.build_index(
+        embeddings.clone(),
+        false,
+        // &mu, // &mut bencher
+    )?;
     index.print_params();
-    print_benching(&bencher, "search_layer");
+    let end = Instant::now();
+    println!(
+        "Elapsed time: {}s",
+        start.elapsed().as_secs() - end.elapsed().as_secs()
+    );
+    // print_benching(&bencher, "search_layer");
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     // });
-    // estimate_recall(&mut index, &embeddings, &bf_data, &None);
+    // estimate_recall(&mut index, &embeddings, &bf_data);
 
     // for (i, idx) in bf_data.keys().enumerate() {
     //     if i > 3 {
@@ -61,11 +79,6 @@ fn main() -> std::io::Result<()> {
     //         .collect();
     //     println!("{:?}", true_nns);
     // }
-    let end = Instant::now();
-    println!(
-        "Elapsed time: {}s",
-        start.elapsed().as_secs() - end.elapsed().as_secs()
-    );
     // std::thread::sleep(Duration::from_secs(10));
     Ok(())
 }
@@ -84,7 +97,6 @@ fn estimate_recall(
     index: &mut HNSW,
     embeddings: &Vec<Vec<f32>>,
     bf_data: &HashMap<usize, Vec<usize>>,
-    filters: &Option<Payload>,
 ) {
     let mut rng = rand::thread_rng();
     let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);
@@ -99,14 +111,17 @@ fn estimate_recall(
         );
         bar.set_message(format!("Finding ANNs ef={ef}"));
 
-        let mut bencher = Bencher::new();
+        // let mut bencher = Bencher::new();
         let mut recall_10: HashMap<usize, f32> = HashMap::new();
         for _ in (0..sample_size).enumerate() {
             bar.inc(1);
 
             let idx = rng.gen_range(0..(index.node_ids.len()));
             let vector = &embeddings[idx];
-            let anns = index.ann_by_vector(&vector, 10, ef, &filters, &mut bencher);
+            let anns = index.ann_by_vector(
+                &vector, 10, ef,
+                // &mut bencher
+            );
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()

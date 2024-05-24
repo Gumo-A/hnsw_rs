@@ -12,16 +12,10 @@ pub enum Vector {
 }
 
 #[derive(Debug, Clone)]
-pub struct Payload {
-    pub data: HashMap<String, PayloadType>,
-}
-
-#[derive(Debug, Clone)]
 pub struct Point {
     pub id: usize,
     pub vector: Vector,
     pub neighbors: HashSet<usize, BuildNoHashHasher<usize>>,
-    pub payload: Option<Payload>,
 }
 
 impl Point {
@@ -29,7 +23,6 @@ impl Point {
         id: usize,
         vector: Vec<f32>,
         neighbors: Option<HashSet<usize, BuildNoHashHasher<usize>>>,
-        payload: Option<Payload>,
         quantize: bool,
     ) -> Point {
         let vector_stored = if quantize {
@@ -41,7 +34,6 @@ impl Point {
             id,
             vector: vector_stored,
             neighbors: neighbors.unwrap_or(HashSet::with_hasher(BuildNoHashHasher::default())),
-            payload,
         }
     }
 
@@ -49,27 +41,38 @@ impl Point {
         match &self.vector {
             Vector::Compressed(compressed_self) => match other {
                 Vector::Compressed(compressed_other) => {
+                    // println!("Q 2 Q");
                     compressed_self.dist2other(&compressed_other)
                 }
-                Vector::Full(full_other) => compressed_self.dist2vec(&full_other),
+                Vector::Full(full_other) => {
+                    // println!("Q 2 F");
+                    compressed_self.dist2vec(&full_other)
+                }
             },
             Vector::Full(full_self) => match other {
-                Vector::Compressed(compressed_other) => compressed_other.dist2vec(&full_self),
+                Vector::Compressed(compressed_other) => {
+                    // println!("F 2 Q");
+                    compressed_other.dist2vec(&full_self)
+                }
                 Vector::Full(full_other) => {
+                    // println!("F 2 F");
                     let mut result = 0.0;
                     for (x, y) in full_self.iter().zip(full_other) {
                         result += (x - y).powi(2);
                     }
-                    result
+                    result.sqrt()
                 }
             },
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum PayloadType {
-    StringPayload(String),
-    BoolPayload(bool),
-    NumericPayload(f32),
+    pub fn quantize(&mut self) {
+        let centered: Vec<f32> = match &self.vector {
+            Vector::Full(full) => full.clone(),
+            Vector::Compressed(_) => {
+                return ();
+            }
+        };
+        self.vector = Vector::Compressed(LVQVec::new(&centered, 8));
+    }
 }
