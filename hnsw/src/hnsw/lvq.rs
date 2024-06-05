@@ -1,3 +1,5 @@
+const CHUNK_SIZE: usize = 8;
+
 #[derive(Debug, Clone)]
 pub struct LVQVec {
     delta: f32,
@@ -43,96 +45,39 @@ impl LVQVec {
         recontructed
     }
 
-    // TODO: rewrite with iterators and .chunks_exact()
-    // see docs of this method to see why it is better for
-    // the compiler
     // Have to read this: https://www.reidatcheson.com/hpc/architecture/performance/rust/c++/2019/10/19/measure-cache.html
     pub fn dist2vec(&self, vector: &Vec<f32>) -> f32 {
-        let len = vector.len();
-        let mut xs = &self.quantized_vec[..len];
-        let mut ys = &vector[..len];
-        let mut result: f32 = 0.0;
-        let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) =
-            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut acc = [0.0f32; CHUNK_SIZE];
+        let chunks_iter = self
+            .quantized_vec
+            .chunks_exact(CHUNK_SIZE)
+            .zip(vector.chunks_exact(CHUNK_SIZE));
 
-        while xs.len() >= 8 {
-            p0 = p0 + (((xs[0] as f32) * self.delta + self.lower) * ys[0]);
-            p1 = p1 + (((xs[1] as f32) * self.delta + self.lower) * ys[1]);
-            p2 = p2 + (((xs[2] as f32) * self.delta + self.lower) * ys[2]);
-            p3 = p3 + (((xs[3] as f32) * self.delta + self.lower) * ys[3]);
-            p4 = p4 + (((xs[4] as f32) * self.delta + self.lower) * ys[4]);
-            p5 = p5 + (((xs[5] as f32) * self.delta + self.lower) * ys[5]);
-            p6 = p6 + (((xs[6] as f32) * self.delta + self.lower) * ys[6]);
-            p7 = p7 + (((xs[7] as f32) * self.delta + self.lower) * ys[7]);
-
-            xs = &xs[8..];
-            ys = &ys[8..];
-        }
-        result = result + (p0 + p4);
-        result = result + (p1 + p5);
-        result = result + (p2 + p6);
-        result = result + (p3 + p7);
-
-        for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
-            if i >= 7 {
-                break;
+        for (chunkx, chunky) in chunks_iter {
+            let acc_iter = chunkx.iter().zip(chunky);
+            for (idx, (x, y)) in acc_iter.enumerate() {
+                acc[idx] += ((*x as f32) * self.delta + self.lower) * y;
             }
-            result = result + (((x as f32) * self.delta + self.lower) * y);
         }
-        result
+        acc.iter().sum()
     }
 
     pub fn dist2other(&self, other: &Self) -> f32 {
-        let len = self.quantized_vec.len();
-        let mut xs = &self.quantized_vec[..len];
-        let mut ys = &other.quantized_vec[..len];
-        let mut result: f32 = 0.0;
-        let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) =
-            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut acc = [0.0f32; CHUNK_SIZE];
+        let chunks_iter = self
+            .quantized_vec
+            .chunks_exact(CHUNK_SIZE)
+            .zip(other.quantized_vec.chunks_exact(CHUNK_SIZE));
 
-        while xs.len() >= 8 {
-            p0 = p0
-                + (((xs[0] as f32) * self.delta + self.lower)
-                    * ((ys[0] as f32) * other.delta + other.delta));
-            p1 = p1
-                + (((xs[1] as f32) * self.delta + self.lower)
-                    * ((ys[1] as f32) * other.delta + other.delta));
-            p2 = p2
-                + (((xs[2] as f32) * self.delta + self.lower)
-                    * ((ys[2] as f32) * other.delta + other.delta));
-            p3 = p3
-                + (((xs[3] as f32) * self.delta + self.lower)
-                    * ((ys[3] as f32) * other.delta + other.delta));
-            p4 = p4
-                + (((xs[4] as f32) * self.delta + self.lower)
-                    * ((ys[4] as f32) * other.delta + other.delta));
-            p5 = p5
-                + (((xs[5] as f32) * self.delta + self.lower)
-                    * ((ys[5] as f32) * other.delta + other.delta));
-            p6 = p6
-                + (((xs[6] as f32) * self.delta + self.lower)
-                    * ((ys[6] as f32) * other.delta + other.delta));
-            p7 = p7
-                + (((xs[7] as f32) * self.delta + self.lower)
-                    * ((ys[7] as f32) * other.delta + other.delta));
-
-            xs = &xs[8..];
-            ys = &ys[8..];
-        }
-        result = result + (p0 + p4);
-        result = result + (p1 + p5);
-        result = result + (p2 + p6);
-        result = result + (p3 + p7);
-
-        for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
-            if i >= 7 {
-                break;
+        for (chunkx, chunky) in chunks_iter {
+            let acc_iter = chunkx.iter().zip(chunky);
+            for (idx, (x, y)) in acc_iter.enumerate() {
+                let x_f32 = (*x as f32) * self.delta + self.lower;
+                let y_f32 = (*y as f32) * other.delta + other.lower;
+                acc[idx] += x_f32 * y_f32;
             }
-            result = result
-                + (((x as f32) * self.delta + self.lower)
-                    * ((y as f32) * other.delta + other.delta));
         }
-        result
+        acc.iter().sum()
     }
 }
 

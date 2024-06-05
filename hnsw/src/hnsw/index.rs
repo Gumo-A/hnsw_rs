@@ -431,7 +431,7 @@ impl HNSW {
         let mut points: Vec<(Point, usize)> = (0..vectors.len())
             .map(|idx| {
                 (
-                    Point::new(idx, vectors[idx].clone(), None, true),
+                    Point::new(idx, vectors[idx].clone(), None, false),
                     self.get_new_node_layer(),
                 )
             })
