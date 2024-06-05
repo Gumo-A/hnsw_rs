@@ -158,3 +158,56 @@ mod tests {
         println!("Reconstructed: {:?}", recontructed);
     }
 }
+
+/// This comes directly from the ndarray crate
+/// TODO: use this function to improve our current dist calculation function
+/// Compute the dot product.
+///
+/// `xs` and `ys` must be the same length
+pub fn unrolled_dot<A>(xs: &[A], ys: &[A]) -> A
+where
+    A: LinalgScalar,
+{
+    debug_assert_eq!(xs.len(), ys.len());
+    // eightfold unrolled so that floating point can be vectorized
+    // (even with strict floating point accuracy semantics)
+    let len = cmp::min(xs.len(), ys.len());
+    let mut xs = &xs[..len];
+    let mut ys = &ys[..len];
+    let mut sum = A::zero();
+    let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) = (
+        A::zero(),
+        A::zero(),
+        A::zero(),
+        A::zero(),
+        A::zero(),
+        A::zero(),
+        A::zero(),
+        A::zero(),
+    );
+    while xs.len() >= 8 {
+        p0 = p0 + xs[0] * ys[0];
+        p1 = p1 + xs[1] * ys[1];
+        p2 = p2 + xs[2] * ys[2];
+        p3 = p3 + xs[3] * ys[3];
+        p4 = p4 + xs[4] * ys[4];
+        p5 = p5 + xs[5] * ys[5];
+        p6 = p6 + xs[6] * ys[6];
+        p7 = p7 + xs[7] * ys[7];
+
+        xs = &xs[8..];
+        ys = &ys[8..];
+    }
+    sum = sum + (p0 + p4);
+    sum = sum + (p1 + p5);
+    sum = sum + (p2 + p6);
+    sum = sum + (p3 + p7);
+
+    for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
+        if i >= 7 {
+            break;
+        }
+        sum = sum + x * y;
+    }
+    sum
+}
