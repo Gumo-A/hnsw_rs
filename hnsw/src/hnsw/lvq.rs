@@ -1,5 +1,3 @@
-use unroll::unroll_for_loops;
-
 #[derive(Debug, Clone)]
 pub struct LVQVec {
     delta: f32,
@@ -45,25 +43,96 @@ impl LVQVec {
         recontructed
     }
 
-    #[unroll_for_loops]
+    // TODO: rewrite with iterators and .chunks_exact()
+    // see docs of this method to see why it is better for
+    // the compiler
+    // Have to read this: https://www.reidatcheson.com/hpc/architecture/performance/rust/c++/2019/10/19/measure-cache.html
     pub fn dist2vec(&self, vector: &Vec<f32>) -> f32 {
+        let len = vector.len();
+        let mut xs = &self.quantized_vec[..len];
+        let mut ys = &vector[..len];
         let mut result: f32 = 0.0;
-        for (x, y) in self.quantized_vec.iter().zip(vector) {
-            let decompressed = ((*x as f32) * self.delta) + self.lower;
-            result += (decompressed - y).powi(2);
+        let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) =
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+
+        while xs.len() >= 8 {
+            p0 = p0 + (((xs[0] as f32) * self.delta + self.lower) * ys[0]);
+            p1 = p1 + (((xs[1] as f32) * self.delta + self.lower) * ys[1]);
+            p2 = p2 + (((xs[2] as f32) * self.delta + self.lower) * ys[2]);
+            p3 = p3 + (((xs[3] as f32) * self.delta + self.lower) * ys[3]);
+            p4 = p4 + (((xs[4] as f32) * self.delta + self.lower) * ys[4]);
+            p5 = p5 + (((xs[5] as f32) * self.delta + self.lower) * ys[5]);
+            p6 = p6 + (((xs[6] as f32) * self.delta + self.lower) * ys[6]);
+            p7 = p7 + (((xs[7] as f32) * self.delta + self.lower) * ys[7]);
+
+            xs = &xs[8..];
+            ys = &ys[8..];
         }
-        result.sqrt()
+        result = result + (p0 + p4);
+        result = result + (p1 + p5);
+        result = result + (p2 + p6);
+        result = result + (p3 + p7);
+
+        for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
+            if i >= 7 {
+                break;
+            }
+            result = result + (((x as f32) * self.delta + self.lower) * y);
+        }
+        result
     }
 
-    #[unroll_for_loops]
     pub fn dist2other(&self, other: &Self) -> f32 {
+        let len = self.quantized_vec.len();
+        let mut xs = &self.quantized_vec[..len];
+        let mut ys = &other.quantized_vec[..len];
         let mut result: f32 = 0.0;
-        for (x_u8, y_u8) in self.quantized_vec.iter().zip(other.quantized_vec.iter()) {
-            let x_f32 = ((*x_u8 as f32) * self.delta) + self.lower;
-            let y_f32 = ((*y_u8 as f32) * other.delta) + other.lower;
-            result += (x_f32 - y_f32).powi(2);
+        let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) =
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+
+        while xs.len() >= 8 {
+            p0 = p0
+                + (((xs[0] as f32) * self.delta + self.lower)
+                    * ((ys[0] as f32) * other.delta + other.delta));
+            p1 = p1
+                + (((xs[1] as f32) * self.delta + self.lower)
+                    * ((ys[1] as f32) * other.delta + other.delta));
+            p2 = p2
+                + (((xs[2] as f32) * self.delta + self.lower)
+                    * ((ys[2] as f32) * other.delta + other.delta));
+            p3 = p3
+                + (((xs[3] as f32) * self.delta + self.lower)
+                    * ((ys[3] as f32) * other.delta + other.delta));
+            p4 = p4
+                + (((xs[4] as f32) * self.delta + self.lower)
+                    * ((ys[4] as f32) * other.delta + other.delta));
+            p5 = p5
+                + (((xs[5] as f32) * self.delta + self.lower)
+                    * ((ys[5] as f32) * other.delta + other.delta));
+            p6 = p6
+                + (((xs[6] as f32) * self.delta + self.lower)
+                    * ((ys[6] as f32) * other.delta + other.delta));
+            p7 = p7
+                + (((xs[7] as f32) * self.delta + self.lower)
+                    * ((ys[7] as f32) * other.delta + other.delta));
+
+            xs = &xs[8..];
+            ys = &ys[8..];
         }
-        result.sqrt()
+        result = result + (p0 + p4);
+        result = result + (p1 + p5);
+        result = result + (p2 + p6);
+        result = result + (p3 + p7);
+
+        for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
+            if i >= 7 {
+                break;
+            }
+            result = result
+                + (((x as f32) * self.delta + self.lower)
+                    * ((y as f32) * other.delta + other.delta));
+        }
+        result
     }
 }
 
@@ -76,7 +145,7 @@ mod tests {
     fn gen_rand_vecs(dim: usize, n: usize) -> Vec<Vec<f32>> {
         let mut rng = rand::thread_rng();
         let mut vecs = vec![];
-        for i in 0..n {
+        for _ in 0..n {
             vecs.push((0..dim).map(|_| rng.gen::<f32>()).collect())
         }
         vecs
@@ -102,7 +171,8 @@ mod tests {
         for vector in vecs {
             let mut dist: f32 = 0.0;
             for (x, y) in vector.iter().zip(&query) {
-                dist += (x - y).powi(2);
+                dist += x * y;
+                // dist += (x - y).powi(2);
             }
             println!("Full precision: {dist}");
         }
@@ -157,57 +227,4 @@ mod tests {
         println!("Quantized: {:?}", quantized.quantized_vec);
         println!("Reconstructed: {:?}", recontructed);
     }
-}
-
-/// This comes directly from the ndarray crate
-/// TODO: use this function to improve our current dist calculation function
-/// Compute the dot product.
-///
-/// `xs` and `ys` must be the same length
-pub fn unrolled_dot<A>(xs: &[A], ys: &[A]) -> A
-where
-    A: LinalgScalar,
-{
-    debug_assert_eq!(xs.len(), ys.len());
-    // eightfold unrolled so that floating point can be vectorized
-    // (even with strict floating point accuracy semantics)
-    let len = cmp::min(xs.len(), ys.len());
-    let mut xs = &xs[..len];
-    let mut ys = &ys[..len];
-    let mut sum = A::zero();
-    let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) = (
-        A::zero(),
-        A::zero(),
-        A::zero(),
-        A::zero(),
-        A::zero(),
-        A::zero(),
-        A::zero(),
-        A::zero(),
-    );
-    while xs.len() >= 8 {
-        p0 = p0 + xs[0] * ys[0];
-        p1 = p1 + xs[1] * ys[1];
-        p2 = p2 + xs[2] * ys[2];
-        p3 = p3 + xs[3] * ys[3];
-        p4 = p4 + xs[4] * ys[4];
-        p5 = p5 + xs[5] * ys[5];
-        p6 = p6 + xs[6] * ys[6];
-        p7 = p7 + xs[7] * ys[7];
-
-        xs = &xs[8..];
-        ys = &ys[8..];
-    }
-    sum = sum + (p0 + p4);
-    sum = sum + (p1 + p5);
-    sum = sum + (p2 + p6);
-    sum = sum + (p3 + p7);
-
-    for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
-        if i >= 7 {
-            break;
-        }
-        sum = sum + x * y;
-    }
-    sum
 }
