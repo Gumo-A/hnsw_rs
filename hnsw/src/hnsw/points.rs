@@ -1,7 +1,6 @@
-use crate::helpers::distance::norm_vector;
-use ndarray::{Array, ArrayView, Dim};
+// use crate::helpers::distance::norm_vector;
 use nohash_hasher::BuildNoHashHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use super::lvq::LVQVec;
 
@@ -9,6 +8,12 @@ use super::lvq::LVQVec;
 pub enum Vector {
     Compressed(LVQVec),
     Full(Vec<f32>),
+}
+
+#[derive(Debug, Clone)]
+pub enum Points {
+    Empty,
+    Collection(Vec<Point>),
 }
 
 #[derive(Debug, Clone)]
@@ -37,9 +42,9 @@ impl Point {
         }
     }
 
-    pub fn dist(&self, other: &Vector) -> f32 {
+    pub fn dist2vec(&self, other_vec: &Vector) -> f32 {
         match &self.vector {
-            Vector::Compressed(compressed_self) => match other {
+            Vector::Compressed(compressed_self) => match other_vec {
                 Vector::Compressed(compressed_other) => {
                     // println!("Q 2 Q");
                     compressed_self.dist2other(&compressed_other)
@@ -49,7 +54,7 @@ impl Point {
                     compressed_self.dist2vec(&full_other)
                 }
             },
-            Vector::Full(full_self) => match other {
+            Vector::Full(full_self) => match other_vec {
                 Vector::Compressed(compressed_other) => {
                     // println!("F 2 Q");
                     compressed_other.dist2vec(&full_self)

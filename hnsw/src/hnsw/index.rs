@@ -17,10 +17,11 @@ use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
-use super::points::Vector;
+use super::points::{Points, Vector};
 
 #[derive(Debug)]
 pub struct HNSW {
+    points: Points,
     params: Params,
     ep: usize,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
@@ -32,6 +33,7 @@ impl HNSW {
     pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> HNSW {
         let params = Params::from_m_efcons(m, ef_cons.unwrap_or(2 * m), dim);
         HNSW {
+            points: Points::Empty,
             params,
             ep: 0,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
@@ -42,6 +44,7 @@ impl HNSW {
 
     pub fn from_params(params: Params) -> HNSW {
         HNSW {
+            points: Points::Empty,
             params,
             ep: 0,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
@@ -96,7 +99,7 @@ impl HNSW {
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
-                let dist = (&layer_0.node(*x).dist(&vector) * 10_000.0) as usize;
+                let dist = (&layer_0.node(*x).dist2vec(&vector) * 10_000.0) as usize;
                 (dist, *x)
             }));
 
@@ -555,9 +558,12 @@ impl HNSW {
         // others: &T,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> BTreeMap<usize, usize> {
-        let result = others
-            .iter()
-            .map(|idx| ((&layer.node(*idx).dist(vector) * 10_000.0) as usize, *idx));
+        let result = others.iter().map(|idx| {
+            (
+                (&layer.node(*idx).dist2vec(vector) * 10_000.0) as usize,
+                *idx,
+            )
+        });
         BTreeMap::from_iter(result)
     }
 
@@ -566,7 +572,7 @@ impl HNSW {
         I: Iterator<Item = usize>,
     {
         others
-            .map(|idx| ((&layer.node(idx).dist(vector) * 10_000.0) as usize, idx))
+            .map(|idx| ((&layer.node(idx).dist2vec(vector) * 10_000.0) as usize, idx))
             .min_by_key(|x| x.0)
             .unwrap()
     }
@@ -626,7 +632,7 @@ impl HNSW {
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 
                     // bencher.start_timer("while_2_1");
-                    let n2q_dist = (neighbor_point.dist(vector) * 10_000.0) as usize;
+                    let n2q_dist = (neighbor_point.dist2vec(vector) * 10_000.0) as usize;
                     // bencher.end_timer("while_2_1");
 
                     // bencher.start_timer("while_2_2");
