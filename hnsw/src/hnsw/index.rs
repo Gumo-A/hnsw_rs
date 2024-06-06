@@ -9,28 +9,33 @@ use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::BuildNoHashHasher;
 // use parking_lot::RwLock;
 use rand::Rng;
-use regex::Regex;
+// use regex::Regex;
 // use std::sync::Arc;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{create_dir_all, File};
-use std::io::{BufReader, BufWriter, Write};
-use std::path::Path;
+// use std::fs::{create_dir_all, File};
+// use std::io::{BufReader, BufWriter, Write};
+// use std::path::Path;
 
 use super::points::{Points, Vector};
 
+// TODO: integrate "node_ids" attribute into the "points" attribute
+//       I have to give each point an ID and attribute it to them.
 #[derive(Debug)]
-pub struct HNSW {
+pub struct HNSW<'a> {
     points: Points,
     params: Params,
     ep: usize,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
-    pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
+    pub layers: HashMap<usize, Graph<'a>, BuildNoHashHasher<usize>>,
     // pub bencher: Bencher,
 }
 
-impl HNSW {
-    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> HNSW {
+impl<'a, 'b> HNSW<'a>
+where
+    'a: 'b,
+{
+    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> HNSW<'a> {
         let params = Params::from_m_efcons(m, ef_cons.unwrap_or(2 * m), dim);
         HNSW {
             points: Points::Empty,
@@ -42,7 +47,7 @@ impl HNSW {
         }
     }
 
-    pub fn from_params(params: Params) -> HNSW {
+    pub fn from_params(params: Params) -> HNSW<'a> {
         HNSW {
             points: Points::Empty,
             params,
@@ -272,20 +277,17 @@ impl HNSW {
     }
 
     pub fn insert(
-        &mut self,
-        point: &mut Point,
-        level: Option<usize>,
+        &'a mut self,
+        point_idx: usize,
+        level: usize,
         // bencher: &mut Bencher,
     ) -> bool {
         // bencher.start_timer("insert");
+
+        let point = self.points.get_point(point_idx);
         if self.node_ids.contains(&point.id) {
             return false;
         }
-
-        let current_layer_nb: usize = match level {
-            Some(level) => level,
-            None => self.get_new_node_layer(),
-        };
 
         let max_layer_nb = self.layers.len() - 1;
 
@@ -293,21 +295,19 @@ impl HNSW {
         let ep = self.step_1(
             &point,
             max_layer_nb,
-            current_layer_nb,
+            level,
             // bencher
         );
         // bencher.end_timer("step_1");
 
         // bencher.start_timer("step_2");
         let insertion_results = self.step_2(
-            &point,
-            ep,
-            current_layer_nb,
+            &point, ep, level,
             // bencher
         );
         // bencher.end_timer("step_2");
 
-        point.quantize();
+        // point.quantize();
         // bencher.start_timer("load_data");
         self.node_ids.insert(point.id);
         for (layer_nb, node_data) in insertion_results.iter() {
@@ -324,8 +324,8 @@ impl HNSW {
                 }
             }
         }
-        if current_layer_nb > max_layer_nb {
-            for layer_nb in max_layer_nb + 1..current_layer_nb + 1 {
+        if level > max_layer_nb {
+            for layer_nb in max_layer_nb + 1..level + 1 {
                 let mut layer = Graph::new();
                 layer.add_node(point);
                 self.layers.insert(layer_nb, layer);
@@ -409,59 +409,36 @@ impl HNSW {
     //     }
     // }
 
-    fn first_insert(&mut self, point: &Point) {
+    fn store_vectors(&mut self, vectors: Vec<Vec<f32>>) {
+        let points: Vec<Point> = (0..vectors.len())
+            .map(|idx| Point::new(idx, vectors[idx].clone(), false))
+            .collect();
+        self.points.extend_or_fill(points)
+    }
+
+    pub fn build_index(
+        &'a mut self,
+        vectors: Vec<Vec<f32>>,
+        // bencher: &mut Bencher,
+    ) {
+        let lim = vectors.len();
+        self.store_vectors(vectors);
+
         assert_eq!(self.node_ids.len(), 0);
         assert_eq!(self.layers.len(), 0);
 
-        let mut layer = Graph::new();
+        let point: &Point = self.points.get_point(0);
+        let mut layer = Graph::<'a>::new();
         layer.add_node(point);
         self.layers.insert(0, layer);
         self.node_ids.insert(point.id);
         self.ep = point.id;
-    }
 
-    pub fn build_index(
-        &mut self,
-        vectors: Vec<Vec<f32>>,
-        checkpoint: bool,
-        // bencher: &mut Bencher,
-    ) -> std::io::Result<()> {
-        let lim = vectors.len();
-        let dim = self.params.dim;
-        let m = self.params.m;
-        let efcons = self.params.ef_cons;
-
-        let mut points: Vec<(Point, usize)> = (0..vectors.len())
-            .map(|idx| {
-                (
-                    Point::new(idx, vectors[idx].clone(), None, false),
-                    self.get_new_node_layer(),
-                )
-            })
-            .collect();
-
-        drop(vectors);
-
-        let checkpoint_path =
-            format!("/home/gamal/indices/checkpoint_dim{dim}_lim{lim}_m{m}_efcons{efcons}");
-        let mut copy_path = checkpoint_path.clone();
-        copy_path.push_str("_copy");
-
-        if checkpoint & Path::new(&checkpoint_path).exists() {
-            self.load(&checkpoint_path)?;
-            self.print_params();
-        } else {
-            println!("No checkpoint was loaded, building self from scratch.");
-            self.first_insert(&points[0].0);
-        };
-
-        let nb_nodes = self.node_ids.len();
-        let remaining = lim - nb_nodes;
-        let bar = get_progress_bar(remaining, false);
-        for (point, level) in points.iter_mut() {
+        let bar = get_progress_bar(lim, false);
+        for point_idx in 0..lim {
             let inserted = self.insert(
-                point,
-                Some(*level),
+                point_idx,
+                get_new_node_layer(self.params.ml),
                 // bencher,
             );
             if inserted {
@@ -469,22 +446,7 @@ impl HNSW {
             } else {
                 bar.reset_eta();
             }
-            if checkpoint {
-                if ((point.id != 0) & (point.id % 10_000 == 0) & (inserted)) | (point.id == lim - 1)
-                {
-                    println!("Checkpointing in {checkpoint_path}");
-                    self.save(&checkpoint_path)?;
-                    self.save(&copy_path)?;
-                    bar.reset_eta();
-                }
-            }
         }
-        self.save(
-            format!("/home/gamal/indices/eval_glove_dim{dim}_lim{lim}_m{m}_efcons{efcons}")
-                .as_str(),
-        )?;
-
-        Ok(())
     }
 
     // pub fn build_index_par(
@@ -545,11 +507,6 @@ impl HNSW {
     //     drop(index_ref);
     //     Arc::try_unwrap(index).unwrap().into_inner()
     // }
-
-    fn get_new_node_layer(&self) -> usize {
-        let mut rng = rand::thread_rng();
-        (-rng.gen::<f32>().log(std::f32::consts::E) * self.params.ml).floor() as usize
-    }
 
     fn sort_by_distance(
         &self,
@@ -656,157 +613,159 @@ impl HNSW {
         result
     }
 
-    pub fn save(&self, index_dir: &str) -> std::io::Result<()> {
-        let path = std::path::Path::new(index_dir);
-        create_dir_all(path)?;
+    // TODO: see todo in graph.rs
+    // pub fn save(&self, index_dir: &str) -> std::io::Result<()> {
+    //     let path = std::path::Path::new(index_dir);
+    //     create_dir_all(path)?;
 
-        let nodes_file = File::create(path.join("node_ids.json"))?;
-        let mut writer = BufWriter::new(nodes_file);
-        serde_json::to_writer(&mut writer, &self.node_ids)?;
-        writer.flush()?;
+    //     let nodes_file = File::create(path.join("node_ids.json"))?;
+    //     let mut writer = BufWriter::new(nodes_file);
+    //     serde_json::to_writer(&mut writer, &self.node_ids)?;
+    //     writer.flush()?;
 
-        let params_file = File::create(path.join("params.json"))?;
-        let mut writer = BufWriter::new(params_file);
-        let params: HashMap<&str, f32> = HashMap::from([
-            ("m", self.params.m as f32),
-            ("mmax", self.params.mmax as f32),
-            ("mmax0", self.params.mmax0 as f32),
-            ("ef_cons", self.params.ef_cons as f32),
-            ("ml", self.params.ml as f32),
-            ("ep", self.ep as f32),
-            ("dim", self.params.dim as f32),
-        ]);
-        serde_json::to_writer(&mut writer, &params)?;
-        writer.flush()?;
+    //     let params_file = File::create(path.join("params.json"))?;
+    //     let mut writer = BufWriter::new(params_file);
+    //     let params: HashMap<&str, f32> = HashMap::from([
+    //         ("m", self.params.m as f32),
+    //         ("mmax", self.params.mmax as f32),
+    //         ("mmax0", self.params.mmax0 as f32),
+    //         ("ef_cons", self.params.ef_cons as f32),
+    //         ("ml", self.params.ml as f32),
+    //         ("ep", self.ep as f32),
+    //         ("dim", self.params.dim as f32),
+    //     ]);
+    //     serde_json::to_writer(&mut writer, &params)?;
+    //     writer.flush()?;
 
-        for layer_nb in 0..self.layers.len() {
-            let layer_file = File::create(path.join(format!("layer_{layer_nb}.json")))?;
-            let mut writer = BufWriter::new(layer_file);
-            let mut layer_data: HashMap<
-                usize,
-                (&HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>),
-            > = HashMap::new();
+    //     for layer_nb in 0..self.layers.len() {
+    //         let layer_file = File::create(path.join(format!("layer_{layer_nb}.json")))?;
+    //         let mut writer = BufWriter::new(layer_file);
+    //         let mut layer_data: HashMap<
+    //             usize,
+    //             (&HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>),
+    //         > = HashMap::new();
 
-            for (node_id, node_data) in self.layers.get(&(layer_nb)).unwrap().nodes.iter() {
-                let neighbors: &HashSet<usize, BuildNoHashHasher<usize>> = &node_data.neighbors;
-                let vector: Vec<f32> = match &node_data.vector {
-                    Vector::Full(full) => full.clone(),
-                    Vector::Compressed(compressed) => compressed.reconstruct(),
-                };
-                layer_data.insert(*node_id, (neighbors, vector));
-            }
-            serde_json::to_writer(&mut writer, &layer_data)?;
-            writer.flush()?;
-        }
+    //         for (node_id, node_data) in self.layers.get(&(layer_nb)).unwrap().nodes.iter() {
+    //             let neighbors: &HashSet<usize, BuildNoHashHasher<usize>> = &node_data.neighbors;
+    //             let vector: Vec<f32> = match &node_data.vector {
+    //                 Vector::Full(full) => full.clone(),
+    //                 Vector::Compressed(compressed) => compressed.reconstruct(),
+    //             };
+    //             layer_data.insert(*node_id, (neighbors, vector));
+    //         }
+    //         serde_json::to_writer(&mut writer, &layer_data)?;
+    //         writer.flush()?;
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn from_path(path: &str) -> std::io::Result<Self> {
-        let mut params: HashMap<String, f32> = HashMap::new();
-        let mut node_ids: HashSet<usize, BuildNoHashHasher<usize>> =
-            HashSet::with_hasher(BuildNoHashHasher::default());
-        let mut layers: HashMap<usize, Graph, BuildNoHashHasher<usize>> =
-            HashMap::with_hasher(BuildNoHashHasher::default());
+    // TODO: see todo in graph.rs
+    // pub fn from_path(path: &str) -> std::io::Result<Self> {
+    //     let mut params: HashMap<String, f32> = HashMap::new();
+    //     let mut node_ids: HashSet<usize, BuildNoHashHasher<usize>> =
+    //         HashSet::with_hasher(BuildNoHashHasher::default());
+    //     let mut layers: HashMap<usize, Graph, BuildNoHashHasher<usize>> =
+    //         HashMap::with_hasher(BuildNoHashHasher::default());
 
-        let paths = std::fs::read_dir(path)?;
-        for file_path in paths {
-            let file_name = file_path?;
-            let file = File::open(file_name.path())?;
-            let reader = BufReader::new(file);
-            if file_name.file_name().to_str().unwrap().contains("params") {
-                let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
-                for (key, val) in content.iter() {
-                    params.insert(String::from(key), *val);
-                }
-            }
-        }
+    //     let paths = std::fs::read_dir(path)?;
+    //     for file_path in paths {
+    //         let file_name = file_path?;
+    //         let file = File::open(file_name.path())?;
+    //         let reader = BufReader::new(file);
+    //         if file_name.file_name().to_str().unwrap().contains("params") {
+    //             let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
+    //             for (key, val) in content.iter() {
+    //                 params.insert(String::from(key), *val);
+    //             }
+    //         }
+    //     }
 
-        let paths = std::fs::read_dir(path)?;
-        for file_path in paths {
-            let file_name = file_path?;
-            let file = File::open(file_name.path())?;
-            let reader = BufReader::new(file);
+    //     let paths = std::fs::read_dir(path)?;
+    //     for file_path in paths {
+    //         let file_name = file_path?;
+    //         let file = File::open(file_name.path())?;
+    //         let reader = BufReader::new(file);
 
-            if file_name.file_name().to_str().unwrap().contains("node_ids") {
-                let content: HashSet<usize, BuildNoHashHasher<usize>> =
-                    serde_json::from_reader(reader)?;
-                for val in content.iter() {
-                    node_ids.insert(*val);
-                }
-            } else if file_name.file_name().to_str().unwrap().contains("layer") {
-                let re = Regex::new(r"\d+").unwrap();
-                let layer_nb: u8 = re
-                    .find(file_name.file_name().to_str().unwrap())
-                    .unwrap()
-                    .as_str()
-                    .parse::<u8>()
-                    .expect("Could not parse u32 from file.");
-                let content: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)> =
-                    serde_json::from_reader(reader)?;
-                let graph = Graph::from_layer_data(*params.get("dim").unwrap() as usize, content);
-                layers.insert(layer_nb as usize, graph);
-            }
-        }
+    //         if file_name.file_name().to_str().unwrap().contains("node_ids") {
+    //             let content: HashSet<usize, BuildNoHashHasher<usize>> =
+    //                 serde_json::from_reader(reader)?;
+    //             for val in content.iter() {
+    //                 node_ids.insert(*val);
+    //             }
+    //         } else if file_name.file_name().to_str().unwrap().contains("layer") {
+    //             let re = Regex::new(r"\d+").unwrap();
+    //             let layer_nb: u8 = re
+    //                 .find(file_name.file_name().to_str().unwrap())
+    //                 .unwrap()
+    //                 .as_str()
+    //                 .parse::<u8>()
+    //                 .expect("Could not parse u32 from file.");
+    //             let content: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)> =
+    //                 serde_json::from_reader(reader)?;
+    //             let graph = Graph::from_layer_data(content);
+    //             layers.insert(layer_nb as usize, graph);
+    //         }
+    //     }
 
-        let hnsw_params = Params::from(
-            *params.get("m").unwrap() as usize,
-            Some(*params.get("ef_cons").unwrap() as usize),
-            Some(*params.get("mmax").unwrap() as usize),
-            Some(*params.get("mmax0").unwrap() as usize),
-            Some(*params.get("ml").unwrap() as f32),
-            *params.get("dim").unwrap() as usize,
-        );
-        Ok(HNSW {
-            params: hnsw_params,
-            ep: *params.get("ep").unwrap() as usize,
-            node_ids,
-            layers,
-            // bencher: Bencher::new(),
-        })
-    }
+    //     let hnsw_params = Params::from(
+    //         *params.get("m").unwrap() as usize,
+    //         Some(*params.get("ef_cons").unwrap() as usize),
+    //         Some(*params.get("mmax").unwrap() as usize),
+    //         Some(*params.get("mmax0").unwrap() as usize),
+    //         Some(*params.get("ml").unwrap() as f32),
+    //         *params.get("dim").unwrap() as usize,
+    //     );
+    //     Ok(HNSW {
+    //         points: Points::Empty,
+    //         params: hnsw_params,
+    //         ep: *params.get("ep").unwrap() as usize,
+    //         node_ids,
+    //         layers,
+    //         // bencher: Bencher::new(),
+    //     })
+    // }
 
-    pub fn load(&mut self, path: &str) -> std::io::Result<()> {
-        self.node_ids.clear();
-        self.layers.clear();
-        let paths = std::fs::read_dir(path)?;
-        for file_path in paths {
-            let file_name = file_path?;
-            let file = File::open(file_name.path())?;
-            let reader = BufReader::new(file);
-            if file_name.file_name().to_str().unwrap().contains("params") {
-                let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
-                self.params.m = *content.get("m").unwrap() as usize;
-                self.params.mmax = *content.get("mmax").unwrap() as usize;
-                self.params.mmax0 = *content.get("mmax0").unwrap() as usize;
-                self.ep = *content.get("ep").unwrap() as usize;
-                self.params.ef_cons = *content.get("ef_cons").unwrap() as usize;
-                self.params.dim = *content.get("dim").unwrap() as usize;
-                self.params.ml = *content.get("ml").unwrap() as f32;
-            } else if file_name.file_name().to_str().unwrap().contains("node_ids") {
-                let content: HashSet<usize, BuildNoHashHasher<usize>> =
-                    serde_json::from_reader(reader)?;
-                for val in content.iter() {
-                    self.node_ids.insert(*val);
-                }
-            } else if file_name.file_name().to_str().unwrap().contains("layer") {
-                let re = Regex::new(r"\d+").unwrap();
-                let layer_nb: u8 = re
-                    .find(file_name.file_name().to_str().unwrap())
-                    .unwrap()
-                    .as_str()
-                    .parse::<u8>()
-                    .expect("Could not parse u8 from file name.");
-                let content: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)> =
-                    serde_json::from_reader(reader)?;
-                self.layers.insert(
-                    layer_nb as usize,
-                    Graph::from_layer_data(self.params.dim, content),
-                );
-            }
-        }
-        Ok(())
-    }
+    // TODO: see todo in graph.rs
+    // pub fn load(&mut self, path: &str) -> std::io::Result<()> {
+    //     self.node_ids.clear();
+    //     self.layers.clear();
+    //     let paths = std::fs::read_dir(path)?;
+    //     for file_path in paths {
+    //         let file_name = file_path?;
+    //         let file = File::open(file_name.path())?;
+    //         let reader = BufReader::new(file);
+    //         if file_name.file_name().to_str().unwrap().contains("params") {
+    //             let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
+    //             self.params.m = *content.get("m").unwrap() as usize;
+    //             self.params.mmax = *content.get("mmax").unwrap() as usize;
+    //             self.params.mmax0 = *content.get("mmax0").unwrap() as usize;
+    //             self.ep = *content.get("ep").unwrap() as usize;
+    //             self.params.ef_cons = *content.get("ef_cons").unwrap() as usize;
+    //             self.params.dim = *content.get("dim").unwrap() as usize;
+    //             self.params.ml = *content.get("ml").unwrap() as f32;
+    //         } else if file_name.file_name().to_str().unwrap().contains("node_ids") {
+    //             let content: HashSet<usize, BuildNoHashHasher<usize>> =
+    //                 serde_json::from_reader(reader)?;
+    //             for val in content.iter() {
+    //                 self.node_ids.insert(*val);
+    //             }
+    //         } else if file_name.file_name().to_str().unwrap().contains("layer") {
+    //             let re = Regex::new(r"\d+").unwrap();
+    //             let layer_nb: u8 = re
+    //                 .find(file_name.file_name().to_str().unwrap())
+    //                 .unwrap()
+    //                 .as_str()
+    //                 .parse::<u8>()
+    //                 .expect("Could not parse u8 from file name.");
+    //             let content: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)> =
+    //                 serde_json::from_reader(reader)?;
+    //             self.layers
+    //                 .insert(layer_nb as usize, Graph::from_layer_data(content));
+    //         }
+    //     }
+    //     Ok(())
+    // }
 }
 
 fn get_progress_bar(remaining: usize, hidden: bool) -> ProgressBar {
@@ -822,4 +781,9 @@ fn get_progress_bar(remaining: usize, hidden: bool) -> ProgressBar {
                 .unwrap());
     bar.set_message(format!("Inserting vectors"));
     bar
+}
+
+fn get_new_node_layer(ml: f32) -> usize {
+    let mut rng = rand::thread_rng();
+    (-rng.gen::<f32>().log(std::f32::consts::E) * ml).floor() as usize
 }

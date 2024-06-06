@@ -24,6 +24,8 @@ fn main() -> std::io::Result<()> {
 
     let (_, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
 
+    // TODO: integrate this logic into the Points enum.
+    //       For example, in a "quantize" method
     let mut mu: Vec<f32> = Vec::from_iter((0..dim).map(|_| 0.0));
     for vector in embeddings.iter() {
         mu.iter_mut().zip(vector).for_each(|(mean, val)| {
@@ -44,10 +46,9 @@ fn main() -> std::io::Result<()> {
     let mut index = HNSW::new(m, None, dim);
     // let mut bencher = Bencher::new();
     index.build_index(
-        embeddings.clone(),
-        false,
+        embeddings,
         // &mu, // &mut bencher
-    )?;
+    );
     index.print_params();
     let end = Instant::now();
     println!(
@@ -95,6 +96,7 @@ fn print_benching(bencher: &Bencher, base: &str) {
 
 fn estimate_recall(
     index: &mut HNSW,
+    // TODO: this doesnt need to be passed if "index" stores the vectors
     embeddings: &Vec<Vec<f32>>,
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {

@@ -1,7 +1,4 @@
 // use crate::helpers::distance::norm_vector;
-use nohash_hasher::BuildNoHashHasher;
-use std::collections::HashSet;
-
 use super::lvq::LVQVec;
 
 #[derive(Debug, Clone)]
@@ -16,20 +13,66 @@ pub enum Points {
     Collection(Vec<Point>),
 }
 
+impl Points {
+    pub fn get_point(&self, index: usize) -> &Point {
+        let point: &Point = match self {
+            Points::Empty => {
+                panic!(
+                    "Tried to get point with index {index}, but there are no stored vectors in the index."
+                );
+            }
+            Points::Collection(points) => points.get(index).unwrap(),
+        };
+
+        point
+    }
+
+    /// Extends the Collection variant with the provided vector,
+    /// or, in the case it is the Empty variant, fills it and changes the variant to Collection.
+    pub fn extend_or_fill(&mut self, points: Vec<Point>) {
+        match self {
+            Points::Empty => {
+                *self = Points::Collection(points);
+            }
+            Points::Collection(points_vec) => {
+                points_vec.extend(points);
+            }
+        }
+    }
+
+    pub fn iterate(&self) -> std::slice::Iter<'_, Point> {
+        match self {
+            Points::Empty => {
+                panic!("Tried to iterate over empty collection of Points.");
+            }
+            Points::Collection(points) => points.iter(),
+        }
+    }
+    pub fn iterate_mut(&mut self) -> std::slice::IterMut<'_, Point> {
+        match self {
+            Points::Empty => {
+                panic!("Tried to iterate over empty collection of Points.");
+            }
+            Points::Collection(points) => points.iter_mut(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Points::Empty => 0,
+            Points::Collection(points) => points.len(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Point {
     pub id: usize,
     pub vector: Vector,
-    pub neighbors: HashSet<usize, BuildNoHashHasher<usize>>,
 }
 
 impl Point {
-    pub fn new(
-        id: usize,
-        vector: Vec<f32>,
-        neighbors: Option<HashSet<usize, BuildNoHashHasher<usize>>>,
-        quantize: bool,
-    ) -> Point {
+    pub fn new(id: usize, vector: Vec<f32>, quantize: bool) -> Point {
         let vector_stored = if quantize {
             Vector::Compressed(LVQVec::new(&vector, 8))
         } else {
@@ -38,7 +81,6 @@ impl Point {
         Point {
             id,
             vector: vector_stored,
-            neighbors: neighbors.unwrap_or(HashSet::with_hasher(BuildNoHashHasher::default())),
         }
     }
 
@@ -72,12 +114,12 @@ impl Point {
     }
 
     pub fn quantize(&mut self) {
-        let centered: Vec<f32> = match &self.vector {
-            Vector::Full(full) => full.clone(),
+        let centered: &Vec<f32> = match &self.vector {
+            Vector::Full(full) => full,
             Vector::Compressed(_) => {
                 return ();
             }
         };
-        self.vector = Vector::Compressed(LVQVec::new(&centered, 8));
+        self.vector = Vector::Compressed(LVQVec::new(centered, 8));
     }
 }

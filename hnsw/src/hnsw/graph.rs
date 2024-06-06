@@ -1,39 +1,35 @@
 use crate::hnsw::points::Point;
-use ndarray::Array;
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
-use super::lvq::LVQVec;
-
 #[derive(Debug)]
-pub struct Graph {
-    pub nodes: HashMap<usize, Point>,
+pub struct Graph<'a> {
+    pub nodes: HashMap<usize, &'a Point>,
+    edges: HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>,
 }
 
-impl Graph {
-    pub fn new() -> Graph {
+impl<'a> Graph<'a> {
+    pub fn new() -> Graph<'a> {
         Graph {
             nodes: HashMap::new(),
+            edges: HashMap::new(),
         }
     }
-    pub fn from_layer_data(
-        dim: usize,
-        data: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)>,
-    ) -> Graph {
-        let mut nodes = HashMap::new();
-        for (node_id, node_data) in data.iter() {
-            let neighbors = node_data.0.clone();
-            let point = Point::new(*node_id, node_data.1.clone(), Some(neighbors), true);
-            nodes.insert(*node_id, point);
-        }
+    // TODO: change so that the "data" param is a reference to the stored data in the index
+    // pub fn from_layer_data(
+    //     data: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)>,
+    // ) -> Graph<'a> {
+    //     let mut nodes = HashMap::new();
+    //     for (node_id, node_data) in data.iter() {
+    //         let neighbors = node_data.0.clone();
+    //         let point = Point::new(*node_id, node_data.1.clone(), Some(neighbors), true);
+    //         nodes.insert(*node_id, point);
+    //     }
+    //     Graph { nodes }
+    // }
 
-        Graph { nodes }
-    }
-    pub fn add_node(&mut self, point: &Point) {
-        // if !self.nodes.contains_key(&point.id) {
-        let point = point.clone();
+    pub fn add_node(&mut self, point: &'a Point) {
         self.nodes.insert(point.id, point);
-        // }
     }
 
     pub fn add_edge(&mut self, node_a: usize, node_b: usize) {
@@ -42,39 +38,23 @@ impl Graph {
         {
             return ();
         }
-        let a_neighbors = self
-            .nodes
-            .get_mut(&node_a)
-            .expect(format!("Could not get point {node_a}").as_str());
-        a_neighbors.neighbors.insert(node_b);
-
-        let b_neighbors = self
-            .nodes
-            .get_mut(&node_b)
-            .expect(format!("Could not get point {node_b}").as_str());
-        b_neighbors.neighbors.insert(node_a);
+        let a_neighbors = self.edges.get_mut(&node_a).unwrap();
+        a_neighbors.insert(node_b);
+        let b_neighbors = self.edges.get_mut(&node_b).unwrap();
+        b_neighbors.insert(node_a);
     }
 
     pub fn remove_edge(&mut self, node_a: usize, node_b: usize) {
-        let a_neighbors = self
-            .nodes
-            .get_mut(&node_a)
-            .expect(format!("Could not get neighbors of {node_a}").as_str());
-        a_neighbors.neighbors.remove(&node_b);
-
-        let b_neighbors = self
-            .nodes
-            .get_mut(&node_b)
-            .expect(format!("Could not get neighbors of {node_b}").as_str());
-        b_neighbors.neighbors.remove(&node_a);
+        let a_neighbors = self.edges.get_mut(&node_a).unwrap();
+        a_neighbors.remove(&node_b);
+        let b_neighbors = self.edges.get_mut(&node_b).unwrap();
+        b_neighbors.remove(&node_a);
     }
 
     pub fn neighbors(&self, node_id: usize) -> &HashSet<usize, BuildNoHashHasher<usize>> {
-        &self
-            .nodes
+        self.edges
             .get(&node_id)
             .expect(format!("Could not get the neighbors of {node_id}").as_str())
-            .neighbors
     }
 
     pub fn node(&self, node_id: usize) -> &Point {
@@ -91,10 +71,9 @@ impl Graph {
     }
 
     pub fn degree(&self, node_id: usize) -> usize {
-        self.nodes
+        self.edges
             .get(&node_id)
             .expect("Could not get the neighbors of {node_id}")
-            .neighbors
             .len() as usize
     }
 
