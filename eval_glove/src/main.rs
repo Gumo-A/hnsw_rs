@@ -34,20 +34,20 @@ fn main() -> std::io::Result<()> {
     }
     mu.iter_mut().for_each(|mean| *mean /= lim as f32);
 
-    // let bf_data = match load_bf_data(dim, lim) {
-    //     Ok(data) => data,
-    //     Err(err) => {
-    //         println!("Error loading bf data: {err}");
-    //         return Ok(());
-    //     }
-    // };
+    let bf_data = match load_bf_data(dim, lim) {
+        Ok(data) => data,
+        Err(err) => {
+            println!("Error loading bf data: {err}");
+            return Ok(());
+        }
+    };
 
     // let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
     let mut index = HNSW::new(m, None, dim);
     // let mut bencher = Bencher::new();
     index.build_index(
-        embeddings,
-        // &mu, // &mut bencher
+        embeddings.clone(),
+        // &mut bencher
     );
     index.print_params();
     let end = Instant::now();
@@ -55,11 +55,11 @@ fn main() -> std::io::Result<()> {
         "Elapsed time: {}s",
         start.elapsed().as_secs() - end.elapsed().as_secs()
     );
-    // print_benching(&bencher, "search_layer");
+    // print_benching(&bencher, "insert");
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     // });
-    // estimate_recall(&mut index, &embeddings, &bf_data);
+    estimate_recall(&mut index, &embeddings, &bf_data);
 
     // for (i, idx) in bf_data.keys().enumerate() {
     //     if i > 3 {

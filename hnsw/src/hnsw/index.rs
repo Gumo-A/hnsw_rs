@@ -1,4 +1,4 @@
-// use crate::helpers::bench::Bencher;
+use crate::helpers::bench::Bencher;
 // use crate::helpers::data::split;
 // use crate::helpers::distance::{l2_compressed, v2v_dist};
 use crate::hnsw::graph::Graph;
@@ -21,8 +21,6 @@ use super::points::{Points, Vector};
 
 // TODO: integrate "node_ids" attribute into the "points" attribute
 //       I have to give each point an ID and attribute it to them.
-// TODO: Structs cant have field referencing another field, so I have to make a new struct containing the
-//       points collection.
 #[derive(Debug)]
 pub struct HNSW {
     points: Points,
@@ -30,7 +28,6 @@ pub struct HNSW {
     ep: usize,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
     pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
-    // pub bencher: Bencher,
 }
 
 impl HNSW {
@@ -42,7 +39,6 @@ impl HNSW {
             ep: 0,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
-            // bencher: Bencher::new(),
         }
     }
 
@@ -53,7 +49,6 @@ impl HNSW {
             ep: 0,
             node_ids: HashSet::with_hasher(BuildNoHashHasher::default()),
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
-            // bencher: Bencher::new(),
         }
     }
 
@@ -103,7 +98,8 @@ impl HNSW {
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
-                // let dist = (&layer_0.node(*x).dist2vec(&vector) * 10_000.0) as usize;
+                // TODO: Dist struct wrapper around floats to avoid the 10_0000.0 operation?
+                //       It would have to implement Ord
                 let dist = (&self.points.get_point(*x).dist2vec(&vector) * 10_000.0) as usize;
                 (dist, *x)
             }));
@@ -280,7 +276,7 @@ impl HNSW {
         &mut self,
         point_idx: usize,
         level: usize,
-        // bencher: &mut Bencher,
+        // bencher: &mut Bencher
     ) -> bool {
         // bencher.start_timer("insert");
 
@@ -307,7 +303,6 @@ impl HNSW {
         );
         // bencher.end_timer("step_2");
 
-        // point.quantize();
         // bencher.start_timer("load_data");
         self.node_ids.insert(point.id);
         for (layer_nb, node_data) in insertion_results.iter() {
@@ -416,32 +411,38 @@ impl HNSW {
         self.points.extend_or_fill(points)
     }
 
+    fn first_insert(&mut self, idx: usize) {
+        let point: &Point = self.points.get_point(idx);
+        let mut layer = Graph::new();
+        layer.add_node(point);
+        self.layers.insert(0, layer);
+        self.node_ids.insert(point.id);
+        self.ep = point.id;
+    }
+
     pub fn build_index(
         &mut self,
         vectors: Vec<Vec<f32>>,
-        // bencher: &mut Bencher,
+        // bencher: &mut Bencher
     ) {
         let lim = vectors.len();
         self.store_vectors(vectors);
 
         assert_eq!(self.node_ids.len(), 0);
         assert_eq!(self.layers.len(), 0);
+        assert_eq!(self.points.len(), lim);
 
-        let point: &Point = self.points.get_point(0);
-        let mut layer = Graph::new();
-        layer.add_node(point);
-        self.layers.insert(0, layer);
-        self.node_ids.insert(point.id);
-        self.ep = point.id;
+        self.first_insert(0);
 
         let bar = get_progress_bar(lim, false);
         for point_idx in 0..lim {
             let inserted = self.insert(
                 point_idx,
                 get_new_node_layer(self.params.ml),
-                // bencher,
+                // bencher
             );
             if inserted {
+                // self.points.get_point_mut(point_idx).quantize();
                 bar.inc(1);
             } else {
                 bar.reset_eta();
@@ -591,7 +592,7 @@ impl HNSW {
                 if ep.insert(neighbor) {
                     let neighbor_point = &self.points.get_point(neighbor);
 
-                    let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
+                    let (f2q_dist, _) = selected.last_key_value().unwrap();
 
                     // bencher.start_timer("while_2_1");
                     let n2q_dist = (neighbor_point.dist2vec(vector) * 10_000.0) as usize;

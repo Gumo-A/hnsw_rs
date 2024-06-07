@@ -26,6 +26,18 @@ impl Points {
 
         point
     }
+    pub fn get_point_mut(&mut self, index: usize) -> &mut Point {
+        let point: &mut Point = match self {
+            Points::Empty => {
+                panic!(
+                    "Tried to get point with index {index}, but there are no stored vectors in the index."
+                );
+            }
+            Points::Collection(points) => points.get_mut(index).unwrap(),
+        };
+
+        point
+    }
 
     /// Extends the Collection variant with the provided vector,
     /// or, in the case it is the Empty variant, fills it and changes the variant to Collection.

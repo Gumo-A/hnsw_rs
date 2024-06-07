@@ -30,7 +30,10 @@ impl Graph {
     // }
 
     pub fn add_node(&mut self, point: &Point) {
-        self.nodes.insert(point.id);
+        if self.nodes.insert(point.id) {
+            self.edges
+                .insert(point.id, HashSet::with_hasher(BuildNoHashHasher::default()));
+        };
     }
 
     pub fn add_edge(&mut self, node_a: usize, node_b: usize) {
