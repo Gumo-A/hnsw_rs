@@ -21,21 +21,20 @@ use super::points::{Points, Vector};
 
 // TODO: integrate "node_ids" attribute into the "points" attribute
 //       I have to give each point an ID and attribute it to them.
+// TODO: Structs cant have field referencing another field, so I have to make a new struct containing the
+//       points collection.
 #[derive(Debug)]
-pub struct HNSW<'a> {
+pub struct HNSW {
     points: Points,
     params: Params,
     ep: usize,
     pub node_ids: HashSet<usize, BuildNoHashHasher<usize>>,
-    pub layers: HashMap<usize, Graph<'a>, BuildNoHashHasher<usize>>,
+    pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
     // pub bencher: Bencher,
 }
 
-impl<'a, 'b> HNSW<'a>
-where
-    'a: 'b,
-{
-    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> HNSW<'a> {
+impl HNSW {
+    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> HNSW {
         let params = Params::from_m_efcons(m, ef_cons.unwrap_or(2 * m), dim);
         HNSW {
             points: Points::Empty,
@@ -47,7 +46,7 @@ where
         }
     }
 
-    pub fn from_params(params: Params) -> HNSW<'a> {
+    pub fn from_params(params: Params) -> HNSW {
         HNSW {
             points: Points::Empty,
             params,
@@ -104,7 +103,8 @@ where
 
         let nearest_neighbors: BTreeMap<usize, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
-                let dist = (&layer_0.node(*x).dist2vec(&vector) * 10_000.0) as usize;
+                // let dist = (&layer_0.node(*x).dist2vec(&vector) * 10_000.0) as usize;
+                let dist = (&self.points.get_point(*x).dist2vec(&vector) * 10_000.0) as usize;
                 (dist, *x)
             }));
 
@@ -207,7 +207,7 @@ where
             if ((layer_nb == 0) & (layer.degree(*neighbor) > self.params.mmax0))
                 | ((layer_nb > 0) & (layer.degree(*neighbor) > self.params.mmax))
             {
-                let neighbor_vec = &layer.node(*neighbor).vector;
+                let neighbor_vec = &self.points.get_point(*neighbor).vector;
                 let mut old_neighbors: HashSet<usize, BuildNoHashHasher<usize>> =
                     HashSet::with_hasher(BuildNoHashHasher::default());
                 old_neighbors.clone_from(layer.neighbors(*neighbor));
@@ -249,7 +249,7 @@ where
         selected.insert(dist_e, e);
         while (candidates.len() > 0) & (selected.len() < m) {
             let (dist_e, e) = candidates.pop_first().unwrap();
-            let e_vector = &layer.node(e).vector;
+            let e_vector = &self.points.get_point(e).vector;
 
             // let mut selected_set = HashSet::with_hasher(BuildNoHashHasher::default());
             // selected_set.extend(selected.values());
@@ -277,7 +277,7 @@ where
     }
 
     pub fn insert(
-        &'a mut self,
+        &mut self,
         point_idx: usize,
         level: usize,
         // bencher: &mut Bencher,
@@ -314,7 +314,7 @@ where
             let layer = self.layers.get_mut(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
                 if *node == point.id {
-                    layer.add_node(point);
+                    layer.add_node(&point);
                 }
                 for old_neighbor in layer.neighbors(*node).clone() {
                     layer.remove_edge(*node, old_neighbor);
@@ -327,7 +327,7 @@ where
         if level > max_layer_nb {
             for layer_nb in max_layer_nb + 1..level + 1 {
                 let mut layer = Graph::new();
-                layer.add_node(point);
+                layer.add_node(&point);
                 self.layers.insert(layer_nb, layer);
                 self.node_ids.insert(point.id);
             }
@@ -417,7 +417,7 @@ where
     }
 
     pub fn build_index(
-        &'a mut self,
+        &mut self,
         vectors: Vec<Vec<f32>>,
         // bencher: &mut Bencher,
     ) {
@@ -428,7 +428,7 @@ where
         assert_eq!(self.layers.len(), 0);
 
         let point: &Point = self.points.get_point(0);
-        let mut layer = Graph::<'a>::new();
+        let mut layer = Graph::new();
         layer.add_node(point);
         self.layers.insert(0, layer);
         self.node_ids.insert(point.id);
@@ -510,26 +510,31 @@ where
 
     fn sort_by_distance(
         &self,
-        layer: &Graph,
+        _layer: &Graph,
         vector: &Vector,
         // others: &T,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> BTreeMap<usize, usize> {
         let result = others.iter().map(|idx| {
             (
-                (&layer.node(*idx).dist2vec(vector) * 10_000.0) as usize,
+                (&self.points.get_point(*idx).dist2vec(vector) * 10_000.0) as usize,
                 *idx,
             )
         });
         BTreeMap::from_iter(result)
     }
 
-    fn get_nearest<I>(&self, layer: &Graph, vector: &Vector, others: I) -> (usize, usize)
+    fn get_nearest<I>(&self, _layer: &Graph, vector: &Vector, others: I) -> (usize, usize)
     where
         I: Iterator<Item = usize>,
     {
         others
-            .map(|idx| ((&layer.node(idx).dist2vec(vector) * 10_000.0) as usize, idx))
+            .map(|idx| {
+                (
+                    (&self.points.get_point(idx).dist2vec(vector) * 10_000.0) as usize,
+                    idx,
+                )
+            })
             .min_by_key(|x| x.0)
             .unwrap()
     }
@@ -584,7 +589,7 @@ where
             // bencher.end_timer("while_1");
             for neighbor in layer.neighbors(candidate).iter().map(|x| *x) {
                 if ep.insert(neighbor) {
-                    let neighbor_point = &layer.node(neighbor);
+                    let neighbor_point = &self.points.get_point(neighbor);
 
                     let (f2q_dist, _) = selected.last_key_value().unwrap().clone();
 

@@ -1,17 +1,18 @@
 use crate::hnsw::points::Point;
+use core::panic;
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
-pub struct Graph<'a> {
-    pub nodes: HashMap<usize, &'a Point>,
+pub struct Graph {
+    pub nodes: HashSet<usize>,
     edges: HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>,
 }
 
-impl<'a> Graph<'a> {
-    pub fn new() -> Graph<'a> {
+impl Graph {
+    pub fn new() -> Graph {
         Graph {
-            nodes: HashMap::new(),
+            nodes: HashSet::new(),
             edges: HashMap::new(),
         }
     }
@@ -28,14 +29,12 @@ impl<'a> Graph<'a> {
     //     Graph { nodes }
     // }
 
-    pub fn add_node(&mut self, point: &'a Point) {
-        self.nodes.insert(point.id, point);
+    pub fn add_node(&mut self, point: &Point) {
+        self.nodes.insert(point.id);
     }
 
     pub fn add_edge(&mut self, node_a: usize, node_b: usize) {
-        if (!self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b))
-            | (node_a == node_b)
-        {
+        if (!self.nodes.contains(&node_a) | !self.nodes.contains(&node_b)) | (node_a == node_b) {
             return ();
         }
         let a_neighbors = self.edges.get_mut(&node_a).unwrap();
@@ -52,12 +51,21 @@ impl<'a> Graph<'a> {
     }
 
     pub fn neighbors(&self, node_id: usize) -> &HashSet<usize, BuildNoHashHasher<usize>> {
-        self.edges
-            .get(&node_id)
-            .expect(format!("Could not get the neighbors of {node_id}").as_str())
+        match self.edges.get(&node_id) {
+            Some(neighbors) => neighbors,
+            None => {
+                println!("Size of edges set: {}", self.edges.len());
+                println!(
+                    "Set contains {node_id}: {}",
+                    self.edges.contains_key(&node_id)
+                );
+                panic!("Could not get the neighbors of {node_id}");
+            }
+        }
+        // .expect(format!("Could not get the neighbors of {node_id}").as_str())
     }
 
-    pub fn node(&self, node_id: usize) -> &Point {
+    pub fn node(&self, node_id: usize) -> &usize {
         match self.nodes.get(&node_id) {
             Some(node) => node,
             None => {
@@ -73,7 +81,7 @@ impl<'a> Graph<'a> {
     pub fn degree(&self, node_id: usize) -> usize {
         self.edges
             .get(&node_id)
-            .expect("Could not get the neighbors of {node_id}")
+            .expect("Could not get the degree of {node_id}")
             .len() as usize
     }
 
