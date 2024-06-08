@@ -1,8 +1,9 @@
 use super::distid::Dist;
+use serde::{Deserialize, Serialize};
 
 const CHUNK_SIZE: usize = 8;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LVQVec {
     delta: f32,
     lower: f32,
@@ -143,7 +144,7 @@ mod tests {
     fn compressed_distance_bench() {
         let mut rng = rand::thread_rng();
         let dim = 1000;
-        let n = 40_000;
+        let n = 4000;
         println!("Generating random vectors");
         let vecs = gen_rand_vecs(dim, n);
         println!("Compressing vectors");

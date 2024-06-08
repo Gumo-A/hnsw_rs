@@ -121,6 +121,7 @@ dependencies = [
  "parking_lot",
  "rand",
  "regex",
+ "serde",
  "serde_json",
  "unroll",
 ]

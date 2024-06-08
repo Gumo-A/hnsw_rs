@@ -26,27 +26,27 @@ fn main() -> std::io::Result<()> {
 
     // TODO: integrate this logic into the Points enum.
     //       For example, in a "quantize" method
-    let mut mu: Vec<f32> = Vec::from_iter((0..dim).map(|_| 0.0));
-    for vector in embeddings.iter() {
-        mu.iter_mut().zip(vector).for_each(|(mean, val)| {
-            *mean += val;
-        });
-    }
-    mu.iter_mut().for_each(|mean| *mean /= lim as f32);
+    // let mut mu: Vec<f32> = Vec::from_iter((0..dim).map(|_| 0.0));
+    // for vector in embeddings.iter() {
+    //     mu.iter_mut().zip(vector).for_each(|(mean, val)| {
+    //         *mean += val;
+    //     });
+    // }
+    // mu.iter_mut().for_each(|mean| *mean /= lim as f32);
 
-    let bf_data = match load_bf_data(dim, lim) {
-        Ok(data) => data,
-        Err(err) => {
-            println!("Error loading bf data: {err}");
-            return Ok(());
-        }
-    };
+    // let bf_data = match load_bf_data(dim, lim) {
+    //     Ok(data) => data,
+    //     Err(err) => {
+    //         println!("Error loading bf data: {err}");
+    //         return Ok(());
+    //     }
+    // };
 
     // let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
     let mut index = HNSW::new(m, None, dim);
     // let mut bencher = Bencher::new();
     index.build_index(
-        embeddings.clone(),
+        embeddings,
         // &mut bencher
     );
     index.print_params();
@@ -59,7 +59,7 @@ fn main() -> std::io::Result<()> {
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     // });
-    estimate_recall(&mut index, &embeddings, &bf_data);
+    // estimate_recall(&mut index, &embeddings, &bf_data);
 
     // for (i, idx) in bf_data.keys().enumerate() {
     //     if i > 3 {
@@ -101,7 +101,7 @@ fn estimate_recall(
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
     let mut rng = rand::thread_rng();
-    let max_id = index.node_ids.iter().max().unwrap_or(&usize::MAX);
+    let max_id = index.points.ids().max().unwrap_or(&usize::MAX);
     for ef in (12..100).step_by(12) {
         let sample_size: usize = 1000;
         let bar = ProgressBar::new(sample_size as u64);
@@ -118,7 +118,7 @@ fn estimate_recall(
         for _ in (0..sample_size).enumerate() {
             bar.inc(1);
 
-            let idx = rng.gen_range(0..(index.node_ids.len()));
+            let idx = rng.gen_range(0..(index.points.len()));
             let vector = &embeddings[idx];
             let anns = index.ann_by_vector(
                 &vector, 10, ef,
