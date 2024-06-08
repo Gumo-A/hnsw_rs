@@ -1,8 +1,8 @@
-use crate::hnsw::lvq::LVQVec;
+use crate::hnsw::{distid::Dist, lvq::LVQVec};
 use ndarray::{Array, Array1, ArrayView, Dim};
 
-pub fn l2_compressed(vector: &LVQVec, compressed: &LVQVec) -> usize {
-    (compressed.dist2other(vector) * 10_000.0) as usize
+pub fn l2_compressed(vector: &LVQVec, compressed: &LVQVec) -> Dist {
+    compressed.dist2other(vector)
 }
 
 pub fn v2v_dist(a: &Vec<f32>, b: &Vec<f32>) -> usize {

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct Graph {
-    pub nodes: HashSet<usize>,
+    nodes: HashSet<usize>,
     edges: HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>,
 }
 

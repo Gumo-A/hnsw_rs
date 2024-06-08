@@ -1,3 +1,5 @@
+use super::distid::Dist;
+
 const CHUNK_SIZE: usize = 8;
 
 #[derive(Debug, Clone)]
@@ -46,7 +48,7 @@ impl LVQVec {
     }
 
     // Have to read this: https://www.reidatcheson.com/hpc/architecture/performance/rust/c++/2019/10/19/measure-cache.html
-    pub fn dist2vec(&self, vector: &Vec<f32>) -> f32 {
+    pub fn dist2vec(&self, vector: &Vec<f32>) -> Dist {
         let mut acc = [0.0f32; CHUNK_SIZE];
         let vector_chunks = vector.chunks_exact(CHUNK_SIZE);
         let chunks_iter = self.quantized_vec.chunks_exact(CHUNK_SIZE);
@@ -62,10 +64,12 @@ impl LVQVec {
         for (x, y) in self_rem.iter().zip(other_rem) {
             acc[0] += (((*x as f32) * self.delta + self.lower) - y).powi(2);
         }
-        acc.iter().sum()
+        Dist {
+            dist: acc.iter().sum(),
+        }
     }
 
-    pub fn dist2other(&self, other: &Self) -> f32 {
+    pub fn dist2other(&self, other: &Self) -> Dist {
         let mut acc = [0.0f32; CHUNK_SIZE];
         let chunks_iter = self.quantized_vec.chunks_exact(CHUNK_SIZE);
         let vector_chunks = other.quantized_vec.chunks_exact(CHUNK_SIZE);
@@ -85,7 +89,9 @@ impl LVQVec {
             let y_f32 = (*y as f32) * other.delta + other.lower;
             acc[0] += (x_f32 - y_f32).powi(2);
         }
-        acc.iter().sum()
+        Dist {
+            dist: acc.iter().sum(),
+        }
     }
 }
 

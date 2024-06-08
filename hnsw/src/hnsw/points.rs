@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 // use crate::helpers::distance::norm_vector;
-use super::lvq::LVQVec;
+use super::{distid::Dist, lvq::LVQVec};
 
 #[derive(Debug, Clone)]
 pub enum Vector {
@@ -10,7 +12,7 @@ pub enum Vector {
 #[derive(Debug, Clone)]
 pub enum Points {
     Empty,
-    Collection(Vec<Point>),
+    Collection(HashMap<usize, Point>),
 }
 
 impl Points {
@@ -21,7 +23,7 @@ impl Points {
                     "Tried to get point with index {index}, but there are no stored vectors in the index."
                 );
             }
-            Points::Collection(points) => points.get(index).unwrap(),
+            Points::Collection(points) => points.get(&index).unwrap(),
         };
 
         point
@@ -33,7 +35,7 @@ impl Points {
                     "Tried to get point with index {index}, but there are no stored vectors in the index."
                 );
             }
-            Points::Collection(points) => points.get_mut(index).unwrap(),
+            Points::Collection(points) => points.get_mut(&index).unwrap(),
         };
 
         point
@@ -44,15 +46,26 @@ impl Points {
     pub fn extend_or_fill(&mut self, points: Vec<Point>) {
         match self {
             Points::Empty => {
-                *self = Points::Collection(points);
+                let mut collection = HashMap::new();
+                let mut idx = 0;
+                for point in points {
+                    collection.insert(idx, point);
+                    idx += 1;
+                }
+                *self = Points::Collection(collection);
             }
-            Points::Collection(points_vec) => {
-                points_vec.extend(points);
+            Points::Collection(points_map) => {
+                let old_max = points_map.keys().max().unwrap_or(&0) + 1;
+                let mut idx = 1;
+                for point in points {
+                    points_map.insert(old_max + idx, point);
+                    idx += 1;
+                }
             }
         }
     }
 
-    pub fn iterate(&self) -> std::slice::Iter<'_, Point> {
+    pub fn iterate(&self) -> std::collections::hash_map::Iter<'_, usize, Point> {
         match self {
             Points::Empty => {
                 panic!("Tried to iterate over empty collection of Points.");
@@ -60,7 +73,7 @@ impl Points {
             Points::Collection(points) => points.iter(),
         }
     }
-    pub fn iterate_mut(&mut self) -> std::slice::IterMut<'_, Point> {
+    pub fn iterate_mut(&mut self) -> std::collections::hash_map::IterMut<'_, usize, Point> {
         match self {
             Points::Empty => {
                 panic!("Tried to iterate over empty collection of Points.");
@@ -96,7 +109,7 @@ impl Point {
         }
     }
 
-    pub fn dist2vec(&self, other_vec: &Vector) -> f32 {
+    pub fn dist2vec(&self, other_vec: &Vector) -> Dist {
         match &self.vector {
             Vector::Compressed(compressed_self) => match other_vec {
                 Vector::Compressed(compressed_other) => {
@@ -119,7 +132,9 @@ impl Point {
                     for (x, y) in full_self.iter().zip(full_other) {
                         result += (x - y).powi(2);
                     }
-                    result.sqrt()
+                    Dist {
+                        dist: result.sqrt(),
+                    }
                 }
             },
         }

@@ -1,4 +1,4 @@
-use crate::helpers::bench::Bencher;
+// use crate::helpers::bench::Bencher;
 // use crate::helpers::data::split;
 // use crate::helpers::distance::{l2_compressed, v2v_dist};
 use crate::hnsw::graph::Graph;
@@ -17,7 +17,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 // use std::io::{BufReader, BufWriter, Write};
 // use std::path::Path;
 
-use super::points::{Points, Vector};
+use super::{
+    distid::Dist,
+    points::{Points, Vector},
+};
 
 // TODO: integrate "node_ids" attribute into the "points" attribute
 //       I have to give each point an ID and attribute it to them.
@@ -96,11 +99,11 @@ impl HNSW {
             // bencher
         );
 
-        let nearest_neighbors: BTreeMap<usize, usize> =
+        let nearest_neighbors: BTreeMap<Dist, usize> =
             BTreeMap::from_iter(neighbors.iter().map(|x| {
                 // TODO: Dist struct wrapper around floats to avoid the 10_0000.0 operation?
                 //       It would have to implement Ord
-                let dist = (&self.points.get_point(*x).dist2vec(&vector) * 10_000.0) as usize;
+                let dist = self.points.get_point(*x).dist2vec(&vector);
                 (dist, *x)
             }));
 
@@ -406,7 +409,7 @@ impl HNSW {
 
     fn store_vectors(&mut self, vectors: Vec<Vec<f32>>) {
         let points: Vec<Point> = (0..vectors.len())
-            .map(|idx| Point::new(idx, vectors[idx].clone(), false))
+            .map(|idx| Point::new(idx, vectors[idx].clone(), true))
             .collect();
         self.points.extend_or_fill(points)
     }
@@ -434,11 +437,13 @@ impl HNSW {
 
         self.first_insert(0);
 
+        let levels: Vec<usize> = (0..lim)
+            .map(|_| get_new_node_layer(self.params.ml))
+            .collect();
         let bar = get_progress_bar(lim, false);
-        for point_idx in 0..lim {
+        for (point_idx, level) in (0..lim).zip(levels) {
             let inserted = self.insert(
-                point_idx,
-                get_new_node_layer(self.params.ml),
+                point_idx, level,
                 // bencher
             );
             if inserted {
@@ -515,27 +520,19 @@ impl HNSW {
         vector: &Vector,
         // others: &T,
         others: &HashSet<usize, BuildNoHashHasher<usize>>,
-    ) -> BTreeMap<usize, usize> {
-        let result = others.iter().map(|idx| {
-            (
-                (&self.points.get_point(*idx).dist2vec(vector) * 10_000.0) as usize,
-                *idx,
-            )
-        });
+    ) -> BTreeMap<Dist, usize> {
+        let result = others
+            .iter()
+            .map(|idx| (self.points.get_point(*idx).dist2vec(vector), *idx));
         BTreeMap::from_iter(result)
     }
 
-    fn get_nearest<I>(&self, _layer: &Graph, vector: &Vector, others: I) -> (usize, usize)
+    fn get_nearest<I>(&self, _layer: &Graph, vector: &Vector, others: I) -> (Dist, usize)
     where
         I: Iterator<Item = usize>,
     {
         others
-            .map(|idx| {
-                (
-                    (&self.points.get_point(idx).dist2vec(vector) * 10_000.0) as usize,
-                    idx,
-                )
-            })
+            .map(|idx| (self.points.get_point(idx).dist2vec(vector), idx))
             .min_by_key(|x| x.0)
             .unwrap()
     }
@@ -595,7 +592,7 @@ impl HNSW {
                     let (f2q_dist, _) = selected.last_key_value().unwrap();
 
                     // bencher.start_timer("while_2_1");
-                    let n2q_dist = (neighbor_point.dist2vec(vector) * 10_000.0) as usize;
+                    let n2q_dist = neighbor_point.dist2vec(vector);
                     // bencher.end_timer("while_2_1");
 
                     // bencher.start_timer("while_2_2");

@@ -1,3 +1,4 @@
+pub mod distid;
 pub mod graph;
 pub mod index;
 pub mod lvq;
