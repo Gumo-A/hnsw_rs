@@ -30,8 +30,8 @@ pub fn split_ids(ids: Vec<usize>, nb_splits: usize, split_to_compute: usize) -> 
     split_vector[split_to_compute].to_owned()
 }
 
-pub fn split(base_vec: Vec<(Point, usize)>, nb_splits: usize) -> Vec<Vec<(Point, usize)>> {
-    let mut split_vector: Vec<Vec<(Point, usize)>> = Vec::new();
+pub fn split(base_vec: Vec<Point>, nb_splits: usize) -> Vec<Vec<Point>> {
+    let mut split_vector: Vec<Vec<Point>> = Vec::new();
 
     let per_split = base_vec.len() / nb_splits;
 

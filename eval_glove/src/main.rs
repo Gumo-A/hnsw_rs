@@ -42,13 +42,13 @@ fn main() -> std::io::Result<()> {
     //     }
     // };
 
-    // let mut index = HNSW::build_index_par(m, &embeddings, &Some(payloads));
-    let mut index = HNSW::new(m, None, dim);
+    let index = HNSW::build_index_par(m, embeddings);
+    // let mut index = HNSW::new(m, None, dim);
     // let mut bencher = Bencher::new();
-    index.build_index(
-        embeddings,
-        // &mut bencher
-    );
+    // index.build_index(
+    //     embeddings,
+    //     // &mut bencher
+    // );
     index.print_params();
     let end = Instant::now();
     println!(
@@ -56,10 +56,7 @@ fn main() -> std::io::Result<()> {
         start.elapsed().as_secs() - end.elapsed().as_secs()
     );
 
-    let path = format!(
-        "/home/gamal/indices/eval_dim{dim}_lim{lim}_m{m}_efcons{0}.json",
-        index.params.ef_cons
-    );
+    let path = format!("/home/gamal/indices/eval_dim{dim}_lim{lim}_m{m}.json",);
     println!("saving index in {path}");
     index.save(path.as_str())?;
     // print_benching(&bencher, "insert");

@@ -171,6 +171,7 @@ name = "load_index"
 version = "0.1.0"
 dependencies = [
  "hnsw",
+ "indicatif",
 ]
 
 [[package]]

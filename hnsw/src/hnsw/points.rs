@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use nohash_hasher::BuildNoHashHasher;
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,26 @@ use super::{distid::Dist, lvq::LVQVec};
 pub enum Vector {
     Compressed(LVQVec),
     Full(Vec<f32>),
+}
+
+impl Vector {
+    pub fn to_full(&mut self) {
+        match self {
+            Self::Full(_) => (),
+            Self::Compressed(quant) => {
+                let full = quant.reconstruct();
+                *self = Self::Full(full);
+            }
+        }
+    }
+    pub fn to_quantized(&mut self) {
+        match self {
+            Self::Compressed(_) => (),
+            Self::Full(full) => {
+                *self = Self::Compressed(LVQVec::new(full, 8));
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,22 +77,17 @@ impl Point {
                     for (x, y) in full_self.iter().zip(full_other) {
                         result += (x - y).powi(2);
                     }
-                    Dist {
-                        dist: result.sqrt(),
-                    }
+                    Dist { dist: result }
                 }
             },
         }
     }
 
     pub fn quantize(&mut self) {
-        let centered: &Vec<f32> = match &self.vector {
-            Vector::Full(full) => full,
-            Vector::Compressed(_) => {
-                return ();
-            }
-        };
-        self.vector = Vector::Compressed(LVQVec::new(centered, 8));
+        self.vector.to_quantized();
+    }
+    pub fn to_full_precision(&mut self) {
+        self.vector.to_full();
     }
 }
 
@@ -121,6 +136,18 @@ impl Points {
         };
 
         point
+    }
+
+    pub fn get_points(&self, indices: &HashSet<usize, BuildNoHashHasher<usize>>) -> Vec<&Point> {
+        let points = match self {
+            Points::Empty => {
+                panic!("Tried to get points, but there are no stored vectors in the index.");
+            }
+            Points::Collection(points) => {
+                indices.iter().map(|idx| points.get(idx).unwrap()).collect()
+            }
+        };
+        points
     }
     pub fn get_point_mut(&mut self, index: usize) -> &mut Point {
         let point: &mut Point = match self {

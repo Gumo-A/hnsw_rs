@@ -34,6 +34,15 @@ impl Graph {
         };
     }
 
+    pub fn add_node_by_id(&mut self, id: usize) {
+        if self.nodes.contains_key(&id) {
+            return ();
+        } else {
+            self.nodes
+                .insert(id, HashSet::with_hasher(BuildNoHashHasher::default()));
+        };
+    }
+
     pub fn add_edge(&mut self, node_a: usize, node_b: usize) {
         if (!self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b))
             | (node_a == node_b)

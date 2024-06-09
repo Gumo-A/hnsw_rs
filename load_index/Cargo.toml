@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 hnsw = {path = "../hnsw/"}
+indicatif = "0.17.8"
