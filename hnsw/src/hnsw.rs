@@ -8,8 +8,6 @@ pub mod points;
 #[cfg(test)]
 mod tests {
 
-    use std::fs::remove_dir_all;
-
     use crate::hnsw::{index::HNSW, points::Point};
     use rand::Rng;
 
@@ -55,17 +53,18 @@ mod tests {
 
         for i in 0..n {
             let vector = (0..dim).map(|_| rng.gen::<f32>()).collect();
-            let point = Point::new(i, vector, false);
+            let point = Point::new(i, vector, true);
             let mut level = 0;
             if rng.gen::<f32>() > 0.5 {
                 level = 1;
             }
             index.insert(point, level);
         }
-        index.save("./hnsw_index.json")?;
-        // let loaded_index = HNSW::from_path("./test_serialize")?;
-        // assert_eq!(n, loaded_index.points.len());
-        // remove_dir_all("./test_serialize")?;
+        let index_path = "./hnsw_index.json";
+        index.save(index_path)?;
+        let loaded_index = HNSW::from_path(index_path)?;
+        assert_eq!(n, loaded_index.points.len());
+        std::fs::remove_file(index_path)?;
         Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use super::distid::Dist;
+use super::{distid::Dist, points::Vector};
 use serde::{Deserialize, Serialize};
 
 const CHUNK_SIZE: usize = 8;
@@ -36,6 +36,14 @@ impl LVQVec {
             delta,
             lower: lower_bound,
             quantized_vec: quantized,
+        }
+    }
+
+    pub fn from_quantized(quantized_vec: Vec<u8>, delta: f32, lower: f32) -> Self {
+        LVQVec {
+            delta,
+            lower,
+            quantized_vec,
         }
     }
 

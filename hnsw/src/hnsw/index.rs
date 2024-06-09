@@ -5,9 +5,9 @@ use super::{
     distid::Dist,
     points::{Points, Vector},
 };
-use crate::hnsw::graph::Graph;
 use crate::hnsw::params::Params;
 use crate::hnsw::points::Point;
+use crate::hnsw::{graph::Graph, lvq::LVQVec};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::BuildNoHashHasher;
@@ -17,6 +17,7 @@ use regex::Regex;
 // use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
+use core::panic;
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
@@ -27,8 +28,8 @@ use std::{
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HNSW {
-    params: Params,
     ep: usize,
+    pub params: Params,
     pub points: Points,
     pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
 }
@@ -611,34 +612,91 @@ impl HNSW {
     pub fn from_path(index_path: &str) -> std::io::Result<Self> {
         let file = File::open(index_path)?;
         let reader = BufReader::new(file);
-        let content: HashMap<String, _> = serde_json::from_reader(reader)?;
+        let content: serde_json::Value = serde_json::from_reader(reader)?;
 
-        let points = HashMap::with_hasher(BuildNoHashHasher::default());
-        let params: HashMap<String, f32> = HashMap::new();
-        let layers = HashMap::with_hasher(BuildNoHashHasher::default());
+        let ep = match content
+            .get("ep")
+            .expect("Error: entry point could not be loaded.")
+        {
+            serde_json::Value::Number(ep) => ep.as_i64().unwrap() as usize,
+            _ => panic!("Error: unexpected type of entry point."),
+        };
 
-        for (key, value) in content.iter() {
-            if key == "params" {
-            } else if key == "ep" {
-            } else if key == "points" {
-            } else if key == "layers" {
+        let params = match content
+            .get("params")
+            .expect("Error: key 'params' is not in the index file.")
+        {
+            serde_json::Value::Object(params_map) => extract_params(&params_map),
+            _ => panic!("Something went wrong reading parameters of the index file."),
+        };
+
+        let layers = match content
+            .get("layers")
+            .expect("Error: key 'layers' could not be loaded.")
+        {
+            serde_json::Value::Object(layers_map) => {
+                let mut intermediate_layers = HashMap::with_hasher(BuildNoHashHasher::default());
+                for (key, value) in layers_map {
+                    let layer_nb: usize = key
+                        .parse()
+                        .expect("Error: could not load key {key} into layer number");
+                    let layer_content = match value
+                        .get("nodes")
+                        .expect("Error: could not load 'key' nodes for layer {key}")
+                    {
+                        serde_json::Value::Object(layer_content) => {
+                            let mut this_layer = HashMap::new();
+                            for (node_id, neighbors) in layer_content.iter() {
+                                let neighbors = match neighbors {
+                                    serde_json::Value::Array(neighbors_arr) => {
+                                        let mut final_neighbors = Vec::new();
+                                        let mut neighbors_set = HashSet::with_hasher(BuildNoHashHasher::default());
+                                        for neighbor in neighbors_arr {
+                                            match neighbor {
+                                                serde_json::Value::Number(num) => final_neighbors.push(num.as_u64().unwrap() as usize),
+            _ => panic!("Something went wrong reading neighbors of node {node_id} in layer {layer_nb}"),
+                                            }
+                                        }
+                                        neighbors_set.extend(final_neighbors);
+                                        neighbors_set
+                                    },
+            _ => panic!("Something went wrong reading neighbors of node {node_id} in layer {layer_nb}"),
+                                };
+                                this_layer.insert(node_id.parse::<usize>().unwrap(), neighbors);
+                            }
+                            Graph::from_layer_data(this_layer)
+                        }
+                        _ => panic!(
+                            "Something went wrong reading layer {layer_nb} of the index file."
+                        ),
+                    };
+                    intermediate_layers.insert(layer_nb, layer_content);
+                }
+                intermediate_layers
             }
-        }
+            _ => panic!("Something went wrong reading layers of the index file."),
+        };
 
-        let hnsw_params = Params::from(
-            *params.get("m").unwrap() as usize,
-            Some(*params.get("ef_cons").unwrap() as usize),
-            Some(*params.get("mmax").unwrap() as usize),
-            Some(*params.get("mmax0").unwrap() as usize),
-            Some(*params.get("ml").unwrap() as f32),
-            *params.get("dim").unwrap() as usize,
-        );
+        let points = match content
+            .get("points")
+            .expect("Error: key 'points' is not in the index file.")
+        {
+            serde_json::Value::Object(points_map) => {
+                let err_msg =
+                    "Error reading index file: could not find key 'Collection' in 'points', maybe the index is empty.";
+                match points_map.get("Collection").expect(err_msg) {
+                    serde_json::Value::Object(points_final) => extract_points(points_final),
+                    _ => panic!("Something went wrong reading parameters of the index file."),
+                }
+            }
+            _ => panic!("Something went wrong reading parameters of the index file."),
+        };
 
         Ok(HNSW {
-            points: Points::Collection(points),
-            params: hnsw_params,
-            ep: *params.get("ep").unwrap() as usize,
+            ep,
+            params,
             layers,
+            points: Points::Collection(points),
         })
     }
 
@@ -702,4 +760,124 @@ fn get_progress_bar(remaining: usize, hidden: bool) -> ProgressBar {
 fn get_new_node_layer(ml: f32) -> usize {
     let mut rng = rand::thread_rng();
     (-rng.gen::<f32>().log(std::f32::consts::E) * ml).floor() as usize
+}
+fn extract_params(params: &serde_json::Map<String, serde_json::Value>) -> Params {
+    dbg!(&params);
+    let hnsw_params = Params::from(
+        params
+            .get("m")
+            .unwrap()
+            .as_number()
+            .unwrap()
+            .as_i64()
+            .unwrap() as usize,
+        Some(
+            params
+                .get("ef_cons")
+                .unwrap()
+                .as_number()
+                .unwrap()
+                .as_i64()
+                .unwrap() as usize,
+        ),
+        Some(
+            params
+                .get("mmax")
+                .unwrap()
+                .as_number()
+                .unwrap()
+                .as_i64()
+                .unwrap() as usize,
+        ),
+        Some(
+            params
+                .get("mmax0")
+                .unwrap()
+                .as_number()
+                .unwrap()
+                .as_i64()
+                .unwrap() as usize,
+        ),
+        Some(
+            params
+                .get("ml")
+                .unwrap()
+                .as_number()
+                .unwrap()
+                .as_f64()
+                .unwrap() as f32,
+        ),
+        params
+            .get("dim")
+            .unwrap()
+            .as_number()
+            .unwrap()
+            .as_i64()
+            .unwrap() as usize,
+    );
+    hnsw_params
+}
+
+fn extract_points(
+    points_data: &serde_json::Map<String, serde_json::Value>,
+) -> HashMap<usize, Point, BuildNoHashHasher<usize>> {
+    let mut points = HashMap::with_hasher(BuildNoHashHasher::default());
+
+    for (id, value) in points_data.iter() {
+        let id: usize = id.parse().unwrap();
+        let vector_content = value.get("vector").unwrap();
+        let vector = match vector_content {
+            serde_json::Value::Object(vector_content_map) => {
+                if vector_content_map.contains_key("Compressed") {
+                    let delta = vector_content_map
+                        .get("Compressed")
+                        .unwrap()
+                        .get("delta")
+                        .unwrap()
+                        .as_number()
+                        .unwrap()
+                        .as_f64()
+                        .unwrap() as f32;
+
+                    let lower = vector_content_map
+                        .get("Compressed")
+                        .unwrap()
+                        .get("lower")
+                        .unwrap()
+                        .as_number()
+                        .unwrap()
+                        .as_f64()
+                        .unwrap() as f32;
+
+                    let quantized_vector: Vec<u8> = vector_content_map
+                        .get("Compressed")
+                        .unwrap()
+                        .get("quantized_vec")
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.as_u64().unwrap() as u8)
+                        .collect();
+                    Vector::Compressed(LVQVec::from_quantized(quantized_vector, delta, lower))
+                } else {
+                    let full_vector = vector_content_map
+                        .get("Full")
+                        .unwrap()
+                        .get("vector")
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.as_f64().unwrap() as f32)
+                        .collect();
+                    Vector::Full(full_vector)
+                }
+            }
+            _ => panic!(),
+        };
+        let point = Point::from_vector(id, vector);
+        points.insert(id, point);
+    }
+    points
 }

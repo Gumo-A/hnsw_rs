@@ -55,6 +55,13 @@ fn main() -> std::io::Result<()> {
         "Elapsed time: {}s",
         start.elapsed().as_secs() - end.elapsed().as_secs()
     );
+
+    let path = format!(
+        "/home/gamal/indices/eval_dim{dim}_lim{lim}_m{m}_efcons{0}.json",
+        index.params.ef_cons
+    );
+    println!("saving index in {path}");
+    index.save(path.as_str())?;
     // print_benching(&bencher, "insert");
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),

@@ -30,6 +30,10 @@ impl Point {
         }
     }
 
+    pub fn from_vector(id: usize, vector: Vector) -> Point {
+        Point { id, vector }
+    }
+
     pub fn dist2vec(&self, other_vec: &Vector) -> Dist {
         match &self.vector {
             Vector::Compressed(compressed_self) => match other_vec {
