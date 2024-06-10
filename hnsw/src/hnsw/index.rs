@@ -67,6 +67,7 @@ impl HNSW {
         println!("ep: {:?}", self.ep);
     }
 
+    // TODO: add multithreaded functionality for ANN search.
     pub fn ann_by_vector(
         &self,
         vector: &Vec<f32>,
@@ -433,9 +434,11 @@ impl HNSW {
             .map(|idx| Point::new(*idx, vectors[*idx].clone(), PREQUANTIZE))
             .collect();
 
-        let levels = (0..vectors.len())
+        let mut levels: Vec<usize> = (0..vectors.len())
             .map(|_| get_new_node_layer(self.params.ml))
             .collect();
+        levels.sort();
+        levels.reverse();
 
         (points, levels)
     }
@@ -478,14 +481,16 @@ impl HNSW {
         }
     }
 
+    // TODO: Try to be smarter about parallelized insertion
+    //       There is probably some things I can take advantage of thanks to the
+    //       fact that I have all the vectors in advance.
+    // TODO: Properly implement LVQ quantization. I have to center the vectors.
     pub fn build_index_par(m: usize, vectors: Vec<Vec<f32>>) -> Self {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
         let (dim, _lim) = (vectors[0].len(), vectors.len());
 
         let index = Arc::new(RwLock::new(HNSW::new(m, None, dim)));
         let (mut points, mut levels) = index.write().make_points(vectors);
-        levels.sort();
-        levels.reverse();
 
         index.write().first_insert(points.pop().unwrap());
         levels.pop();
@@ -608,7 +613,13 @@ impl HNSW {
         result
     }
 
+    /// Saves the index to the specified path.
+    /// Creates the path to the file if it didn't exist before.
     pub fn save(&self, index_path: &str) -> std::io::Result<()> {
+        let index_path = std::path::Path::new(index_path);
+        if !index_path.parent().unwrap().exists() {
+            std::fs::create_dir_all(index_path.parent().unwrap())?;
+        }
         let file = File::create(index_path)?;
         let mut writer = BufWriter::new(file);
         serde_json::to_writer(&mut writer, &self)?;
@@ -621,13 +632,13 @@ impl HNSW {
         let reader = BufReader::new(file);
         let content: serde_json::Value = serde_json::from_reader(reader)?;
 
-        let ep = match content
+        let ep = content
             .get("ep")
-            .expect("Error: entry point could not be loaded.")
-        {
-            serde_json::Value::Number(ep) => ep.as_i64().unwrap() as usize,
-            _ => panic!("Error: unexpected type of entry point."),
-        };
+            .expect("Error: key 'ep' is not in the index file.")
+            .as_number()
+            .expect("Error: entry point could not be parsed as a number.")
+            .as_i64()
+            .unwrap() as usize;
 
         let params = match content
             .get("params")
@@ -637,52 +648,31 @@ impl HNSW {
             _ => panic!("Something went wrong reading parameters of the index file."),
         };
 
-        let layers = match content
+        let layers_unparsed = content
             .get("layers")
-            .expect("Error: key 'layers' could not be loaded.")
-        {
-            serde_json::Value::Object(layers_map) => {
-                let mut intermediate_layers = HashMap::with_hasher(BuildNoHashHasher::default());
-                for (key, value) in layers_map {
-                    let layer_nb: usize = key
-                        .parse()
-                        .expect("Error: could not load key {key} into layer number");
-                    let layer_content = match value
-                        .get("nodes")
-                        .expect("Error: could not load 'key' nodes for layer {key}")
-                    {
-                        serde_json::Value::Object(layer_content) => {
-                            let mut this_layer = HashMap::new();
-                            for (node_id, neighbors) in layer_content.iter() {
-                                let neighbors = match neighbors {
-                                    serde_json::Value::Array(neighbors_arr) => {
-                                        let mut final_neighbors = Vec::new();
-                                        let mut neighbors_set = HashSet::with_hasher(BuildNoHashHasher::default());
-                                        for neighbor in neighbors_arr {
-                                            match neighbor {
-                                                serde_json::Value::Number(num) => final_neighbors.push(num.as_u64().unwrap() as usize),
-            _ => panic!("Something went wrong reading neighbors of node {node_id} in layer {layer_nb}"),
-                                            }
-                                        }
-                                        neighbors_set.extend(final_neighbors);
-                                        neighbors_set
-                                    },
-            _ => panic!("Something went wrong reading neighbors of node {node_id} in layer {layer_nb}"),
-                                };
-                                this_layer.insert(node_id.parse::<usize>().unwrap(), neighbors);
-                            }
-                            Graph::from_layer_data(this_layer)
-                        }
-                        _ => panic!(
-                            "Something went wrong reading layer {layer_nb} of the index file."
-                        ),
-                    };
-                    intermediate_layers.insert(layer_nb, layer_content);
-                }
-                intermediate_layers
+            .expect("Error: key 'layers' is not in the index file.")
+            .as_object()
+            .expect("Error: expected key 'layers' to be an Object, but couldn't parse it as such.");
+        let mut layers = HashMap::with_hasher(BuildNoHashHasher::default());
+        for (layer_nb, layer_content) in layers_unparsed {
+            let layer_nb: usize = layer_nb
+                .parse()
+                .expect("Error: could not load key {key} into layer number");
+            let layer_content = layer_content
+                .get("nodes")
+                .expect("Error: could not load 'key' nodes for layer {key}").as_object().expect("Error: expected key 'nodes' for layer {layer_nb} to be an Object, but couldl not be parsed as such.");
+            let mut this_layer = HashMap::new();
+            for (node_id, neighbors) in layer_content.iter() {
+                let neighbors = neighbors
+                    .as_array()
+                    .expect("Error: could not load the neighbors of node {node_id} in layer {layer_nb} as an Array.")
+                    .iter()
+                    .map(|neighbor_id| neighbor_id.as_number().unwrap().as_u64().unwrap() as usize)
+                    .collect();
+                this_layer.insert(node_id.parse::<usize>().unwrap(), neighbors);
             }
-            _ => panic!("Something went wrong reading layers of the index file."),
-        };
+            layers.insert(layer_nb, Graph::from_layer_data(this_layer));
+        }
 
         let points = match content
             .get("points")
@@ -706,47 +696,6 @@ impl HNSW {
             points: Points::Collection(points),
         })
     }
-
-    // TODO: see todo in graph.rs
-    // pub fn load(&mut self, path: &str) -> std::io::Result<()> {
-    //     self.node_ids.clear();
-    //     self.layers.clear();
-    //     let paths = std::fs::read_dir(path)?;
-    //     for file_path in paths {
-    //         let file_name = file_path?;
-    //         let file = File::open(file_name.path())?;
-    //         let reader = BufReader::new(file);
-    //         if file_name.file_name().to_str().unwrap().contains("params") {
-    //             let content: HashMap<String, f32> = serde_json::from_reader(reader)?;
-    //             self.params.m = *content.get("m").unwrap() as usize;
-    //             self.params.mmax = *content.get("mmax").unwrap() as usize;
-    //             self.params.mmax0 = *content.get("mmax0").unwrap() as usize;
-    //             self.ep = *content.get("ep").unwrap() as usize;
-    //             self.params.ef_cons = *content.get("ef_cons").unwrap() as usize;
-    //             self.params.dim = *content.get("dim").unwrap() as usize;
-    //             self.params.ml = *content.get("ml").unwrap() as f32;
-    //         } else if file_name.file_name().to_str().unwrap().contains("node_ids") {
-    //             let content: HashSet<usize, BuildNoHashHasher<usize>> =
-    //                 serde_json::from_reader(reader)?;
-    //             for val in content.iter() {
-    //                 self.node_ids.insert(*val);
-    //             }
-    //         } else if file_name.file_name().to_str().unwrap().contains("layer") {
-    //             let re = Regex::new(r"\d+").unwrap();
-    //             let layer_nb: u8 = re
-    //                 .find(file_name.file_name().to_str().unwrap())
-    //                 .unwrap()
-    //                 .as_str()
-    //                 .parse::<u8>()
-    //                 .expect("Could not parse u8 from file name.");
-    //             let content: HashMap<usize, (HashSet<usize, BuildNoHashHasher<usize>>, Vec<f32>)> =
-    //                 serde_json::from_reader(reader)?;
-    //             self.layers
-    //                 .insert(layer_nb as usize, Graph::from_layer_data(content));
-    //         }
-    //     }
-    //     Ok(())
-    // }
 }
 
 fn get_progress_bar(remaining: usize, hidden: bool) -> ProgressBar {
@@ -772,52 +721,52 @@ fn extract_params(params: &serde_json::Map<String, serde_json::Value>) -> Params
     let hnsw_params = Params::from(
         params
             .get("m")
-            .unwrap()
+            .expect("Error: could not find key 'm' in 'params'.")
             .as_number()
-            .unwrap()
+            .expect("Error: 'm' could not be parsed as a number.")
             .as_i64()
             .unwrap() as usize,
         Some(
             params
                 .get("ef_cons")
-                .unwrap()
+                .expect("Error: could not find key 'ef_cons' in 'params'.")
                 .as_number()
-                .unwrap()
+                .expect("Error: 'ef_cons' could not be parsed as a number.")
                 .as_i64()
                 .unwrap() as usize,
         ),
         Some(
             params
                 .get("mmax")
-                .unwrap()
+                .expect("Error: could not find key 'mmax' in 'params'.")
                 .as_number()
-                .unwrap()
+                .expect("Error: 'mmax' could not be parsed as a number.")
                 .as_i64()
                 .unwrap() as usize,
         ),
         Some(
             params
                 .get("mmax0")
-                .unwrap()
+                .expect("Error: could not find key 'mmax0' in 'params'.")
                 .as_number()
-                .unwrap()
+                .expect("Error: 'mmax0' could not be parsed as a number.")
                 .as_i64()
                 .unwrap() as usize,
         ),
         Some(
             params
                 .get("ml")
-                .unwrap()
+                .expect("Error: could not find key 'ml' in 'params'.")
                 .as_number()
-                .unwrap()
+                .expect("Error: 'ml' could not be parsed as a number.")
                 .as_f64()
                 .unwrap() as f32,
         ),
         params
             .get("dim")
-            .unwrap()
+            .expect("Error: could not find key 'dim' in 'params'.")
             .as_number()
-            .unwrap()
+            .expect("Error: 'dim' could not be parsed as a number.")
             .as_i64()
             .unwrap() as usize,
     );

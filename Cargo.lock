@@ -172,6 +172,7 @@ version = "0.1.0"
 dependencies = [
  "hnsw",
  "indicatif",
+ "rand",
 ]
 
 [[package]]

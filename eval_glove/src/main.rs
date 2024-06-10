@@ -42,13 +42,13 @@ fn main() -> std::io::Result<()> {
     //     }
     // };
 
-    // let index = HNSW::build_index_par(m, embeddings);
-    let mut index = HNSW::new(m, None, dim);
+    let index = HNSW::build_index_par(m, embeddings);
+    // let mut index = HNSW::new(m, None, dim);
     // let mut bencher = Bencher::new();
-    index.build_index(
-        embeddings,
-        // &mut bencher
-    );
+    // index.build_index(
+    //     embeddings,
+    //     // &mut bencher
+    // );
     index.print_params();
     let end = Instant::now();
     println!(
