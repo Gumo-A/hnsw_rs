@@ -12,6 +12,8 @@ use crate::hnsw::{graph::Graph, lvq::LVQVec};
 use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::BuildNoHashHasher;
 use parking_lot::RwLock;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -20,6 +22,8 @@ use core::panic;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
+
+const PREQUANTIZE: bool = true;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HNSW {
@@ -334,26 +338,31 @@ impl HNSW {
         true
     }
 
-    pub fn insert_par(index: &Arc<RwLock<Self>>, mut points: Vec<Point>, bar: ProgressBar) {
+    pub fn insert_par(
+        index: &Arc<RwLock<Self>>,
+        mut points: Vec<Point>,
+        levels: Vec<usize>,
+        bar: ProgressBar,
+    ) {
         let batch_size = 16;
         let points_len = points.len();
         let mut batch = Vec::new();
-        for idx in 0..points_len {
+
+        for (idx, level) in (0..points_len).zip(levels) {
             let point = points.pop().unwrap();
             let point_id = point.id;
             let read_ref = index.read();
             if read_ref.points.contains(&point.id) {
                 continue;
             }
-            let point_max_layer = get_new_node_layer(read_ref.params.ml);
             let max_layer_nb = read_ref.layers.len() - 1;
 
-            let ep = read_ref.step_1(&point, max_layer_nb, point_max_layer);
-            let insertion_results = read_ref.step_2(&point, ep, point_max_layer);
+            let ep = read_ref.step_1(&point, max_layer_nb, level);
+            let insertion_results = read_ref.step_2(&point, ep, level);
             batch.push((point, insertion_results));
 
             let last_idx = idx == (points_len - 1);
-            let new_layer = point_max_layer > max_layer_nb;
+            let new_layer = level > max_layer_nb;
             let full_batch = batch.len() >= batch_size;
             let have_to_write: bool = last_idx | new_layer | full_batch;
 
@@ -364,7 +373,7 @@ impl HNSW {
                 continue;
             };
             if new_layer {
-                for layer_nb in max_layer_nb + 1..point_max_layer + 1 {
+                for layer_nb in max_layer_nb + 1..level + 1 {
                     let mut layer = Graph::new();
                     layer.add_node_by_id(point_id);
                     write_ref.layers.insert(layer_nb, layer);
@@ -415,10 +424,20 @@ impl HNSW {
     //     self.points.extend_or_fill(points)
     // }
 
-    fn make_points(&mut self, vectors: Vec<Vec<f32>>) -> Vec<Point> {
-        (0..vectors.len())
-            .map(|idx| Point::new(idx, vectors[idx].clone(), true))
-            .collect()
+    fn make_points(&mut self, vectors: Vec<Vec<f32>>) -> (Vec<Point>, Vec<usize>) {
+        let mut points_idx: Vec<usize> = (0..vectors.len()).collect();
+        points_idx.shuffle(&mut thread_rng());
+
+        let points = points_idx
+            .iter()
+            .map(|idx| Point::new(*idx, vectors[*idx].clone(), PREQUANTIZE))
+            .collect();
+
+        let levels = (0..vectors.len())
+            .map(|_| get_new_node_layer(self.params.ml))
+            .collect();
+
+        (points, levels)
     }
 
     fn first_insert(&mut self, point: Point) {
@@ -436,16 +455,14 @@ impl HNSW {
         // bencher: &mut Bencher
     ) {
         let lim = vectors.len();
-        let mut points = self.make_points(vectors);
+        let (mut points, mut levels) = self.make_points(vectors);
 
         assert_eq!(self.points.len(), 0);
         assert_eq!(self.layers.len(), 0);
 
         self.first_insert(points.pop().unwrap());
+        levels.pop();
 
-        let levels: Vec<usize> = (1..lim)
-            .map(|_| get_new_node_layer(self.params.ml))
-            .collect();
         let bar = get_progress_bar(lim, false);
         for level in levels {
             let inserted = self.insert(
@@ -463,20 +480,26 @@ impl HNSW {
 
     pub fn build_index_par(m: usize, vectors: Vec<Vec<f32>>) -> Self {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
-        let (dim, lim) = (vectors[0].len(), vectors.len());
+        let (dim, _lim) = (vectors[0].len(), vectors.len());
+
         let index = Arc::new(RwLock::new(HNSW::new(m, None, dim)));
-        let mut points = index.write().make_points(vectors);
+        let (mut points, mut levels) = index.write().make_points(vectors);
+        levels.sort();
+        levels.reverse();
+
         index.write().first_insert(points.pop().unwrap());
+        levels.pop();
 
         let mut points_split = split(points, nb_threads);
 
-        let mut handlers = vec![];
+        let mut handlers = Vec::new();
         for thread_nb in 0..nb_threads {
             let index_ref = index.clone();
             let points_thread = points_split.pop().unwrap();
-            let bar = get_progress_bar(points_thread.len(), thread_nb != 0);
+            let levels_split = levels.drain(0..points_thread.len()).collect();
+            let bar = get_progress_bar(points_thread.len(), thread_nb != (nb_threads - 1));
             handlers.push(std::thread::spawn(move || {
-                Self::insert_par(&index_ref, points_thread, bar);
+                Self::insert_par(&index_ref, points_thread, levels_split, bar);
             }));
         }
         for handle in handlers {
@@ -588,7 +611,7 @@ impl HNSW {
     pub fn save(&self, index_path: &str) -> std::io::Result<()> {
         let file = File::create(index_path)?;
         let mut writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(&mut writer, &self)?;
+        serde_json::to_writer(&mut writer, &self)?;
         writer.flush()?;
         Ok(())
     }

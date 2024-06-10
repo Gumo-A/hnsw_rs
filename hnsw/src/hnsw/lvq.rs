@@ -1,4 +1,4 @@
-use super::{distid::Dist, points::Vector};
+use super::distid::Dist;
 use serde::{Deserialize, Serialize};
 
 const CHUNK_SIZE: usize = 8;
