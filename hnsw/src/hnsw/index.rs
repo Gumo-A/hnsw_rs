@@ -1,10 +1,9 @@
 // use crate::helpers::bench::Bencher;
-use crate::helpers::data::split;
-// use crate::helpers::distance::{l2_compressed, v2v_dist};
 use super::{
-    distid::Dist,
+    dist::Dist,
     points::{Points, Vector},
 };
+use crate::helpers::data::split;
 use crate::hnsw::params::Params;
 use crate::hnsw::points::Point;
 use crate::hnsw::{graph::Graph, lvq::LVQVec};
@@ -429,9 +428,7 @@ impl HNSW {
         let mut points_idx: Vec<usize> = (0..vectors.len()).collect();
         points_idx.shuffle(&mut thread_rng());
 
-        dbg!(&vectors[4][0..5]);
         center_vectors(&mut vectors);
-        dbg!(&vectors[4][0..5]);
         let points = points_idx
             .iter()
             .map(|idx| Point::new(*idx, vectors[*idx].clone(), PREQUANTIZE))

@@ -1,13 +1,13 @@
-use super::distid::Dist;
+use super::dist::Dist;
 use serde::{Deserialize, Serialize};
 
 const CHUNK_SIZE: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LVQVec {
-    delta: f32,
-    lower: f32,
-    quantized_vec: Vec<u8>,
+    pub delta: f32,
+    pub lower: f32,
+    pub quantized_vec: Vec<u8>,
 }
 
 impl LVQVec {
@@ -101,6 +101,9 @@ impl LVQVec {
         Dist {
             dist: acc.iter().sum(),
         }
+    }
+    pub fn dim(&self) -> usize {
+        self.quantized_vec.len()
     }
 }
 

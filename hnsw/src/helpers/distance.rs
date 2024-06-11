@@ -1,4 +1,4 @@
-use crate::hnsw::{distid::Dist, lvq::LVQVec};
+use crate::hnsw::{dist::Dist, lvq::LVQVec};
 
 pub fn l2_compressed(vector: &LVQVec, compressed: &LVQVec) -> Dist {
     compressed.dist2other(vector)

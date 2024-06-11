@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use nohash_hasher::BuildNoHashHasher;
 use serde::{Deserialize, Serialize};
 
-use super::{distid::Dist, lvq::LVQVec};
+use super::{dist::Dist, lvq::LVQVec};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Vector {
@@ -36,6 +36,20 @@ impl Vector {
             }
         }
     }
+
+    pub fn dim(&self) -> usize {
+        match self {
+            Self::Compressed(quant) => quant.dim(),
+            Self::Full(full) => full.len(),
+        }
+    }
+
+    pub fn get_vec(&self) -> Vec<f32> {
+        match self {
+            Self::Full(full) => full.clone(),
+            Self::Compressed(quant) => quant.reconstruct(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +76,7 @@ impl Point {
     }
 
     pub fn dist2vec(&self, other_vec: &Vector) -> Dist {
-        match &self.vector {
+        let dist = match &self.vector {
             Vector::Compressed(compressed_self) => match other_vec {
                 Vector::Compressed(compressed_other) => {
                     // println!("Q 2 Q");
@@ -87,6 +101,9 @@ impl Point {
                     Dist { dist: result }
                 }
             },
+        };
+        Dist {
+            dist: dist.dist.sqrt(),
         }
     }
 
@@ -99,6 +116,10 @@ impl Point {
 
     pub fn get_full_precision(&self) -> Vec<f32> {
         self.vector.get_full()
+    }
+
+    pub fn dim(&self) -> usize {
+        self.vector.dim()
     }
 }
 
