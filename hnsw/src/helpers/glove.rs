@@ -1,5 +1,4 @@
 use indicatif::{ProgressBar, ProgressStyle};
-use ndarray::{s, Array2};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
@@ -11,12 +10,10 @@ pub fn load_glove_array(
     lim: usize,
     normalize: bool,
     pros_nb: usize,
-    // ) -> Result<(Vec<String>, Array2<f32>)> {
 ) -> Result<(Vec<String>, Vec<Vec<f32>>)> {
     let file = File::open(format!("/home/gamal/glove_dataset/glove.6B.{dim}d.txt"))?;
     let reader = BufReader::new(file);
 
-    // let mut embeddings = Array2::zeros((lim.try_into().unwrap(), dim.try_into().unwrap()));
     let mut embeddings: Vec<Vec<f32>> = Vec::new();
     let mut words: Vec<String> = Vec::new();
 
@@ -72,7 +69,7 @@ pub fn load_glove_array(
 
 pub fn brute_force_nns(
     nb_of_nn: usize,
-    embeddings: &Array2<f32>,
+    embeddings: &Vec<Vec<f32>>,
     indices: Vec<usize>,
     pros_nb: usize,
     words: Vec<String>,
@@ -94,11 +91,7 @@ pub fn brute_force_nns(
 
     let mut brute_force_results: HashMap<usize, Vec<usize>> = HashMap::new();
     for idx in indices.iter() {
-        let nns = get_nn_bf(
-            &embeddings.slice(s![*idx, ..]),
-            &embeddings.slice(s![.., ..]),
-            nb_of_nn.try_into().unwrap(),
-        );
+        let nns = get_nn_bf(&embeddings[*idx], &embeddings, nb_of_nn.try_into().unwrap());
         let index = *idx as usize;
         brute_force_results.insert(
             index,

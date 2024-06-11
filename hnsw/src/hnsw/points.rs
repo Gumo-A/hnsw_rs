@@ -12,6 +12,13 @@ pub enum Vector {
 }
 
 impl Vector {
+    pub fn get_full(&self) -> Vec<f32> {
+        match self {
+            Self::Full(full) => full.clone(),
+            Self::Compressed(quant) => quant.reconstruct(),
+        }
+    }
+
     pub fn to_full(&mut self) {
         match self {
             Self::Full(_) => (),
@@ -88,6 +95,10 @@ impl Point {
     }
     pub fn to_full_precision(&mut self) {
         self.vector.to_full();
+    }
+
+    pub fn get_full_precision(&self) -> Vec<f32> {
+        self.vector.get_full()
     }
 }
 

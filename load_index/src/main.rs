@@ -28,6 +28,7 @@ fn main() -> Result<()> {
     let mut index =
         HNSW::from_path(format!("/home/gamal/indices/eval_dim{dim}_lim{lim}_m{m}.json").as_str())?;
     // bench_ann(&index, &embeddings);
+    index.print_params();
     estimate_recall(&mut index, &embeddings, &bf_data);
     Ok(())
 }

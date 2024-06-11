@@ -3,12 +3,14 @@ use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::thread;
 
-use ndarray::Array2;
-
 use hnsw::helpers::args::parse_args_bf;
 use hnsw::helpers::data::split_ids;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
 
+// TODO: make this binary compute a proper dataset:
+//         - A set of points to build the index.
+//         - A second set of points for which we will find ANNs.
+//         - This binary should store the true NNs of the second set, in the first.
 fn main() -> std::io::Result<()> {
     let (dim, lim, nb_threads) = match parse_args_bf() {
         Ok(args) => args,
@@ -25,8 +27,8 @@ fn main() -> std::io::Result<()> {
         "/home/gamal/glove_dataset/bf_rust/dim{dim}_lim{lim}"
     ));
 
-    let (words, embeddings): (Vec<String>, Array2<f32>) =
-        load_glove_array(dim, lim, true, 0).unwrap();
+    let (words, embeddings): (Vec<String>, Vec<Vec<f32>>) =
+        load_glove_array(dim, lim, false, 0).unwrap();
 
     let embeddings = Arc::new(embeddings);
     let mut children = vec![];

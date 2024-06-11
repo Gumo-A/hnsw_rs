@@ -24,23 +24,13 @@ fn main() -> std::io::Result<()> {
 
     let (_, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
 
-    // TODO: integrate this logic into the Points enum.
-    //       For example, in a "quantize" method
-    // let mut mu: Vec<f32> = Vec::from_iter((0..dim).map(|_| 0.0));
-    // for vector in embeddings.iter() {
-    //     mu.iter_mut().zip(vector).for_each(|(mean, val)| {
-    //         *mean += val;
-    //     });
-    // }
-    // mu.iter_mut().for_each(|mean| *mean /= lim as f32);
-
-    // let bf_data = match load_bf_data(dim, lim) {
-    //     Ok(data) => data,
-    //     Err(err) => {
-    //         println!("Error loading bf data: {err}");
-    //         return Ok(());
-    //     }
-    // };
+    let bf_data = match load_bf_data(dim, lim) {
+        Ok(data) => data,
+        Err(err) => {
+            println!("Error loading bf data: {err}");
+            return Ok(());
+        }
+    };
 
     let index = HNSW::build_index_par(m, embeddings);
     // let mut index = HNSW::new(m, None, dim);
@@ -63,7 +53,7 @@ fn main() -> std::io::Result<()> {
     // let filters = Some(Payload {
     //     data: HashMap::from([("starts_with_e".to_string(), PayloadType::BoolPayload(true))]),
     // });
-    // estimate_recall(&mut index, &embeddings, &bf_data);
+    estimate_recall(&index, &bf_data);
 
     // for (i, idx) in bf_data.keys().enumerate() {
     //     if i > 3 {
@@ -99,9 +89,8 @@ fn print_benching(bencher: &Bencher, base: &str) {
 }
 
 fn estimate_recall(
-    index: &mut HNSW,
+    index: &HNSW,
     // TODO: this doesnt need to be passed if "index" stores the vectors
-    embeddings: &Vec<Vec<f32>>,
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
     let mut rng = rand::thread_rng();
@@ -123,7 +112,7 @@ fn estimate_recall(
             bar.inc(1);
 
             let idx = rng.gen_range(0..(index.points.len()));
-            let vector = &embeddings[idx];
+            let vector = &index.points.get_point(idx).get_full_precision();
             let anns = index.ann_by_vector(
                 &vector, 10, ef,
                 // &mut bencher

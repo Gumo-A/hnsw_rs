@@ -425,16 +425,20 @@ impl HNSW {
     //     self.points.extend_or_fill(points)
     // }
 
-    fn make_points(&mut self, vectors: Vec<Vec<f32>>) -> (Vec<Point>, Vec<usize>) {
+    fn make_points(&mut self, mut vectors: Vec<Vec<f32>>) -> (Vec<Point>, Vec<usize>) {
         let mut points_idx: Vec<usize> = (0..vectors.len()).collect();
         points_idx.shuffle(&mut thread_rng());
 
+        dbg!(&vectors[4][0..5]);
+        center_vectors(&mut vectors);
+        dbg!(&vectors[4][0..5]);
         let points = points_idx
             .iter()
             .map(|idx| Point::new(*idx, vectors[*idx].clone(), PREQUANTIZE))
             .collect();
 
-        let mut levels: Vec<usize> = (0..vectors.len())
+        // From 1 and not 0 because first insert is always in layer 0.
+        let mut levels: Vec<usize> = (1..vectors.len())
             .map(|_| get_new_node_layer(self.params.ml))
             .collect();
         levels.sort();
@@ -458,13 +462,12 @@ impl HNSW {
         // bencher: &mut Bencher
     ) {
         let lim = vectors.len();
-        let (mut points, mut levels) = self.make_points(vectors);
+        let (mut points, levels) = self.make_points(vectors);
 
         assert_eq!(self.points.len(), 0);
         assert_eq!(self.layers.len(), 0);
 
         self.first_insert(points.pop().unwrap());
-        levels.pop();
 
         let bar = get_progress_bar(lim, false);
         for level in levels {
@@ -484,7 +487,6 @@ impl HNSW {
     // TODO: Try to be smarter about parallelized insertion
     //       There is probably some things I can take advantage of thanks to the
     //       fact that I have all the vectors in advance.
-    // TODO: Properly implement LVQ quantization. I have to center the vectors.
     pub fn build_index_par(m: usize, vectors: Vec<Vec<f32>>) -> Self {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
         let (dim, _lim) = (vectors[0].len(), vectors.len());
@@ -493,7 +495,6 @@ impl HNSW {
         let (mut points, mut levels) = index.write().make_points(vectors);
 
         index.write().first_insert(points.pop().unwrap());
-        levels.pop();
 
         let mut points_split = split(points, nb_threads);
 
@@ -833,4 +834,23 @@ fn extract_points(
         points.insert(id, point);
     }
     points
+}
+
+/// Mean-centers each vector using each dimension's mean over the entire matrix.
+fn center_vectors(vectors: &mut Vec<Vec<f32>>) {
+    let mut means = Vec::from_iter((0..vectors[0].len()).map(|_| 0.0));
+    for vector in vectors.iter() {
+        for (idx, val) in vector.iter().enumerate() {
+            means[idx] += val
+        }
+    }
+    for idx in 0..means.len() {
+        means[idx] /= vectors.len() as f32;
+    }
+
+    vectors.iter_mut().for_each(|v| {
+        v.iter_mut()
+            .enumerate()
+            .for_each(|(idx, x)| *x -= means[idx])
+    });
 }
