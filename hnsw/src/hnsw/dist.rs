@@ -5,6 +5,13 @@ pub struct Dist {
     pub dist: f32,
 }
 
+impl Dist {
+    pub fn new(f: f32) -> Self {
+        assert!(f.is_finite());
+        Dist { dist: f }
+    }
+}
+
 impl Ord for Dist {
     fn cmp(&self, other: &Dist) -> Ordering {
         self.dist.partial_cmp(&other.dist).unwrap()

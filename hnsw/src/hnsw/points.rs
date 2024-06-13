@@ -98,13 +98,11 @@ impl Point {
                     for (x, y) in full_self.iter().zip(full_other) {
                         result += (x - y).powi(2);
                     }
-                    Dist { dist: result }
+                    Dist::new(result.sqrt())
                 }
             },
         };
-        Dist {
-            dist: dist.dist.sqrt(),
-        }
+        dist
     }
 
     pub fn quantize(&mut self) {

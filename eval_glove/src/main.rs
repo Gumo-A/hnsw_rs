@@ -22,7 +22,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let (_, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
+    let (words, embeddings) = load_glove_array(dim, lim, true, 0).unwrap();
 
     let bf_data = match load_bf_data(dim, lim) {
         Ok(data) => data,
@@ -55,25 +55,25 @@ fn main() -> std::io::Result<()> {
     // });
     estimate_recall(&index, &bf_data);
 
-    // for (i, idx) in bf_data.keys().enumerate() {
-    //     if i > 3 {
-    //         break;
-    //     }
-    //     let vector = embeddings.slice(s![*idx, ..]);
-    //     let anns = index.ann_by_vector(&vector, 10, 16, &filters);
-    //     println!("ANNs of {}", words[*idx]);
-    //     let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
-    //     println!("{:?}", anns_words);
-    //     println!("True NN of {}", words[*idx]);
-    //     let true_nns: Vec<String> = bf_data
-    //         .get(&idx)
-    //         .unwrap()
-    //         .iter()
-    //         .map(|x| words[*x].clone())
-    //         .take(10)
-    //         .collect();
-    //     println!("{:?}", true_nns);
-    // }
+    for (i, idx) in bf_data.keys().enumerate() {
+        if i > 3 {
+            break;
+        }
+        let vector = index.points.get_point(*idx).vector.get_full();
+        let anns = index.ann_by_vector(&vector, 10, 16);
+        println!("ANNs of {}", words[*idx]);
+        let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
+        println!("{:?}", anns_words);
+        println!("True NN of {}", words[*idx]);
+        let true_nns: Vec<String> = bf_data
+            .get(&idx)
+            .unwrap()
+            .iter()
+            .map(|x| words[*x].clone())
+            .take(10)
+            .collect();
+        println!("{:?}", true_nns);
+    }
     // std::thread::sleep(Duration::from_secs(10));
     Ok(())
 }

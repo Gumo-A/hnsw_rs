@@ -73,9 +73,7 @@ impl LVQVec {
         for (x, y) in self_rem.iter().zip(other_rem) {
             acc[0] += (((*x as f32) * self.delta + self.lower) - y).powi(2);
         }
-        Dist {
-            dist: acc.iter().sum(),
-        }
+        Dist::new(acc.iter().sum::<f32>().sqrt())
     }
 
     pub fn dist2other(&self, other: &Self) -> Dist {
@@ -98,9 +96,7 @@ impl LVQVec {
             let y_f32 = (*y as f32) * other.delta + other.lower;
             acc[0] += (x_f32 - y_f32).powi(2);
         }
-        Dist {
-            dist: acc.iter().sum(),
-        }
+        Dist::new(acc.iter().sum::<f32>().sqrt())
     }
     pub fn dim(&self) -> usize {
         self.quantized_vec.len()
@@ -123,8 +119,7 @@ mod tests {
     }
 
     /// Ment to be run with --nocapture
-    /// This is to show that distances are
-    /// almost the same
+    /// This is to show that distances are almost the same
     #[test]
     fn compressed_distance() {
         let mut rng = rand::thread_rng();

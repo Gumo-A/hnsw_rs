@@ -4,5 +4,5 @@ members = [
   "hnsw",
   "brute_force", 
   "eval_glove", 
-  "load_index", 
+  "load_index",
 ]
