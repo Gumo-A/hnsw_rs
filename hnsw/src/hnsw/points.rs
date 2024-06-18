@@ -12,6 +12,13 @@ pub enum Vector {
 }
 
 impl Vector {
+    pub fn get_quantized(&self) -> LVQVec {
+        match self {
+            Self::Full(full) => LVQVec::new(full, 8),
+            Self::Compressed(quant) => quant.clone(),
+        }
+    }
+
     pub fn get_full(&self) -> Vec<f32> {
         match self {
             Self::Full(full) => full.clone(),
@@ -28,7 +35,7 @@ impl Vector {
             }
         }
     }
-    pub fn to_quantized(&mut self) {
+    pub fn quantize(&mut self) {
         match self {
             Self::Compressed(_) => (),
             Self::Full(full) => {
@@ -106,14 +113,17 @@ impl Point {
     }
 
     pub fn quantize(&mut self) {
-        self.vector.to_quantized();
+        self.vector.quantize();
     }
-    pub fn to_full_precision(&mut self) {
+    pub fn to_full(&mut self) {
         self.vector.to_full();
     }
 
     pub fn get_full_precision(&self) -> Vec<f32> {
         self.vector.get_full()
+    }
+    pub fn get_quantized(&self) -> LVQVec {
+        self.vector.get_quantized()
     }
 
     pub fn dim(&self) -> usize {
@@ -148,6 +158,48 @@ impl Points {
             }
         };
     }
+
+    pub fn dim(&self) -> usize {
+        match self {
+            Points::Empty => 0,
+            Points::Collection(points) => points.iter().next().unwrap().1.vector.dim(),
+        }
+    }
+
+    /// Removes and returns some point from the collection.
+    pub fn pop_rand(&mut self) -> Option<Point> {
+        match self {
+            Points::Empty => None,
+            Points::Collection(points) => {
+                let key = points.keys().next().unwrap().clone();
+                points.remove(&key)
+            }
+        }
+    }
+
+    pub fn pop(&mut self, index: &usize) -> Option<Point> {
+        match self {
+            Points::Empty => None,
+            Points::Collection(points) => points.remove(index),
+        }
+    }
+
+    pub fn pop_multiple(&mut self, ids: &Vec<usize>) -> Option<Self> {
+        match self {
+            Points::Empty => None,
+            Points::Collection(points) => {
+                let mut collection = HashMap::with_hasher(BuildNoHashHasher::default());
+                for key in ids {
+                    let point = points
+                        .remove(&key)
+                        .expect(format!("Could not find {key} in collection.").as_str());
+                    collection.insert(*key, point);
+                }
+                Some(Self::Collection(collection))
+            }
+        }
+    }
+
     pub fn contains(&self, index: &usize) -> bool {
         match self {
             Points::Empty => false,
@@ -162,7 +214,9 @@ impl Points {
                     "Tried to get point with index {index}, but there are no stored vectors in the index."
                 );
             }
-            Points::Collection(points) => points.get(&index).unwrap(),
+            Points::Collection(points) => points
+                .get(&index)
+                .expect(format!("Could not get point {index} from collection.").as_str()),
         };
 
         point
@@ -238,6 +292,18 @@ impl Points {
         match self {
             Points::Empty => 0,
             Points::Collection(points) => points.len(),
+        }
+    }
+
+    pub fn quantize(&mut self) {
+        for (_, point) in self.iterate_mut() {
+            point.quantize();
+        }
+    }
+
+    pub fn to_full(&mut self) {
+        for (_, point) in self.iterate_mut() {
+            point.to_full();
         }
     }
 }

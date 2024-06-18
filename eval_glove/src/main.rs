@@ -32,6 +32,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
+    // let index = HNSW::build_index_par_kmeans(m, embeddings);
     let index = HNSW::build_index_par(m, embeddings);
     // let mut index = HNSW::new(m, None, dim);
     // let mut bencher = Bencher::new();
