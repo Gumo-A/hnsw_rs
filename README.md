@@ -1,6 +1,6 @@
 # Hierarchical Navigable Small Words (HNSW)
 
-I am trying to implement this algorithm in Rust for learning purposes. My implementation in Python can be found [here](https://github.com/Gumo-A/hnsw).
+I am trying to implement this algorithm in Rust for learning purposes
 
 At the current commit, the package can build the index and query using a vector as input.
 
