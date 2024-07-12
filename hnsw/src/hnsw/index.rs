@@ -7,7 +7,10 @@ use super::{
 use crate::hnsw::params::Params;
 use crate::hnsw::points::Point;
 use crate::hnsw::{graph::Graph, lvq::LVQVec};
-use crate::{helpers::data::split, hnsw::kmeans::partition_space};
+use crate::{
+    helpers::data::{split, split_eps},
+    hnsw::kmeans::partition_space,
+};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::BuildNoHashHasher;
@@ -420,24 +423,23 @@ impl HNSW {
     }
 
     pub fn insert_par_2(
-        mut index: Self,
-        mut points: Vec<Point>,
-        levels: Vec<usize>,
+        index: Arc<RwLock<Self>>,
+        mut points: Vec<(usize, Point)>,
         bar: ProgressBar,
     ) {
         let batch_size = 16;
         let points_len = points.len();
         let mut batch = Vec::new();
 
-        for (idx, level) in (0..points_len).zip(levels) {
-            let point = points.pop().unwrap();
-            if index.points.contains(&point.id) {
+        for idx in 0..points_len {
+            let (ep, point) = points.pop().unwrap();
+            let mut entry = HashSet::with_hasher(BuildNoHashHasher::default());
+            entry.insert(ep);
+            if index.read().points.contains(&point.id) {
                 continue;
             }
-            let max_layer_nb = index.layers.len() - 1;
 
-            let ep = index.step_1(&point, max_layer_nb, level);
-            let insertion_results = index.step_2(&point, ep, level);
+            let insertion_results = index.write().step_2(&point, entry, 0);
             batch.push((point, insertion_results));
 
             let last_idx = idx == (points_len - 1);
@@ -448,7 +450,7 @@ impl HNSW {
                 continue;
             }
             let batch_len = batch.len() as u64;
-            index.write_batch(&mut batch);
+            index.write().write_batch(&mut batch);
             if !bar.is_hidden() {
                 bar.inc(batch_len);
             }
@@ -519,7 +521,7 @@ impl HNSW {
         (Points::Collection(collection), levels)
     }
 
-    fn make_vec_points(&mut self, mut vectors: Vec<Vec<f32>>) -> (Vec<Point>, Vec<usize>) {
+    fn make_vec_points(&self, mut vectors: Vec<Vec<f32>>) -> (Vec<Point>, Vec<usize>) {
         let mut points_idx: Vec<usize> = (0..vectors.len()).collect();
         points_idx.shuffle(&mut thread_rng());
 
@@ -583,50 +585,41 @@ impl HNSW {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
         let dim = vectors[0].len();
 
-        let mut index = HNSW::new(m, None, dim);
-        // let index = Arc::new(RwLock::new(HNSW::new(m, None, dim)));
-        let (mut points, levels) = index.make_vec_points(vectors);
+        let index = Arc::new(RwLock::new(HNSW::new(m, None, dim)));
+        let (mut points, levels) = index.read().make_vec_points(vectors);
 
         let non_zero: Vec<usize> = levels.iter().take_while(|x| **x > 0).map(|x| *x).collect();
         let bar = get_progress_bar("Inserting non-zero layer points", non_zero.len(), false);
-        index.first_insert(points.pop().unwrap());
+        let mut write_ref = index.write();
+        write_ref.first_insert(points.pop().unwrap());
         for level in non_zero {
-            index.insert(points.pop().unwrap(), level);
+            write_ref.insert(points.pop().unwrap(), level);
             bar.inc(1);
         }
+        drop(write_ref);
 
-        let eps_points = index.determine_eps(points.clone());
+        let eps_points = index.read().determine_eps(points.clone());
 
-        let mut exclude = HashSet::new();
-        while points.len() > 0 {
-            let eps_to_insert =
-                index.partition_layer_1(nb_threads, exclude, HashSet::from_iter(eps_points.keys()));
-            exclude = eps_to_insert.clone();
-            dbg!(&eps_to_insert);
+        let mut points_split = split_eps(points, eps_points, nb_threads);
+
+        let mut handlers = Vec::new();
+        for thread_nb in 0..nb_threads {
+            let index_copy = index.clone();
+            let points_thread = points_split.pop().unwrap();
+            let bar = get_progress_bar(
+                "Inserting Vectors",
+                points_thread.len(),
+                thread_nb != (nb_threads - 1),
+            );
+            handlers.push(std::thread::spawn(move || {
+                Self::insert_par_2(index_copy, points_thread, bar);
+            }));
         }
-        panic!("terminating");
-
-        let mut points_split = split(points, nb_threads);
-
-        // let mut handlers = Vec::new();
-        // for thread_nb in 0..nb_threads {
-        //     let index_copy = index.clone();
-        //     let points_thread = points_split.pop().unwrap();
-        //     let levels_split = levels.drain(0..points_thread.len()).collect();
-        //     let bar = get_progress_bar(
-        //         "Inserting Vectors",
-        //         points_thread.len(),
-        //         thread_nb != (nb_threads - 1),
-        //     );
-        //     handlers.push(std::thread::spawn(move || {
-        //         Self::insert_par_2(index_copy, points_thread, levels_split, bar);
-        //     }));
-        // }
-        // for handle in handlers {
-        //     let _ = handle.join().unwrap();
-        // }
-        // Arc::try_unwrap(index).unwrap().into_inner()
-        index
+        for handle in handlers {
+            let _ = handle.join().unwrap();
+        }
+        Arc::try_unwrap(index).unwrap().into_inner()
+        // index
     }
 
     fn partition_layer_1(
@@ -741,8 +734,6 @@ impl HNSW {
         let self_ref = Arc::new(RwLock::new(self.clone()));
         let mut points_split = split(points, nb_threads);
 
-        let mut eps = HashMap::new();
-
         let max_layer_nb = self.layers.len() - 1;
         let mut handlers = Vec::new();
         for thread_nb in 0..nb_threads {
@@ -756,24 +747,48 @@ impl HNSW {
 
             handlers.push(std::thread::spawn(move || {
                 let mut eps_thread = HashMap::new();
-                for (idx, point) in points_thread.iter().enumerate() {
+                for (_, point) in points_thread.iter().enumerate() {
                     let ep = *index_copy
                         .read()
                         .step_1(point, max_layer_nb, 0)
                         .iter()
                         .next()
                         .unwrap();
-                    eps_thread.entry(ep).or_insert(HashSet::new()).insert(idx);
+
+                    eps_thread
+                        .entry(ep)
+                        .or_insert(HashSet::from([point.id]))
+                        .insert(point.id);
                     bar.inc(1);
                 }
                 eps_thread
             }));
         }
+        let mut added = 0;
+        let mut seen = 0;
+        let mut eps = HashMap::new();
         for handle in handlers {
             let eps_thread = handle.join().unwrap();
-            eps.extend(eps_thread);
+            for (ep, nodes) in eps_thread {
+                for node in nodes {
+                    let i = eps.entry(ep).or_insert(HashSet::from([node])).insert(node);
+                    if i {
+                        added += 1;
+                    }
+                    seen += 1;
+                }
+            }
         }
+        println!("added nodes {}", added);
+        println!("seen nodes {}", seen);
 
+        let mut in_map = 0;
+        for (_, ps) in eps.iter() {
+            in_map += ps.len();
+        }
+        println!("in map {}", in_map);
+
+        //ok
         eps
     }
     fn _merge_threads(&mut self, thread_results: Vec<Self>, mut on_frontier: Vec<usize>) {

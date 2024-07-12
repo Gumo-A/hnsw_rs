@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, ReadDir};
 use std::fs::{DirEntry, File};
 use std::io::{BufReader, Result};
@@ -42,6 +42,48 @@ pub fn split(base_vec: Vec<Point>, nb_splits: usize) -> Vec<Vec<Point>> {
             continue;
         }
         split_vector.push(base_vec[buffer..(buffer + per_split)].to_vec());
+        buffer += per_split;
+    }
+
+    let mut sum_lens = 0;
+    for i in split_vector.iter() {
+        sum_lens += i.len();
+    }
+
+    assert!(sum_lens == base_vec.len(), "sum: {sum_lens}");
+
+    split_vector
+}
+
+pub fn split_eps(
+    base_vec: Vec<Point>,
+    eps: HashMap<usize, HashSet<usize>>,
+    nb_splits: usize,
+) -> Vec<Vec<(usize, Point)>> {
+    let mut points = HashMap::new();
+    for point in base_vec.iter() {
+        points.insert(point.id, point.clone());
+    }
+    let mut to_split = Vec::new();
+    for (ep, points_ids) in eps.iter() {
+        for id in points_ids {
+            to_split.push((*ep, points.get(id).unwrap().clone()));
+        }
+    }
+
+    assert_eq!(to_split.len(), base_vec.len());
+
+    let mut split_vector: Vec<Vec<(usize, Point)>> = Vec::new();
+
+    let per_split = base_vec.len() / nb_splits;
+
+    let mut buffer = 0;
+    for idx in 0..nb_splits {
+        if idx == nb_splits - 1 {
+            split_vector.push(to_split[buffer..].to_vec());
+            continue;
+        }
+        split_vector.push(to_split[buffer..(buffer + per_split)].to_vec());
         buffer += per_split;
     }
 
