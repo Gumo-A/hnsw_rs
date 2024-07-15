@@ -56,14 +56,10 @@ pub fn split(base_vec: Vec<Point>, nb_splits: usize) -> Vec<Vec<Point>> {
 }
 
 pub fn split_eps(
-    base_vec: Vec<Point>,
+    points: HashMap<usize, Point>,
     eps: HashMap<usize, HashSet<usize>>,
     nb_splits: usize,
 ) -> Vec<Vec<(usize, Point)>> {
-    let mut points = HashMap::new();
-    for point in base_vec.iter() {
-        points.insert(point.id, point.clone());
-    }
     let mut to_split = Vec::new();
     for (ep, points_ids) in eps.iter() {
         for id in points_ids {
@@ -71,11 +67,11 @@ pub fn split_eps(
         }
     }
 
-    assert_eq!(to_split.len(), base_vec.len());
+    assert_eq!(to_split.len(), points.len());
 
     let mut split_vector: Vec<Vec<(usize, Point)>> = Vec::new();
 
-    let per_split = base_vec.len() / nb_splits;
+    let per_split = points.len() / nb_splits;
 
     let mut buffer = 0;
     for idx in 0..nb_splits {
@@ -92,7 +88,7 @@ pub fn split_eps(
         sum_lens += i.len();
     }
 
-    assert!(sum_lens == base_vec.len(), "sum: {sum_lens}");
+    assert!(sum_lens == points.len(), "sum: {sum_lens}");
 
     split_vector
 }
