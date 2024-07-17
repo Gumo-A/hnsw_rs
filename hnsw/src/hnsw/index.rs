@@ -458,7 +458,7 @@ impl HNSW {
         }
     }
 
-    pub fn insert_par_3(&mut self, mut points: Vec<(usize, Point)>) {
+    pub fn insert_par_3(&mut self, mut points: Vec<(usize, Point)>, bar: ProgressBar) {
         let batch_size = 16;
         let points_len = points.len();
         let mut batch = Vec::new();
@@ -472,6 +472,7 @@ impl HNSW {
             }
 
             let insertion_results = self.step_2(&point, entry, 0);
+            bar.inc(1);
             batch.push((point, insertion_results));
 
             let last_idx = idx == (points_len - 1);
@@ -609,7 +610,7 @@ impl HNSW {
     // TODO: Try to be smarter about parallelized insertion
     //       There is probably some things I can take advantage of thanks to the
     //       fact that I have all the vectors in advance.
-    pub fn build_index_par(m: usize, vectors: Vec<Vec<f32>>) -> Self {
+    pub fn build_index_par_001(m: usize, vectors: Vec<Vec<f32>>) -> Self {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
         let dim = vectors[0].len();
 
@@ -632,10 +633,15 @@ impl HNSW {
             points_map.insert(point.id, point.clone());
         }
 
+        let (mean, std) = compute_stats(&index.points);
+
+        println!("Distances stats:");
+        println!("Mean {mean}, Std {std}");
+
         let mut entry_points: HashSet<&usize> = eps_points.keys().collect();
 
         let mut rng = rand::thread_rng();
-        let min_dist = 0.5;
+        let min_dist = 0.0;
         let bar = get_progress_bar("Inserting Vectors", points_map.len(), false);
 
         while points_map.len() > 0 {
@@ -656,24 +662,24 @@ impl HNSW {
                     .expect(format!("{ep_idx} not in 'entry_points'").as_str());
                 let possible_ep = index.points.get_point(***ep_id);
 
-                for already_taken_list in eps_insert.iter() {
-                    for entry_point in already_taken_list.iter() {
-                        let ep_point = index.points.get_point(*entry_point);
-                        if ep_point.dist2vec(&possible_ep.vector).dist < min_dist {
-                            retry = true;
-                            break;
-                        }
-                    }
-                }
+                // for already_taken_list in eps_insert.iter() {
+                //     for entry_point in already_taken_list.iter() {
+                //         let ep_point = index.points.get_point(*entry_point);
+                //         if ep_point.dist2vec(&possible_ep.vector).dist < min_dist {
+                //             retry = true;
+                //             break;
+                //         }
+                //     }
+                // }
 
-                if (trials > 32) & (eps_insert.len() > 0) {
-                    break;
-                }
-                if retry {
-                    trials += 1;
-                    continue;
-                }
-                trials = 0;
+                // if (trials > 32) & (eps_insert.len() > 0) {
+                //     break;
+                // }
+                // if retry {
+                //     trials += 1;
+                //     continue;
+                // }
+                // trials = 0;
 
                 thread_list.push(possible_ep.id);
                 entry_points.remove(&possible_ep.id);
@@ -719,8 +725,9 @@ impl HNSW {
                         }
                     }
                 }
+                let bar = get_progress_bar("Inserting Vectors", points_map.len(), true);
                 handlers.push(std::thread::spawn(move || {
-                    index_copy.insert_par_3(points_thread);
+                    index_copy.insert_par_3(points_thread, bar);
                     index_copy
                 }));
             }
@@ -735,6 +742,230 @@ impl HNSW {
         }
 
         index
+    }
+
+    pub fn build_index_par_002(m: usize, vectors: Vec<Vec<f32>>) -> Self {
+        // let nb_threads = std::thread::available_parallelism().unwrap().get();
+        let nb_threads = 64;
+        let dim = vectors[0].len();
+
+        let mut index = HNSW::new(m, None, dim);
+        let (mut points, levels) = index.make_vec_points(vectors);
+
+        let non_zero = levels.iter().take_while(|x| **x > 0).map(|x| *x);
+        let bar = get_progress_bar(
+            "Inserting non-zero layer points",
+            non_zero.clone().count(),
+            false,
+        );
+
+        let first_insert = points.pop().unwrap();
+        index.first_insert(first_insert.clone());
+        for level in non_zero {
+            index.insert(points.pop().unwrap(), level);
+            bar.inc(1);
+        }
+
+        let eps_points = index.determine_eps(points.clone());
+
+        let mut points_map = HashMap::new();
+        for point in points.iter() {
+            points_map.insert(point.id, point.clone());
+        }
+
+        let (eps_splits, frontier_eps) = index.split_eps(nb_threads, &eps_points);
+
+        let biggest_thread = eps_splits
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, split)| split.len())
+            .unwrap();
+
+        let frac_frontier = (frontier_eps.len() as f32) / (eps_points.len() as f32);
+
+        println!("Frac frontier eps: {frac_frontier}");
+        println!("Biggest split {} eps", biggest_thread.1.len());
+        println!(
+            "There are {} non-empty splits",
+            eps_splits.iter().filter(|x| x.len() > 0).count()
+        );
+
+        let mut handlers = Vec::new();
+        for (thread_idx, thread_list) in eps_splits.iter().enumerate() {
+            let mut index_copy = index.clone();
+            let mut points_thread = Vec::new();
+            for ep_to_insert in thread_list.iter() {
+                for point_id in eps_points
+                    .get(ep_to_insert)
+                    .expect(format!("{ep_to_insert} not a key in 'eps_points'").as_str())
+                    .iter()
+                {
+                    if points_map.contains_key(point_id) {
+                        points_thread.push((
+                            *ep_to_insert,
+                            points_map
+                                .get(point_id)
+                                .expect(format!("{point_id} not a key in 'points_map'").as_str())
+                                .clone(),
+                        ));
+                        points_map.remove(point_id);
+                    }
+                }
+            }
+            let bar = get_progress_bar(
+                "Inserting Vectors",
+                points_thread.len(),
+                thread_idx != biggest_thread.0,
+            );
+            handlers.push(std::thread::spawn(move || {
+                index_copy.insert_par_3(points_thread, bar);
+                index_copy
+            }));
+        }
+        let mut thread_results = Vec::new();
+        for handle in handlers {
+            let thread_output = handle.join().unwrap();
+            thread_results.push(thread_output);
+        }
+        index.merge_threads(thread_results);
+
+        let mut points_thread = Vec::new();
+        for ep_to_insert in frontier_eps.iter() {
+            for point_id in eps_points
+                .get(ep_to_insert)
+                .expect(format!("{ep_to_insert} not a key in 'eps_points'").as_str())
+                .iter()
+            {
+                if points_map.contains_key(point_id) {
+                    points_thread.push((
+                        *ep_to_insert,
+                        points_map
+                            .get(point_id)
+                            .expect(format!("{point_id} not a key in 'points_map'").as_str())
+                            .clone(),
+                    ));
+                    points_map.remove(point_id);
+                }
+            }
+        }
+        let bar = get_progress_bar("Inserting Frontier Vectors", points_thread.len(), false);
+        index.insert_par_3(points_thread, bar);
+        index
+    }
+
+    /// Splits eps according to randomized halt-and-sync logic (obsidian)
+    fn split_eps(
+        &self,
+        nb_threads: usize,
+        eps: &HashMap<usize, HashSet<usize>>,
+    ) -> (Vec<Vec<usize>>, Vec<usize>) {
+        let min_dist = 1.0;
+        let mut eps_ids: Vec<&usize> = eps.keys().collect();
+        eps_ids.shuffle(&mut thread_rng());
+        let eps_ids_set: HashSet<&&usize> = HashSet::from_iter(eps_ids.iter());
+        let mut seen: HashSet<usize> = HashSet::new();
+
+        let mut eps_splits: Vec<Vec<usize>> = Vec::from_iter((0..nb_threads).map(|_| Vec::new()));
+        let mut frontier_eps: Vec<usize> = Vec::new();
+        let mut empty_splits = nb_threads;
+
+        let bar = get_progress_bar("Splitting eps", eps_ids.len(), false);
+
+        for id in eps_ids.iter() {
+            bar.inc(1);
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.insert(**id);
+            let mut ep_neighbors = self.layers.get(&1).unwrap().neighbors(**id).clone();
+            let mut to_remove = Vec::new();
+            for i in ep_neighbors.iter() {
+                if !eps_ids_set.contains(&i) {
+                    to_remove.push(*i);
+                }
+            }
+            for i in to_remove {
+                ep_neighbors.remove(&i);
+            }
+            seen.extend(ep_neighbors.iter());
+
+            if empty_splits == nb_threads {
+                let split = eps_splits.get_mut(0).unwrap();
+                split.push(**id);
+                split.extend(ep_neighbors.iter());
+                empty_splits -= 1;
+                continue;
+            }
+
+            let mut close_to = Vec::from_iter((0..nb_threads).map(|_| false));
+
+            let ep_point = self.points.get_point(**id);
+            for (idx, split) in eps_splits.iter().enumerate() {
+                for inserted_ep in split.iter() {
+                    let inserted_point = self.points.get_point(*inserted_ep);
+                    let dist = ep_point.dist2vec(&inserted_point.vector).dist;
+                    if dist < min_dist {
+                        *close_to.get_mut(idx).unwrap() = true;
+                        break;
+                    }
+                }
+            }
+
+            let nb_close = close_to.iter().filter(|x| **x).count();
+
+            // means ep is a frontier point; its close to more than one cluster
+            if nb_close > 1 {
+                frontier_eps.push(ep_point.id);
+                frontier_eps.extend(ep_neighbors.iter());
+            // means we will insert in one of the threads
+            } else if nb_close == 1 {
+                let insert_in = close_to
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, x)| **x)
+                    .next()
+                    .unwrap()
+                    .0;
+                assert!(insert_in < eps_splits.len());
+                eps_splits.get_mut(insert_in).unwrap().push(**id);
+                eps_splits
+                    .get_mut(insert_in)
+                    .unwrap()
+                    .extend(ep_neighbors.iter());
+            } else if nb_close == 0 {
+                let mut insert_in: usize = 999;
+                for (idx, split) in eps_splits.iter().enumerate() {
+                    if split.is_empty() {
+                        insert_in = idx;
+                        break;
+                    }
+                }
+                // means the point is far from all clusters, there is no empty thread
+                // put it in the nearest cluster
+                if insert_in == 999 {
+                    let mut min_dist = (999, 999.0);
+                    for (idx, split) in eps_splits.iter().enumerate() {
+                        for inserted_ep in split.iter() {
+                            let inserted_point = self.points.get_point(*inserted_ep);
+                            let dist = ep_point.dist2vec(&inserted_point.vector).dist;
+                            if dist < min_dist.1 {
+                                min_dist = (idx, dist);
+                            }
+                        }
+                    }
+                    insert_in = min_dist.0;
+                }
+
+                assert!(insert_in < eps_splits.len());
+                eps_splits.get_mut(insert_in).unwrap().push(**id);
+                eps_splits
+                    .get_mut(insert_in)
+                    .unwrap()
+                    .extend(ep_neighbors.iter());
+            }
+        }
+
+        (eps_splits, frontier_eps)
     }
 
     fn partition_layer_1(
@@ -843,7 +1074,7 @@ impl HNSW {
         points_appart
     }
 
-    /// Returns a HashMap linking each point to its entry point in layer 0.
+    /// Returns a HashMap linking each entry point to the points it inserts in layer 0.
     fn determine_eps(&self, points: Vec<Point>) -> HashMap<usize, HashSet<usize>> {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
         let self_ref = Arc::new(RwLock::new(self.clone()));
@@ -1244,4 +1475,44 @@ fn center_vectors(vectors: &mut Vec<Vec<f32>>) {
             .enumerate()
             .for_each(|(idx, x)| *x -= means[idx])
     });
+}
+
+fn compute_stats(points: &Points) -> (f32, f32) {
+    let mut dists: HashMap<(usize, usize), f32> = HashMap::new();
+    for (id, point) in points.iterate() {
+        for (idx, pointx) in points.iterate() {
+            if id == idx {
+                continue;
+            }
+            dists
+                .entry((*id.min(idx), *id.max(idx)))
+                .or_insert(point.dist2vec(&pointx.vector).dist);
+        }
+    }
+
+    write_stats(&dists).unwrap();
+
+    let mut mean = 0.0;
+    let mut std = 0.0;
+    for (_, dist) in dists.iter() {
+        mean += dist;
+    }
+    mean /= dists.len() as f32;
+
+    for (_, dist) in dists.iter() {
+        std += (dist - mean).powi(2);
+    }
+    std /= dists.len() as f32;
+
+    (mean, std.sqrt())
+}
+
+fn write_stats(dists: &HashMap<(usize, usize), f32>) -> std::io::Result<()> {
+    std::fs::remove_file("./dist_stats.json")?;
+    let file = File::create("./dist_stats.json")?;
+    let mut writer = BufWriter::new(file);
+    let dists = Vec::from_iter(dists.values());
+    serde_json::to_writer_pretty(&mut writer, &dists)?;
+    writer.flush()?;
+    Ok(())
 }

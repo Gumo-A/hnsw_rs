@@ -71,7 +71,7 @@ impl Graph {
                     "Set contains {node_id}: {}",
                     self.nodes.contains_key(&node_id)
                 );
-                panic!("Could not get the neighbors of {node_id}");
+                panic!("Could not get the neighbors of {node_id}. The graph does not contain this node");
             }
         }
         // .expect(format!("Could not get the neighbors of {node_id}").as_str())
