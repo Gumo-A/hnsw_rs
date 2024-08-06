@@ -19,3 +19,10 @@ unroll = "0.1.5"
 # ndarray-linalg = { version = "0.16", features = ["intel-mkl-static"] }
 # ndarray = { version = "0.15.6", features = ["blas", "serde"] }
 # blas-src = { version = "0.10", features = ["openblas"] }
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "hnsw_benchmarks"
+harness = false
