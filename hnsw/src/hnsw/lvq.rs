@@ -98,6 +98,7 @@ impl LVQVec {
         }
         Dist::new(acc.iter().sum::<f32>().sqrt())
     }
+
     pub fn dim(&self) -> usize {
         self.quantized_vec.len()
     }
