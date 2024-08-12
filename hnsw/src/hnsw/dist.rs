@@ -7,7 +7,6 @@ pub struct Dist {
 
 impl Dist {
     pub fn new(f: f32) -> Self {
-        assert!(f.is_finite());
         Dist { dist: f }
     }
 }
