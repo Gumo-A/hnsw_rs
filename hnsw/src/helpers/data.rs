@@ -30,18 +30,18 @@ pub fn split_ids(ids: Vec<usize>, nb_splits: usize, split_to_compute: usize) -> 
     split_vector[split_to_compute].to_owned()
 }
 
-pub fn split(base_vec: Vec<Point>, nb_splits: usize) -> Vec<Vec<Point>> {
-    let mut split_vector: Vec<Vec<Point>> = Vec::new();
+pub fn split(nb_elements: usize, nb_splits: usize) -> Vec<Vec<usize>> {
+    let mut split_vector: Vec<Vec<usize>> = Vec::new();
 
-    let per_split = base_vec.len() / nb_splits;
+    let per_split: usize = nb_elements / nb_splits;
 
     let mut buffer = 0;
     for idx in 0..nb_splits {
         if idx == nb_splits - 1 {
-            split_vector.push(base_vec[buffer..].to_vec());
+            split_vector.push((buffer..nb_elements).collect());
             continue;
         }
-        split_vector.push(base_vec[buffer..(buffer + per_split)].to_vec());
+        split_vector.push((buffer..(buffer + per_split)).collect());
         buffer += per_split;
     }
 
@@ -50,7 +50,10 @@ pub fn split(base_vec: Vec<Point>, nb_splits: usize) -> Vec<Vec<Point>> {
         sum_lens += i.len();
     }
 
-    assert!(sum_lens == base_vec.len(), "sum: {sum_lens}");
+    assert!(
+        sum_lens == nb_elements,
+        "Total elements: {nb_elements}, sum of splits: {sum_lens}"
+    );
 
     split_vector
 }
