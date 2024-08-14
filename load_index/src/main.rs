@@ -5,9 +5,8 @@ use hnsw::hnsw::index::HNSW;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 use std::collections::HashMap;
-use std::io::Result;
 
-fn main() -> Result<()> {
+fn main() -> std::io::Result<()> {
     let (dim, lim, m) = match parse_args_eval() {
         Ok(args) => args,
         Err(err) => {
@@ -28,37 +27,12 @@ fn main() -> Result<()> {
     let mut index =
         HNSW::from_path(format!("/home/gamal/indices/eval_dim{dim}_lim{lim}_m{m}.json").as_str())?;
     // bench_ann(&index, &embeddings);
-    index.print_params();
-    estimate_recall(&mut index, &embeddings, &bf_data);
+    index.print_index();
+    estimate_recall(&mut index, &bf_data).unwrap();
     Ok(())
 }
 
-fn bench_ann(index: &HNSW, embeddings: &Vec<Vec<f32>>) {
-    for ef in (12..100).step_by(12) {
-        let sample_size: usize = 4_000;
-        let bar = ProgressBar::new(sample_size as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{msg} {human_pos}/{human_len} {percent}% [ ETA: {eta} : Elapsed: {elapsed} ] {per_sec} {wide_bar}",
-            )
-            .unwrap(),
-        );
-        bar.set_message(format!("Finding ANNs ef={ef}"));
-
-        for vector in embeddings.iter().cycle().take(sample_size) {
-            bar.inc(1);
-            let _ = index.ann_by_vector(&vector, 10, ef);
-        }
-        println!("{}ms", bar.elapsed().as_millis());
-    }
-}
-
-fn estimate_recall(
-    index: &mut HNSW,
-    // TODO: this doesnt need to be passed if "index" stores the vectors
-    embeddings: &Vec<Vec<f32>>,
-    bf_data: &HashMap<usize, Vec<usize>>,
-) {
+fn estimate_recall(index: &mut HNSW, bf_data: &HashMap<usize, Vec<usize>>) -> Result<(), String> {
     let mut rng = rand::thread_rng();
     let max_id = index.points.ids().max().unwrap_or(&usize::MAX);
     for ef in (12..100).step_by(12) {
@@ -72,17 +46,13 @@ fn estimate_recall(
         );
         bar.set_message(format!("Finding ANNs ef={ef}"));
 
-        // let mut bencher = Bencher::new();
         let mut recall_10: HashMap<usize, f32> = HashMap::new();
         for _ in (0..sample_size).enumerate() {
             bar.inc(1);
 
             let idx = rng.gen_range(0..(index.points.len()));
-            let vector = &embeddings[idx];
-            let anns = index.ann_by_vector(
-                &vector, 10, ef,
-                // &mut bencher
-            );
+            let point = &index.points.get_point(idx).unwrap();
+            let anns = index.ann_by_vector(&point.vector.get_full(), 10, ef)?;
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()
@@ -111,4 +81,5 @@ fn estimate_recall(
         avg_recall /= recall_10.keys().count() as f32;
         println!("Recall@10 {avg_recall}");
     }
+    Ok(())
 }
