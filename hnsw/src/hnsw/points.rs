@@ -152,6 +152,7 @@ impl Points {
         }
     }
 
+    /// Iterator over (ID, Level) pairs of stored Point structs.
     pub fn ids_levels(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         match self {
             Points::Empty => {

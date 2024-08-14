@@ -10,7 +10,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use nohash_hasher::BuildNoHashHasher;
 
-use parking_lot::RwLock;
+use parking_lot::{RwLock, RwLockReadGuard};
 use std::sync::Arc;
 
 use rand::thread_rng;
@@ -52,7 +52,7 @@ impl HNSW {
         }
     }
 
-    pub fn print_params(&self) {
+    pub fn print_index(&self) {
         println!("m = {}", self.params.m);
         println!("mmax = {}", self.params.mmax);
         println!("mmax0 = {}", self.params.mmax0);
@@ -100,6 +100,39 @@ impl HNSW {
             .cloned()
             .collect();
         Ok(anns)
+    }
+
+    // TODO: multithreaded
+    pub fn anns_by_vectors(&self, vector: &Vec<Vec<f32>>, n: usize, ef: usize) -> () {
+        // Result<Vec<Vec<usize>>, String> {
+        // todo!("multithreaded");
+        // let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
+        //     HashSet::with_hasher(BuildNoHashHasher::default());
+        // ep.insert(self.ep);
+        // let nb_layer = self.layers.len();
+
+        // let point = Point::new_quantized(0, None, vector);
+
+        // for layer_nb in (0..nb_layer).rev() {
+        //     ep = self.search_layer(&self.layers.get(&(layer_nb)).unwrap(), &point, &mut ep, 1)?;
+        // }
+
+        // let layer_0 = &self.layers.get(&0).unwrap();
+        // let neighbors = self.search_layer(layer_0, &point, &mut ep, ef)?;
+
+        // let nearest_neighbors: BTreeMap<Dist, usize> =
+        //     BTreeMap::from_iter(neighbors.iter().map(|x| {
+        //         let dist = self.points.get_point(*x).unwrap().dist2other(&point);
+        //         (dist, *x)
+        //     }));
+
+        // let anns: Vec<usize> = nearest_neighbors
+        //     .values()
+        //     .skip(1)
+        //     .take(n)
+        //     .cloned()
+        //     .collect();
+        // Ok(anns)
     }
 
     fn step_1(
@@ -165,6 +198,43 @@ impl HNSW {
             insertion_results.insert(layer_nb, layer_result);
         }
         Ok(insertion_results)
+    }
+
+    fn step_2_layer0(
+        index: &RwLockReadGuard<'_, HNSW>,
+        layer0: &mut Graph,
+        point: &Point,
+        mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
+    ) -> Result<(), String> {
+        ep = index.search_layer(layer0, point, &mut ep, index.params.ef_cons)?;
+
+        let neighbors_to_connect =
+            index.select_heuristic(layer0, point, &mut ep, index.params.m, false, true)?;
+
+        let prune_results =
+            index.prune_connexions(index.params.mmax0, layer0, &neighbors_to_connect)?;
+
+        let mut layer_result: HashMap<
+            usize,
+            HashSet<usize, BuildNoHashHasher<usize>>,
+            BuildNoHashHasher<usize>,
+        > = HashMap::with_hasher(BuildNoHashHasher::default());
+        layer_result.extend(
+            prune_results.iter().map(|x| (*x.0, x.1.to_owned())).chain(
+                [(point.id, neighbors_to_connect)]
+                    .iter()
+                    .map(|x| (x.0, x.1.to_owned())),
+            ),
+        );
+
+        for (node, neighbors) in layer_result.drain() {
+            if node == point.id {
+                layer0.add_node(point.id);
+            }
+            layer0.replace_neighbors(node, neighbors)?;
+        }
+
+        Ok(())
     }
 
     fn prune_connexions(
@@ -241,15 +311,26 @@ impl HNSW {
     }
 
     pub fn insert(&mut self, point_id: usize, level: usize) -> Result<bool, String> {
+        let point = match self.points.get_point(point_id) {
+            Some(p) => {
+                // TODO
+                // if p.is_inserted() {
+                //     return Ok(true);
+                // }
+                p
+            }
+            None => return Err(format!("{point_id} not in points given to the index.")),
+        };
+
         if self.layers.len() == 0 {
             self.first_insert(point_id);
             return Ok(true);
         }
 
-        let point = match self.points.get_point(point_id) {
-            Some(p) => p,
-            None => return Err(format!("{point_id} not in points given to the index.")),
-        };
+        // TODO: points should hold whether they have been inserted
+        if self.layers.get(&0).unwrap().contains(&point_id) {
+            return Ok(true);
+        }
 
         let max_layer_nb = self.layers.len() - 1;
         let ep = self.step_1(point, max_layer_nb, level)?;
@@ -306,9 +387,15 @@ impl HNSW {
         bar: ProgressBar,
     ) -> Result<(), String> {
         // TODO: Segment the points so I can increase the batch size
-        let batch_size = 100;
+        // Currently, if you decrease the batch size, the final index is of
+        // good quality, but takes time.
+        // If you increase it too much, the index is not good, but gets constructed
+        // very fast.
+        let batch_size = 10000;
+        let mut current_batch = 0;
         let points_len = ids_levels.len();
-        let mut batch = Vec::with_capacity(batch_size);
+
+        let mut layer0 = index.read().layers.get(&0).unwrap().clone();
 
         for (idx, (point_id, level)) in ids_levels.iter().enumerate() {
             let read_ref = index.read();
@@ -316,37 +403,43 @@ impl HNSW {
             let point = read_ref.points.get_point(*point_id).unwrap();
             let max_layer_nb = read_ref.layers.len() - 1;
             let ep = read_ref.step_1(&point, max_layer_nb, *level)?;
-            let insertion_results = read_ref.step_2(&point, ep, *level)?;
+            HNSW::step_2_layer0(&read_ref, &mut layer0, &point, ep)?;
+            current_batch += 1;
 
-            drop(read_ref);
-
-            batch.push(insertion_results);
             let last_idx = idx == (points_len - 1);
-            let new_layer = *level > max_layer_nb;
-            let full_batch = batch.len() >= batch_size;
+            let full_batch = current_batch >= batch_size;
 
-            let have_to_write: bool = last_idx | new_layer | full_batch;
+            let have_to_write: bool = last_idx | full_batch;
 
             let mut write_ref = if have_to_write {
+                drop(read_ref);
                 index.write()
             } else {
                 continue;
             };
-            if new_layer {
-                for layer_nb in max_layer_nb + 1..level + 1 {
-                    let mut layer = Graph::new();
-                    layer.add_node(*point_id);
-                    write_ref.layers.insert(layer_nb, layer);
-                    write_ref.ep = *point_id;
-                }
-            }
+
+            write_ref.update_layer0(&layer0);
+            layer0 = write_ref.layers.get(&0).unwrap().clone();
             if !bar.is_hidden() {
-                bar.inc(batch.len() as u64);
+                bar.inc(current_batch);
+                current_batch = 0;
             }
-            write_ref.write_batch(&mut batch)?;
-            batch.clear();
         }
         Ok(())
+    }
+
+    fn update_layer0(&mut self, layer0: &Graph) {
+        let true_layer0 = self.layers.get_mut(&0).unwrap();
+        for (node, new_neighbors) in layer0.nodes.iter() {
+            // TODO: this increases the number of neighbors,
+            // have to make sure degrees aren't higher than Mmax
+            let entry = true_layer0.nodes.entry(*node);
+            entry
+                .and_modify(|neighbors| {
+                    neighbors.extend(new_neighbors);
+                })
+                .or_insert(new_neighbors.clone());
+        }
     }
 
     fn write_batch(
@@ -409,6 +502,9 @@ impl HNSW {
         Ok(())
     }
 
+    /// Assigns IDs to all vectors (usize).
+    /// Creates Point structs, giving a level to each Point.
+    /// Stores the Point structs in a Points struct, in index.points
     fn store_points(&mut self, mut vectors: Vec<Vec<f32>>) {
         let mut rng = rand::thread_rng();
         let mut ids_levels: Vec<(usize, usize)> = (0..vectors.len())
@@ -450,11 +546,7 @@ impl HNSW {
         let mut index = HNSW::new(m, ef_cons, dim);
         index.store_points(vectors);
 
-        let bar = get_progress_bar(
-            "Inserting Vectors".to_string(),
-            index.points.len(),
-            !verbose,
-        );
+        let bar = get_progress_bar("Inserting Vectors".to_string(), index.points.len(), verbose);
 
         let ids_levels: Vec<(usize, usize)> = index.points.ids_levels().collect();
         for (id, level) in ids_levels {
@@ -491,11 +583,7 @@ impl HNSW {
             let ids_levels: Vec<(usize, usize)> = points_split.pop().unwrap();
             let bar = multibar.insert(
                 thread_idx,
-                get_progress_bar(
-                    format!("Thread {}:", thread_idx),
-                    ids_levels.len(),
-                    !verbose,
-                ),
+                get_progress_bar(format!("Thread {}:", thread_idx), ids_levels.len(), verbose),
             );
             handlers.push(std::thread::spawn(move || {
                 Self::insert_par(&index_copy, ids_levels, bar).unwrap();
@@ -508,6 +596,130 @@ impl HNSW {
         Ok(Arc::into_inner(index_arc)
             .expect("Could not get index out of Arc reference")
             .into_inner())
+    }
+
+    pub fn build_index_par_v2(
+        m: usize,
+        ef_cons: Option<usize>,
+        vectors: Vec<Vec<f32>>,
+        verbose: bool,
+    ) -> Result<Self, String> {
+        let nb_threads = std::thread::available_parallelism().unwrap().get();
+        let dim = match vectors.first() {
+            Some(vector) => vector.len(),
+            None => return Err("Could not read vector dimension.".to_string()),
+        };
+        let mut index = HNSW::new(m, ef_cons, dim);
+        index.store_points(vectors);
+        index.first_insert(0);
+
+        let mut ids_levels: Vec<(usize, usize)> = index.points.ids_levels().collect();
+        ids_levels.sort_by_key(|x| x.1);
+        ids_levels.reverse();
+
+        index.insert_non_zero(verbose)?;
+        let (index, ids_eps_map) = HNSW::find_layer_zero_eps(index, verbose)?;
+
+        // println!("{ids_eps_map:?}");
+
+        // TODO: partition 0-layer points together using 'ids_eps_map'.
+        // Implement multithreaded insertions where each thread modifies a
+        // local copy of layer 0. But keep the RwLock for synchronization,
+        // we don't want completely independent insertions in each thread.
+        // What we want are insertions that are mostly independent of other
+        // threads' results, but still sync from time to time.
+        // The idea here is to reduce the amount of times each thread will
+        // need a call to the write() method of the RwLock by allowing for
+        // high batch sizes in the 'insert_par' method.
+
+        return Ok(index);
+
+        let mut points_split = split_ids_levels(ids_levels, nb_threads);
+        let index_arc = Arc::new(RwLock::new(index));
+
+        let multibar = Arc::new(indicatif::MultiProgress::new());
+
+        let mut handlers = Vec::new();
+        for thread_idx in 0..nb_threads {
+            let index_copy = index_arc.clone();
+            let ids_levels: Vec<(usize, usize)> = points_split.pop().unwrap();
+            let bar = multibar.insert(
+                thread_idx,
+                get_progress_bar(format!("Thread {}:", thread_idx), ids_levels.len(), verbose),
+            );
+            handlers.push(std::thread::spawn(move || {
+                Self::insert_par(&index_copy, ids_levels, bar).unwrap();
+            }));
+        }
+        for handle in handlers {
+            let _ = handle.join().unwrap();
+        }
+
+        Ok(Arc::into_inner(index_arc)
+            .expect("Could not get index out of Arc reference")
+            .into_inner())
+    }
+
+    /// Inserts the points that are present in layer 1 or above.
+    fn insert_non_zero(&mut self, verbose: bool) -> Result<(), String> {
+        let ids_to_insert: Vec<(usize, usize)> =
+            self.points.ids_levels().filter(|x| x.1 > 0).collect();
+        let bar = get_progress_bar(
+            "Inserting non-zero points".to_string(),
+            ids_to_insert.len(),
+            verbose,
+        );
+        for (id, level) in ids_to_insert {
+            self.insert(id, level)?;
+            bar.inc(1);
+        }
+        Ok(())
+    }
+
+    /// Finds the entry points in layer 0 for all points that
+    /// have not been inserted.
+    ///
+    /// Returns a HashMap pointing every point_id to its entry point
+    /// in layer 0.
+    fn find_layer_zero_eps(
+        index: Self,
+        verbose: bool,
+    ) -> Result<(Self, HashMap<usize, usize>), String> {
+        let nb_threads = std::thread::available_parallelism().unwrap().get();
+
+        let to_insert = index.points.ids_levels().filter(|x| x.1 == 0).collect();
+        let mut to_insert_split = split_ids_levels(to_insert, nb_threads);
+
+        let mut handlers = Vec::new();
+        let index_arc = Arc::new(RwLock::new(index));
+        for _ in 0..nb_threads {
+            let thread_split = to_insert_split.pop().unwrap();
+            let index_ref = index_arc.clone();
+
+            handlers.push(std::thread::spawn(move || -> HashMap<usize, usize> {
+                let mut thread_results = HashMap::new();
+                let read_ref = index_ref.read();
+                for (id, level) in thread_split {
+                    let point = read_ref.points.get_point(id).unwrap();
+                    let max_layer_nb = read_ref.layers.len() - 1;
+                    let ep = read_ref.step_1(point, max_layer_nb, level).unwrap();
+                    thread_results.insert(id, *ep.iter().next().unwrap());
+                }
+                thread_results
+            }));
+        }
+
+        let mut ids_eps = HashMap::new();
+        for handle in handlers {
+            let result = handle.join().unwrap();
+            ids_eps.extend(result.iter());
+        }
+
+        let index = Arc::into_inner(index_arc)
+            .expect("Could not get index out of Arc reference")
+            .into_inner();
+
+        Ok((index, ids_eps))
     }
 
     fn sort_by_distance(
@@ -688,11 +900,11 @@ impl HNSW {
     }
 }
 
-fn get_progress_bar(message: String, remaining: usize, hidden: bool) -> ProgressBar {
-    let bar = if hidden {
-        return ProgressBar::hidden();
-    } else {
+fn get_progress_bar(message: String, remaining: usize, verbose: bool) -> ProgressBar {
+    let bar = if verbose {
         ProgressBar::new(remaining as u64)
+    } else {
+        return ProgressBar::hidden();
     };
     bar.set_style(
         ProgressStyle::with_template("{msg} {bar:60} {percent}% Elapsed: {elapsed} {per_sec}\n")

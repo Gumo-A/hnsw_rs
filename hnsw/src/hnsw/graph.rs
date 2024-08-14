@@ -162,4 +162,8 @@ impl Graph {
     pub fn nb_nodes(&self) -> usize {
         self.nodes.len()
     }
+
+    pub fn contains(&self, node_id: &usize) -> bool {
+        self.nodes.contains_key(node_id)
+    }
 }

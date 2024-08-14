@@ -15,7 +15,6 @@ pub fn partition_space(
     iterations: usize,
     points: &Vec<Point>,
 ) -> (Vec<Point>, Vec<Vec<usize>>) {
-    let target_size = points.len() / nb_centroids;
     let mut centroids = init_centroids(nb_centroids, &points);
     let mut partitions = get_clusters(&centroids, points);
     let mut sum = 0.0;
@@ -131,12 +130,12 @@ fn get_means(clusters: &Vec<Vec<usize>>, points: &Vec<Point>) -> Vec<Point> {
                 new_centroid[idx] += x / points_in_cluster;
             }
         }
-        means.push(Point::new(cluster_id as usize, new_centroid, false));
+        means.push(Point::new_full(cluster_id as usize, None, new_centroid));
     }
     means
 }
 
-fn get_dists_among_centers(centroids: &Points) -> HashMap<(usize, usize), Dist> {
+fn _get_dists_among_centers(centroids: &Points) -> HashMap<(usize, usize), Dist> {
     let mut centers_distances = HashMap::new();
     for idx in 0..centroids.len() {
         for jdx in 0..centroids.len() {
@@ -147,7 +146,8 @@ fn get_dists_among_centers(centroids: &Points) -> HashMap<(usize, usize), Dist> 
                 (idx.min(jdx), idx.max(jdx)),
                 centroids
                     .get_point(idx)
-                    .dist2vec(&centroids.get_point(jdx).vector),
+                    .unwrap()
+                    .dist2vec(&centroids.get_point(jdx).unwrap().vector),
             );
         }
     }
@@ -181,7 +181,7 @@ fn check_early_stop(new_centers: &Vec<Point>, old_centers: &Vec<Point>) -> bool 
     true
 }
 
-fn check_early_stop_partitions(clusters: &Vec<Vec<usize>>, target_size: usize) -> bool {
+fn _check_early_stop_partitions(clusters: &Vec<Vec<usize>>, target_size: usize) -> bool {
     let tolerance = 1000;
     for cluster in clusters {
         if ((cluster.len() as isize) - (target_size as isize)).abs() > tolerance {
@@ -281,14 +281,14 @@ mod tests {
     use std::time::Instant;
 
     // #[test]
-    fn find_kmeans() -> std::io::Result<()> {
+    fn _find_kmeans() -> std::io::Result<()> {
         let (_, embeddings) = load_glove_array(100, 400_000, false, 0)?;
         let mut points = Vec::new();
         points.extend(
             embeddings
                 .iter()
                 .enumerate()
-                .map(|(id, x)| Point::new(id, x.clone(), false)),
+                .map(|(id, x)| Point::new_full(id, None, x.clone())),
         );
 
         let start = Instant::now();
@@ -332,7 +332,7 @@ mod tests {
             embeddings
                 .iter()
                 .enumerate()
-                .map(|(id, x)| Point::new(id, x.clone(), false)),
+                .map(|(id, x)| Point::new_full(id, None, x.clone())),
         );
 
         let start = Instant::now();
