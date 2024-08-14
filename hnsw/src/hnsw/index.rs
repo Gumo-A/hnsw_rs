@@ -52,6 +52,32 @@ impl HNSW {
         }
     }
 
+    fn assert_param_compliance(&self) {
+        let mut is_ok = true;
+        for (layer_nb, layer) in self.layers.iter() {
+            let max_degree = if *layer_nb > 0 {
+                self.params.mmax
+            } else {
+                self.params.mmax0
+            };
+            for (node, neighbors) in layer.nodes.iter() {
+                // I allow to degrees to exceed the limit by one,
+                // because I am too lazy to change the current methods.
+                if neighbors.len() > (max_degree + 1) {
+                    is_ok = false;
+                    println!(
+                        "In layer {layer_nb}, node {node} has degree {0}, but limit is {1}",
+                        neighbors.len(),
+                        max_degree
+                    );
+                }
+            }
+        }
+        if is_ok {
+            println!("Index complies with params.")
+        }
+    }
+
     pub fn print_index(&self) {
         println!("m = {}", self.params.m);
         println!("mmax = {}", self.params.mmax);
@@ -386,12 +412,52 @@ impl HNSW {
         ids_levels: Vec<(usize, usize)>,
         bar: ProgressBar,
     ) -> Result<(), String> {
+        let batch_size = 100;
+        let mut current_batch = Vec::with_capacity(batch_size);
+        let points_len = ids_levels.len();
+
+        for (idx, (point_id, level)) in ids_levels.iter().enumerate() {
+            let read_ref = index.read();
+
+            let point = read_ref.points.get_point(*point_id).unwrap();
+            let max_layer_nb = read_ref.layers.len() - 1;
+            let ep = read_ref.step_1(&point, max_layer_nb, *level)?;
+            let insertion_results = read_ref.step_2(&point, ep, *level)?;
+            current_batch.push(insertion_results);
+
+            let last_idx = idx == (points_len - 1);
+            let full_batch = current_batch.len() >= batch_size;
+
+            let have_to_write: bool = last_idx | full_batch;
+
+            let mut write_ref = if have_to_write {
+                drop(read_ref);
+                index.write()
+            } else {
+                continue;
+            };
+
+            write_ref.write_batch(&mut current_batch)?;
+            if !bar.is_hidden() {
+                bar.inc(current_batch.len() as u64);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn insert_par_v2(
+        index: &Arc<RwLock<Self>>,
+        ids_levels: Vec<(usize, usize)>,
+        bar: ProgressBar,
+    ) -> Result<(), String> {
         // TODO: Segment the points so I can increase the batch size
         // Currently, if you decrease the batch size, the final index is of
         // good quality, but takes time.
         // If you increase it too much, the index is not good, but gets constructed
         // very fast.
-        let batch_size = 10000;
+        // let batch_size = ((8 * ids_levels.len()) / 10) as u64;
+        let batch_size = 10;
+        println!("batch size {batch_size}");
         let mut current_batch = 0;
         let points_len = ids_levels.len();
 
@@ -430,13 +496,29 @@ impl HNSW {
 
     fn update_layer0(&mut self, layer0: &Graph) {
         let true_layer0 = self.layers.get_mut(&0).unwrap();
+        let mut connexions_made: HashSet<usize, BuildNoHashHasher<usize>> =
+            HashSet::with_hasher(BuildNoHashHasher::default());
         for (node, new_neighbors) in layer0.nodes.iter() {
-            // TODO: this increases the number of neighbors,
-            // have to make sure degrees aren't higher than Mmax
             let entry = true_layer0.nodes.entry(*node);
             entry
                 .and_modify(|neighbors| {
                     neighbors.extend(new_neighbors);
+                })
+                .or_insert(new_neighbors.clone());
+            connexions_made.insert(*node);
+        }
+
+        let true_layer0 = self.layers.get(&0).unwrap();
+        let pruned_connextions = self
+            .prune_connexions(self.params.mmax0, true_layer0, &connexions_made)
+            .unwrap();
+        let true_layer0 = self.layers.get_mut(&0).unwrap();
+
+        for (node, new_neighbors) in pruned_connextions.iter() {
+            let entry = true_layer0.nodes.entry(*node);
+            entry
+                .and_modify(|neighbors| {
+                    *neighbors = new_neighbors.clone();
                 })
                 .or_insert(new_neighbors.clone());
         }
@@ -553,6 +635,7 @@ impl HNSW {
             index.insert(id, level)?;
             bar.inc(1);
         }
+        index.assert_param_compliance();
         Ok(index)
     }
 
@@ -586,12 +669,14 @@ impl HNSW {
                 get_progress_bar(format!("Thread {}:", thread_idx), ids_levels.len(), verbose),
             );
             handlers.push(std::thread::spawn(move || {
-                Self::insert_par(&index_copy, ids_levels, bar).unwrap();
+                Self::insert_par_v2(&index_copy, ids_levels, bar).unwrap();
             }));
         }
         for handle in handlers {
             let _ = handle.join().unwrap();
         }
+
+        index_arc.read().assert_param_compliance();
 
         Ok(Arc::into_inner(index_arc)
             .expect("Could not get index out of Arc reference")
