@@ -64,21 +64,21 @@ impl HNSW {
                 // because I am too lazy to change the current methods.
                 if neighbors.len() > (max_degree + 1) {
                     is_ok = false;
-                    println!(
-                        "In layer {layer_nb}, node {node} has degree {0}, but limit is {1}",
-                        neighbors.len(),
-                        max_degree
-                    );
+                    // println!(
+                    //     "In layer {layer_nb}, node {node} has degree {0}, but limit is {1}",
+                    //     neighbors.len(),
+                    //     max_degree
+                    // );
                 }
 
                 if neighbors.len() == 0 {
                     is_ok = false;
-                    println!("In layer {layer_nb}, node {node} has degree 0",);
+                    // println!("In layer {layer_nb}, node {node} has degree 0",);
                 }
             }
         }
         if is_ok {
-            println!("Index complies with params.")
+            // println!("Index complies with params.")
         }
     }
 
@@ -430,7 +430,7 @@ impl HNSW {
         ids_levels: Vec<(usize, usize)>,
         bar: ProgressBar,
     ) -> Result<(), String> {
-        let batch_size = 100;
+        let batch_size = 16;
         let points_len = ids_levels.len();
         let mut batch = Vec::with_capacity(batch_size);
 
@@ -478,14 +478,17 @@ impl HNSW {
         ids: Vec<usize>,
         bar: ProgressBar,
     ) -> Result<(), String> {
-        // TODO: Test without batch limit. Only sync is at the end of the thread and at result collection.
-        let batch_size = (ids.len() / 2) as u64;
-        let mut current_batch = 0;
         let points_len = ids.len();
 
-        let mut layer0 = index.read().layers.get(&0).unwrap().clone();
+        let read_ref = index.read();
+        let mut layer0 = read_ref.layers.get(&0).unwrap().clone();
+        drop(read_ref);
 
         for (idx, point_id) in ids.iter().enumerate() {
+            if index.is_locked_exclusive() {
+                update_local_layer(&mut layer0, index.read().layers.get(&0).unwrap());
+            }
+
             let read_ref = index.read();
 
             let point = read_ref.points.get_point(*point_id).unwrap();
@@ -493,39 +496,39 @@ impl HNSW {
             let max_layer_nb = read_ref.layers.len() - 1;
             let ep = read_ref.step_1(&point, max_layer_nb, level, None)?;
             HNSW::step_2_layer0(&read_ref, &mut layer0, &point, ep)?;
+            drop(read_ref);
 
-            current_batch += 1;
-            if !bar.is_hidden() {
-                bar.inc(1);
-            }
+            bar.inc(1);
 
             let last_idx = idx == (points_len - 1);
-            let full_batch = current_batch >= batch_size;
+            let early_sync = ((idx % 100) == 0) & (idx < 1_000);
+            let half_sync = idx == (points_len / 2);
 
-            let have_to_write: bool = last_idx | full_batch;
-
-            let mut write_ref = if have_to_write {
-                drop(read_ref);
+            let mut write_ref = if last_idx | early_sync | half_sync | half_sync {
                 index.write()
             } else {
                 continue;
             };
 
             write_ref.update_layer0(&layer0);
-            layer0 = write_ref.layers.get(&0).unwrap().clone();
-            // if !bar.is_hidden() {
-            //     bar.inc(current_batch);
-            //     current_batch = 0;
-            // }
-            current_batch = 0;
         }
         Ok(())
     }
 
     fn update_layer0(&mut self, layer0: &Graph) {
         let true_layer0 = self.layers.get_mut(&0).unwrap();
-        let mut connexions_made: HashSet<usize, BuildNoHashHasher<usize>> =
-            HashSet::with_hasher(BuildNoHashHasher::default());
+        let layer0_nodes = layer0
+            .nodes
+            .keys()
+            .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
+        let true_layer_nodes = true_layer0
+            .nodes
+            .keys()
+            .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
+        let connexions_made = layer0_nodes
+            .difference(&true_layer_nodes)
+            .map(|x| **x)
+            .collect();
         for (node, new_neighbors) in layer0.nodes.iter() {
             let entry = true_layer0.nodes.entry(*node);
             entry
@@ -533,7 +536,6 @@ impl HNSW {
                     neighbors.extend(new_neighbors);
                 })
                 .or_insert(new_neighbors.clone());
-            connexions_made.insert(*node);
         }
 
         let true_layer0 = self.layers.get(&0).unwrap();
@@ -550,6 +552,11 @@ impl HNSW {
                 })
                 .or_insert(new_neighbors.clone());
         }
+        // println!(
+        //     "thread {tn} nb of nodes end of update {}",
+        //     true_layer0.nb_nodes()
+        // );
+        // println!("thread {tn} inserted {}", true_layer0.nb_nodes() - start);
     }
 
     fn write_batch(
@@ -732,7 +739,8 @@ impl HNSW {
         let mut index = HNSW::new(m, ef_cons, dim);
         index.store_points(vectors);
         index.first_insert(0);
-        index.insert_non_zero(verbose)?;
+        index = HNSW::insert_non_zero(index, verbose)?;
+        // index.insert_non_zero(verbose)?;
 
         let (index, eps_ids_map) = HNSW::find_layer_eps(index, 1, verbose)?;
 
@@ -771,7 +779,6 @@ impl HNSW {
     ) -> Vec<HashSet<usize>> {
         let nb_eps = eps_ids_map.keys().count();
         let eps_per_split = nb_eps / nb_splits;
-        println!("nb_eps {nb_eps} per split {eps_per_split}");
         let mut splits: Vec<HashSet<usize>> =
             Vec::from_iter((0..nb_splits).map(|_| HashSet::new()));
         let mut inserted = HashSet::new();
@@ -845,19 +852,35 @@ impl HNSW {
     }
 
     /// Inserts the points that will be present in layer 1 or above.
-    fn insert_non_zero(&mut self, verbose: bool) -> Result<(), String> {
-        let ids_to_insert: Vec<(usize, usize)> =
-            self.points.ids_levels().filter(|x| x.1 > 0).collect();
-        let bar = get_progress_bar(
-            "Inserting non-zero points".to_string(),
-            ids_to_insert.len(),
-            verbose,
-        );
-        for (id, _) in ids_to_insert {
-            self.insert(id, false)?;
-            bar.inc(1);
+    fn insert_non_zero(index: Self, verbose: bool) -> Result<Self, String> {
+        let nb_threads = std::thread::available_parallelism().unwrap().get();
+        let ids_levels: Vec<(usize, usize)> =
+            index.points.ids_levels().filter(|x| x.1 > 0).collect();
+        let mut points_split = split_ids_levels(ids_levels, nb_threads);
+        let index_arc = Arc::new(RwLock::new(index));
+
+        let mut handlers = Vec::new();
+        for thread_idx in 0..nb_threads {
+            let index_copy = index_arc.clone();
+            let ids_levels: Vec<(usize, usize)> = points_split.pop().unwrap();
+            let bar = get_progress_bar(
+                "Inserting non-zeros:".to_string(),
+                ids_levels.len(),
+                (thread_idx == 0) & verbose,
+            );
+            handlers.push(std::thread::spawn(move || {
+                Self::insert_par(&index_copy, ids_levels, bar).unwrap();
+            }));
         }
-        Ok(())
+        for handle in handlers {
+            let _ = handle.join().unwrap();
+        }
+
+        index_arc.read().assert_param_compliance();
+
+        Ok(Arc::into_inner(index_arc)
+            .expect("Could not get index out of Arc reference")
+            .into_inner())
     }
 
     /// Finds the entry points in layer for all points that
@@ -888,7 +911,7 @@ impl HNSW {
                     let bar = get_progress_bar(
                         "Finding entry points".to_string(),
                         thread_split.len(),
-                        !(thread_nb == nb_threads - 1),
+                        (thread_nb == nb_threads - 1) & verbose,
                     );
                     for (id, level) in thread_split {
                         let point = read_ref.points.get_point(id).unwrap();
@@ -1360,4 +1383,15 @@ fn split_ids_levels(ids_levels: Vec<(usize, usize)>, nb_splits: usize) -> Vec<Ve
     assert!(sum_lens == ids_levels.len(), "sum: {sum_lens}");
 
     split_vector
+}
+
+fn update_local_layer(local: &mut Graph, current: &Graph) {
+    for (node, new_neighbors) in current.nodes.iter() {
+        let entry = local.nodes.entry(*node);
+        entry
+            .and_modify(|neighbors| {
+                neighbors.extend(new_neighbors);
+            })
+            .or_insert(new_neighbors.clone());
+    }
 }

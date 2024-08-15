@@ -30,25 +30,25 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let start = Instant::now();
-    let index = HNSW::build_index(m, None, embeddings, true).unwrap();
-    let end = Instant::now();
-    println!(
-        "Single-thread elapsed time: {}ms",
-        start.elapsed().as_millis() - end.elapsed().as_millis()
-    );
-    estimate_recall(&index, &bf_data);
-
-    // let (_, embeddings) = load_glove_array(dim, lim, true, 1).unwrap();
     // let start = Instant::now();
-    // let index = HNSW::build_index_par_v2(m, None, embeddings, true).unwrap();
+    // let index = HNSW::build_index(m, None, embeddings, true).unwrap();
     // let end = Instant::now();
-    // index.print_index();
     // println!(
-    //     "Multi-thread elapsed time: {}ms",
+    //     "Single-thread elapsed time: {}ms",
     //     start.elapsed().as_millis() - end.elapsed().as_millis()
     // );
     // estimate_recall(&index, &bf_data);
+
+    let (_, embeddings) = load_glove_array(dim, lim, true, 1).unwrap();
+    let start = Instant::now();
+    let index = HNSW::build_index_par_v2(m, None, embeddings, true).unwrap();
+    let end = Instant::now();
+    index.print_index();
+    println!(
+        "Multi-thread elapsed time: {}ms",
+        start.elapsed().as_millis() - end.elapsed().as_millis()
+    );
+    estimate_recall(&index, &bf_data);
 
     // for (i, idx) in bf_data.keys().enumerate() {
     //     if i > 3 {
