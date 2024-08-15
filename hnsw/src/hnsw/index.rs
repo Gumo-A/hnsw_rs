@@ -501,10 +501,8 @@ impl HNSW {
             bar.inc(1);
 
             let last_idx = idx == (points_len - 1);
-            let early_sync = ((idx % 100) == 0) & (idx < 1_000);
-            let half_sync = idx == (points_len / 2);
 
-            let mut write_ref = if last_idx | early_sync | half_sync | half_sync {
+            let mut write_ref = if last_idx {
                 index.write()
             } else {
                 continue;
