@@ -30,25 +30,25 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    // let start = Instant::now();
-    // let index = HNSW::build_index(m, None, embeddings, true).unwrap();
-    // let end = Instant::now();
-    // println!(
-    //     "Single-thread elapsed time: {}ms",
-    //     start.elapsed().as_millis() - end.elapsed().as_millis()
-    // );
-    // estimate_recall(&index, &bf_data);
-
-    let (_, embeddings) = load_glove_array(dim, lim, true, 1).unwrap();
     let start = Instant::now();
-    let index = HNSW::build_index_par_v2(m, None, embeddings, true).unwrap();
+    let index = HNSW::build_index(m, None, embeddings, true).unwrap();
     let end = Instant::now();
-    index.print_index();
     println!(
-        "Multi-thread elapsed time: {}ms",
+        "Single-thread elapsed time: {}ms",
         start.elapsed().as_millis() - end.elapsed().as_millis()
     );
     estimate_recall(&index, &bf_data);
+
+    // let (_, embeddings) = load_glove_array(dim, lim, true, 1).unwrap();
+    // let start = Instant::now();
+    // let index = HNSW::build_index_par_v2(m, None, embeddings, true).unwrap();
+    // let end = Instant::now();
+    // index.print_index();
+    // println!(
+    //     "Multi-thread elapsed time: {}ms",
+    //     start.elapsed().as_millis() - end.elapsed().as_millis()
+    // );
+    // estimate_recall(&index, &bf_data);
 
     // for (i, idx) in bf_data.keys().enumerate() {
     //     if i > 3 {
@@ -82,24 +82,24 @@ fn estimate_recall(
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
     let mut rng = rand::thread_rng();
-    let max_id = index.points.ids().max().unwrap_or(&usize::MAX);
+    let max_id = index.points.ids().max().unwrap();
     for ef in (12..100).step_by(12) {
         println!("Finding ANNs ef={ef}");
 
         let sample_size: usize = 1000;
-        let points_ids: Vec<&usize> = index.points.ids().collect();
+        let points_ids: Vec<usize> = index.points.ids().collect();
         let mut recall_10: HashMap<usize, f32> = HashMap::new();
         for _ in (0..sample_size).enumerate() {
             let idx = rng.gen_range(0..(index.points.len()));
             let idx = points_ids.get(idx).unwrap();
-            let vector = &index.points.get_point(**idx).unwrap().get_full_precision();
+            let vector = &index.points.get_point(*idx).unwrap().get_full_precision();
             let anns = index.ann_by_vector(&vector, 10, ef).unwrap();
             let true_nns: Vec<usize> = bf_data
                 .get(&idx)
                 .unwrap()
                 .clone()
                 .iter()
-                .filter(|x| x <= &max_id)
+                .filter(|x| **x <= max_id)
                 .map(|x| *x)
                 .collect();
             let length = if (true_nns.len() < 10) | (anns.len() < 10) {
@@ -113,7 +113,7 @@ fn estimate_recall(
                     hits += 1;
                 }
             }
-            recall_10.insert(**idx, (hits as f32) / 10.0);
+            recall_10.insert(*idx, (hits as f32) / 10.0);
         }
         let mut avg_recall = 0.0;
         for (_, recall) in recall_10.iter() {

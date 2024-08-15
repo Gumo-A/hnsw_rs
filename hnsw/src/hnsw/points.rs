@@ -62,12 +62,12 @@ impl Vector {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
     pub id: usize,
-    pub level: Option<usize>,
+    pub level: usize,
     pub vector: Vector,
 }
 
 impl Point {
-    pub fn new_full(id: usize, level: Option<usize>, vector: Vec<f32>) -> Point {
+    pub fn new_full(id: usize, level: usize, vector: Vec<f32>) -> Point {
         Point {
             id,
             level,
@@ -75,7 +75,7 @@ impl Point {
         }
     }
 
-    pub fn new_quantized(id: usize, level: Option<usize>, vector: &Vec<f32>) -> Point {
+    pub fn new_quantized(id: usize, level: usize, vector: &Vec<f32>) -> Point {
         Point {
             id,
             level,
@@ -83,12 +83,8 @@ impl Point {
         }
     }
 
-    pub fn from_vector(id: usize, vector: Vector) -> Point {
-        Point {
-            id,
-            level: None,
-            vector,
-        }
+    pub fn from_vector(id: usize, level: usize, vector: Vector) -> Point {
+        Point { id, level, vector }
     }
 
     pub fn dist2other(&self, other: &Point) -> Dist {
@@ -161,9 +157,7 @@ impl Points {
             Self::Empty => {
                 panic!("Tried to get ids, but there are no stored vectors in the index.");
             }
-            Self::Collection(points) => points
-                .values()
-                .map(|point| (point.id, point.level.unwrap())),
+            Self::Collection(points) => points.values().map(|point| (point.id, point.level)),
         }
     }
 
@@ -377,7 +371,7 @@ impl PointsV2 {
             Self::Empty => {
                 panic!("Tried to get ids, but there are no stored vectors in the index.");
             }
-            Self::Collection(points) => points.iter().map(|point| (point.id, point.level.unwrap())),
+            Self::Collection(points) => points.iter().map(|point| (point.id, point.level)),
         }
     }
 
@@ -465,6 +459,8 @@ impl PointsV2 {
     /// Extends the Collection variant with the provided Points struct,
     /// or, in the case it is the Empty variant, fills it and changes the variant to Collection.
     pub fn extend_or_fill(&mut self, other: Self) {
+        self.assert_ids();
+
         let points = match other {
             Self::Empty => return (),
             Self::Collection(points_other) => points_other,
@@ -476,7 +472,6 @@ impl PointsV2 {
             }
             Self::Collection(points_self) => {
                 let mut last_id = points_self.last().unwrap().id;
-                assert_eq!(last_id, points_self.len() - 1);
                 for mut point in points {
                     point.id = last_id + 1;
                     points_self.push(point);

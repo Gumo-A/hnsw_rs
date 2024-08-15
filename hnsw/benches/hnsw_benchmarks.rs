@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 // TODO
 // write benchmarks for HNSW insertion algorithm,
 // both for the whole process and for the individual
@@ -27,9 +25,8 @@ fn insert_at_10000_m12(c: &mut Criterion) {
             b.iter_batched(
                 || (index.clone(), vector.clone()),
                 move |(mut i, vect): (HNSW, Vec<f32>)| {
-                    i.points
-                        .insert(Point::new_quantized(10_000, Some(0), &vect));
-                    i.insert(10_000, 0).unwrap();
+                    i.points.insert(Point::new_quantized(10_000, 0, &vect));
+                    i.insert(10_000, false).unwrap();
                 },
                 criterion::BatchSize::LargeInput,
             )
@@ -68,7 +65,7 @@ fn quantize_various_sizes(c: &mut Criterion) {
     for dim in DIMS.iter() {
         let mut rng = rand::thread_rng();
         let vector = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point = Point::new_full(0, None, vector);
+        let point = Point::new_full(0, 0, vector);
         group.bench_with_input(BenchmarkId::from_parameter(dim), &point, |b, i| {
             b.iter(|| i.get_quantized());
         });
@@ -85,10 +82,10 @@ fn dist_computation_quantized_various_sizes(c: &mut Criterion) {
     for dim in DIMS.iter() {
         let mut rng = rand::thread_rng();
         let vector1 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point1 = Point::new_quantized(0, None, &vector1);
+        let point1 = Point::new_quantized(0, 0, &vector1);
 
         let vector2 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point2 = Point::new_quantized(0, None, &vector2);
+        let point2 = Point::new_quantized(0, 0, &vector2);
 
         group.bench_with_input(
             BenchmarkId::from_parameter(dim),
@@ -110,10 +107,10 @@ fn dist_computation_full_various_sizes(c: &mut Criterion) {
     for dim in DIMS.iter() {
         let mut rng = rand::thread_rng();
         let vector1 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point1 = Point::new_full(0, None, vector1);
+        let point1 = Point::new_full(0, 0, vector1);
 
         let vector2 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point2 = Point::new_full(0, None, vector2);
+        let point2 = Point::new_full(0, 0, vector2);
 
         group.bench_with_input(
             BenchmarkId::from_parameter(dim),

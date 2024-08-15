@@ -1,6 +1,6 @@
 use super::{
     dist::Dist,
-    points::{Point, Points, Vector},
+    points::{Point, PointsV2, Vector},
 };
 use crate::hnsw::params::Params;
 use crate::hnsw::{graph::Graph, lvq::LVQVec};
@@ -27,7 +27,7 @@ use std::io::{BufReader, BufWriter, Write};
 pub struct HNSW {
     ep: usize,
     pub params: Params,
-    pub points: Points,
+    pub points: PointsV2,
     pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
 }
 
@@ -35,7 +35,7 @@ impl HNSW {
     pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> HNSW {
         let params = Params::from_m_efcons(m, ef_cons.unwrap_or(2 * m), dim);
         HNSW {
-            points: Points::Empty,
+            points: PointsV2::Empty,
             params,
             ep: 0,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
@@ -44,7 +44,7 @@ impl HNSW {
 
     pub fn from_params(params: Params) -> HNSW {
         HNSW {
-            points: Points::Empty,
+            points: PointsV2::Empty,
             params,
             ep: 0,
             layers: HashMap::with_hasher(BuildNoHashHasher::default()),
@@ -108,7 +108,7 @@ impl HNSW {
         ep.insert(self.ep);
         let nb_layer = self.layers.len();
 
-        let point = Point::new_quantized(0, None, vector);
+        let point = Point::new_quantized(0, 0, vector);
 
         for layer_nb in (0..nb_layer).rev() {
             ep = self.search_layer(&self.layers.get(&(layer_nb)).unwrap(), &point, &mut ep, 1)?;
@@ -359,12 +359,7 @@ impl HNSW {
         Ok(result)
     }
 
-    pub fn insert(
-        &mut self,
-        point_id: usize,
-        // level: usize,
-        reinsert: bool,
-    ) -> Result<bool, String> {
+    pub fn insert(&mut self, point_id: usize, reinsert: bool) -> Result<bool, String> {
         let point = match self.points.get_point(point_id) {
             Some(p) => p,
             None => return Err(format!("{point_id} not in points given to the index.")),
@@ -380,7 +375,7 @@ impl HNSW {
             return Ok(true);
         }
 
-        let level = point.level.unwrap_or(0);
+        let level = point.level;
         let max_layer_nb = self.layers.len() - 1;
         let ep = self.step_1(point, max_layer_nb, level, None)?;
         let insertion_results = self.step_2(point, ep, level)?;
@@ -494,7 +489,7 @@ impl HNSW {
             let read_ref = index.read();
 
             let point = read_ref.points.get_point(*point_id).unwrap();
-            let level = point.level.unwrap();
+            let level = point.level;
             let max_layer_nb = read_ref.layers.len() - 1;
             let ep = read_ref.step_1(&point, max_layer_nb, level, None)?;
             HNSW::step_2_layer0(&read_ref, &mut layer0, &point, ep)?;
@@ -621,22 +616,13 @@ impl HNSW {
     /// Creates Point structs, giving a level to each Point.
     /// Stores the Point structs in a Points struct, in index.points
     fn store_points(&mut self, mut vectors: Vec<Vec<f32>>) {
-        let mut rng = rand::thread_rng();
-        let ids_levels: Vec<(usize, usize)> = (0..vectors.len())
-            .map(|id| (id, get_new_node_layer(self.params.ml, &mut rng)))
-            .collect();
-        // ids_levels.shuffle(&mut thread_rng());
-
         center_vectors(&mut vectors);
 
-        let mut collection = HashMap::with_hasher(BuildNoHashHasher::default());
-        collection.extend(ids_levels.iter().map(|(id, level)| {
-            (
-                *id,
-                Point::new_quantized(*id, Some(*level), vectors.get(*id).unwrap()),
-            )
+        let mut rng = rand::thread_rng();
+        let collection = Vec::from_iter(vectors.iter().enumerate().map(|(id, v)| {
+            Point::new_quantized(id, get_new_node_layer(self.params.ml, &mut rng), v)
         }));
-        let points = Points::Collection(collection);
+        let points = PointsV2::Collection(collection);
 
         self.points.extend_or_fill(points);
     }
@@ -1089,17 +1075,17 @@ impl HNSW {
             .get("points")
             .expect("Error: key 'points' is not in the index file.")
         {
-            serde_json::Value::Object(points_map) => {
+            serde_json::Value::Object(points_vec) => {
                 let err_msg =
                     "Error reading index file: could not find key 'Collection' in 'points', maybe the index is empty.";
-                match points_map.get("Collection").expect(err_msg) {
-                    serde_json::Value::Object(points_final) => extract_points(points_final),
+                match points_vec.get("Collection").expect(err_msg) {
+                    serde_json::Value::Array(points_final) => extract_points(points_final),
                     _ => panic!("Something went wrong reading parameters of the index file."),
                 }
             }
             serde_json::Value::String(s) => {
                 if s == "Empty" {
-                    HashMap::with_hasher(BuildNoHashHasher::default())
+                    Vec::new()
                 } else {
                     panic!("Something went wrong reading parameters of the index file.");
                 }
@@ -1114,7 +1100,7 @@ impl HNSW {
             ep,
             params,
             layers,
-            points: Points::Collection(points),
+            points: PointsV2::Collection(points),
         })
     }
 }
@@ -1205,13 +1191,13 @@ fn extract_params(params: &serde_json::Map<String, serde_json::Value>) -> Params
     hnsw_params
 }
 
-fn extract_points(
-    points_data: &serde_json::Map<String, serde_json::Value>,
-) -> HashMap<usize, Point, BuildNoHashHasher<usize>> {
-    let mut points = HashMap::with_hasher(BuildNoHashHasher::default());
+fn extract_points(points_data: &Vec<serde_json::Value>) -> Vec<Point> {
+    let mut points = Vec::new();
 
-    for (id, value) in points_data.iter() {
-        let id: usize = id.parse().unwrap();
+    for (idx, value) in points_data.iter().enumerate() {
+        let id = value.get("id").unwrap().as_u64().unwrap() as usize;
+        assert_eq!(id, idx);
+        let level = value.get("level").unwrap().as_u64().unwrap() as usize;
         let vector_content = value.get("vector").unwrap();
         let vector = match vector_content {
             serde_json::Value::Object(vector_content_map) => {
@@ -1261,8 +1247,8 @@ fn extract_points(
             }
             _ => panic!(),
         };
-        let point = Point::from_vector(id, vector);
-        points.insert(id, point);
+        let point = Point::from_vector(id, level, vector);
+        points.push(point);
     }
     points
 }
@@ -1286,7 +1272,7 @@ fn center_vectors(vectors: &mut Vec<Vec<f32>>) {
     });
 }
 
-fn _compute_stats(points: &Points) -> (f32, f32) {
+fn _compute_stats(points: &PointsV2) -> (f32, f32) {
     let mut dists: HashMap<(usize, usize), f32> = HashMap::new();
     for (id, point) in points.iterate() {
         for (idx, pointx) in points.iterate() {
@@ -1294,7 +1280,7 @@ fn _compute_stats(points: &Points) -> (f32, f32) {
                 continue;
             }
             dists
-                .entry((*id.min(idx), *id.max(idx)))
+                .entry((id.min(idx), id.max(idx)))
                 .or_insert(point.dist2vec(&pointx.vector).dist);
         }
     }
