@@ -1,9 +1,8 @@
 use super::{
     dist::Dist,
-    points::{Points, Vector},
+    points::{Point, Points, Vector},
 };
 use crate::hnsw::params::Params;
-use crate::hnsw::points::Point;
 use crate::hnsw::{graph::Graph, lvq::LVQVec};
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -738,8 +737,8 @@ impl HNSW {
         vectors: Vec<Vec<f32>>,
         verbose: bool,
     ) -> Result<Self, String> {
-        // let nb_threads = std::thread::available_parallelism().unwrap().get();
-        let nb_threads = 16;
+        let nb_threads = std::thread::available_parallelism().unwrap().get();
+        // let nb_threads = 16;
         let dim = match vectors.first() {
             Some(vector) => vector.len(),
             None => return Err("Could not read vector dimension.".to_string()),
@@ -749,21 +748,9 @@ impl HNSW {
         index.first_insert(0);
         index.insert_non_zero(verbose)?;
 
-        // let layer_to_split = index.get_layer_nb_to_split(nb_threads);
         let (index, eps_ids_map) = HNSW::find_layer_eps(index, 1, verbose)?;
 
-        let mut tot1 = 0;
-        for (_, p_ids) in eps_ids_map.iter() {
-            tot1 += p_ids.len();
-        }
-
         let mut points_split = index.partition_points(eps_ids_map, nb_threads, 1);
-
-        let mut tot2 = 0;
-        for split in points_split.iter() {
-            tot2 += split.len();
-        }
-        assert_eq!(tot1, tot2);
 
         let index_arc = Arc::new(RwLock::new(index));
         let multibar = Arc::new(indicatif::MultiProgress::new());
@@ -783,6 +770,7 @@ impl HNSW {
         for handle in handlers {
             let _ = handle.join().unwrap();
         }
+        index_arc.read().assert_param_compliance();
 
         Ok(Arc::into_inner(index_arc)
             .expect("Could not get index out of Arc reference")
@@ -870,16 +858,6 @@ impl HNSW {
         splits
     }
 
-    fn get_layer_nb_to_split(&self, nb_splits: usize) -> usize {
-        let mut target_layer = 1;
-        for (layer_nb, layer) in self.layers.iter() {
-            if layer.nb_nodes() >= nb_splits {
-                target_layer = *layer_nb;
-            }
-        }
-        target_layer
-    }
-
     /// Inserts the points that will be present in layer 1 or above.
     fn insert_non_zero(&mut self, verbose: bool) -> Result<(), String> {
         let ids_to_insert: Vec<(usize, usize)> =
@@ -913,7 +891,7 @@ impl HNSW {
 
         let mut handlers = Vec::new();
         let index_arc = Arc::new(RwLock::new(index));
-        for _ in 0..nb_threads {
+        for thread_nb in 0..nb_threads {
             let thread_split = to_insert_split.pop().unwrap();
             let index_ref = index_arc.clone();
 
@@ -921,6 +899,11 @@ impl HNSW {
                 move || -> HashMap<usize, HashSet<usize>> {
                     let mut thread_results = HashMap::new();
                     let read_ref = index_ref.read();
+                    let bar = get_progress_bar(
+                        "Finding entry points".to_string(),
+                        thread_split.len(),
+                        !(thread_nb == nb_threads - 1),
+                    );
                     for (id, level) in thread_split {
                         let point = read_ref.points.get_point(id).unwrap();
                         let max_layer_nb = read_ref.layers.len() - 1;
@@ -933,6 +916,7 @@ impl HNSW {
                                 e.insert(id);
                             })
                             .or_insert(HashSet::from([id]));
+                        bar.inc(1);
                     }
                     thread_results
                 },

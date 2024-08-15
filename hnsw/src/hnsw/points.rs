@@ -140,25 +140,28 @@ impl Point {
 pub enum Points {
     Empty,
     Collection(HashMap<usize, Point, BuildNoHashHasher<usize>>),
+    // TODO: putting the points in a vector, ordered by distance between points,
+    // will probably have a positive impact on performance (CPU cache)
+    // Collection(Vec<Point>),
 }
 
 impl Points {
     pub fn ids(&self) -> std::collections::hash_map::Keys<'_, usize, Point> {
         match self {
-            Points::Empty => {
+            Self::Empty => {
                 panic!("Tried to get ids, but there are no stored vectors in the index.");
             }
-            Points::Collection(points) => points.keys(),
+            Self::Collection(points) => points.keys(),
         }
     }
 
     /// Iterator over (ID, Level) pairs of stored Point structs.
     pub fn ids_levels(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         match self {
-            Points::Empty => {
+            Self::Empty => {
                 panic!("Tried to get ids, but there are no stored vectors in the index.");
             }
-            Points::Collection(points) => points
+            Self::Collection(points) => points
                 .values()
                 .map(|point| (point.id, point.level.unwrap())),
         }
@@ -166,12 +169,12 @@ impl Points {
 
     pub fn insert(&mut self, point: Point) {
         match self {
-            Points::Empty => {
+            Self::Empty => {
                 let mut collection = HashMap::with_hasher(BuildNoHashHasher::default());
                 collection.insert(point.id, point);
-                *self = Points::Collection(collection);
+                *self = Self::Collection(collection);
             }
-            Points::Collection(points) => {
+            Self::Collection(points) => {
                 points.insert(point.id, point);
             }
         };
@@ -179,16 +182,16 @@ impl Points {
 
     pub fn dim(&self) -> usize {
         match self {
-            Points::Empty => 0,
-            Points::Collection(points) => points.iter().next().unwrap().1.vector.dim(),
+            Self::Empty => 0,
+            Self::Collection(points) => points.iter().next().unwrap().1.vector.dim(),
         }
     }
 
     /// Removes and returns some point from the collection.
     pub fn pop_rand(&mut self) -> Option<Point> {
         match self {
-            Points::Empty => None,
-            Points::Collection(points) => {
+            Self::Empty => None,
+            Self::Collection(points) => {
                 let key = points.keys().next().unwrap().clone();
                 points.remove(&key)
             }
@@ -197,16 +200,16 @@ impl Points {
 
     pub fn pop(&mut self, index: usize) -> Option<Point> {
         match self {
-            Points::Empty => None,
-            Points::Collection(points) => points.remove(&index),
+            Self::Empty => None,
+            Self::Collection(points) => points.remove(&index),
         }
     }
 
     /// Removes all the points with the ids and returns them in a new Points struct.
     pub fn pop_multiple(&mut self, ids: &Vec<usize>) -> Option<Self> {
         match self {
-            Points::Empty => None,
-            Points::Collection(points) => {
+            Self::Empty => None,
+            Self::Collection(points) => {
                 let mut collection = HashMap::with_hasher(BuildNoHashHasher::default());
                 for key in ids {
                     let point = points
@@ -221,28 +224,28 @@ impl Points {
 
     pub fn contains(&self, index: &usize) -> bool {
         match self {
-            Points::Empty => false,
-            Points::Collection(points) => points.contains_key(index),
+            Self::Empty => false,
+            Self::Collection(points) => points.contains_key(index),
         }
     }
 
     pub fn get_point(&self, index: usize) -> Option<&Point> {
         match self {
-            Points::Empty => {
+            Self::Empty => {
                 panic!(
                     "Tried to get point with index {index}, but there are no stored vectors in the index."
                 );
             }
-            Points::Collection(points) => points.get(&index),
+            Self::Collection(points) => points.get(&index),
         }
     }
 
     pub fn get_points(&self, indices: &HashSet<usize, BuildNoHashHasher<usize>>) -> Vec<&Point> {
         let points = match self {
-            Points::Empty => {
+            Self::Empty => {
                 panic!("Tried to get points, but there are no stored vectors in the index.");
             }
-            Points::Collection(points) => {
+            Self::Collection(points) => {
                 indices.iter().map(|idx| points.get(idx).unwrap()).collect()
             }
         };
@@ -250,12 +253,12 @@ impl Points {
     }
     pub fn get_point_mut(&mut self, index: usize) -> &mut Point {
         let point: &mut Point = match self {
-            Points::Empty => {
+            Self::Empty => {
                 panic!(
                     "Tried to get point with index {index}, but there are no stored vectors in the index."
                 );
             }
-            Points::Collection(points) => points.get_mut(&index).unwrap(),
+            Self::Collection(points) => points.get_mut(&index).unwrap(),
         };
 
         point
@@ -270,10 +273,10 @@ impl Points {
         };
 
         match self {
-            Points::Empty => {
-                *self = Points::Collection(points);
+            Self::Empty => {
+                *self = Self::Collection(points);
             }
-            Points::Collection(points_map) => {
+            Self::Collection(points_map) => {
                 let old_ids: HashSet<usize> = points_map.keys().cloned().collect();
                 let new_ids: HashSet<usize> = points.keys().cloned().collect();
                 let intersection_len = new_ids.intersection(&old_ids).count();
@@ -293,25 +296,217 @@ impl Points {
 
     pub fn iterate(&self) -> std::collections::hash_map::Iter<'_, usize, Point> {
         match self {
-            Points::Empty => {
+            Self::Empty => {
                 panic!("Tried to iterate over empty collection of Points.");
             }
-            Points::Collection(points) => points.iter(),
+            Self::Collection(points) => points.iter(),
         }
     }
     pub fn iterate_mut(&mut self) -> std::collections::hash_map::IterMut<'_, usize, Point> {
         match self {
-            Points::Empty => {
+            Self::Empty => {
                 panic!("Tried to iterate over empty collection of Points.");
             }
-            Points::Collection(points) => points.iter_mut(),
+            Self::Collection(points) => points.iter_mut(),
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            Points::Empty => 0,
-            Points::Collection(points) => points.len(),
+            Self::Empty => 0,
+            Self::Collection(points) => points.len(),
+        }
+    }
+
+    pub fn quantize(&mut self) {
+        for (_, point) in self.iterate_mut() {
+            point.quantize();
+        }
+    }
+
+    pub fn to_full(&mut self) {
+        for (_, point) in self.iterate_mut() {
+            point.to_full();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PointsV2 {
+    Empty,
+    Collection(Vec<Point>),
+}
+
+impl PointsV2 {
+    /// If you call this function, you can be sure that point IDs correspond
+    /// to their positions in the vector of points.
+    /// Will change the IDs of each point to correspond to their positions if it
+    /// it was not the case before.
+    /// Returns whether the IDs were modified.
+    pub fn assert_ids(&mut self) -> bool {
+        let points = match self {
+            Self::Empty => return false,
+            Self::Collection(ps) => ps,
+        };
+        let mut is_ok = true;
+        for (idx, point) in points.iter().enumerate() {
+            is_ok = idx == point.id;
+        }
+        if is_ok {
+            false
+        } else {
+            for (idx, point) in points.iter_mut().enumerate() {
+                point.id = idx;
+            }
+            true
+        }
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = usize> + '_ {
+        match self {
+            Self::Empty => {
+                panic!("Tried to get ids, but there are no stored vectors in the index.");
+            }
+            Self::Collection(points) => points.iter().map(|p| p.id),
+        }
+    }
+
+    /// Iterator over (ID, Level) pairs of stored Point structs.
+    pub fn ids_levels(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        match self {
+            Self::Empty => {
+                panic!("Tried to get ids, but there are no stored vectors in the index.");
+            }
+            Self::Collection(points) => points.iter().map(|point| (point.id, point.level.unwrap())),
+        }
+    }
+
+    pub fn insert(&mut self, point: Point) {
+        match self {
+            Self::Empty => {
+                *self = Self::Collection(Vec::from([point]));
+            }
+            Self::Collection(points) => {
+                points.insert(point.id, point);
+            }
+        };
+    }
+
+    pub fn dim(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Collection(points) => points.get(0).unwrap().vector.dim(),
+        }
+    }
+
+    pub fn remove(&mut self, index: usize) -> Option<Point> {
+        match self {
+            Self::Empty => None,
+            Self::Collection(points) => Some(points.remove(index)),
+        }
+    }
+
+    /// Removes all the points with the ids and returns them in a new Points struct.
+    pub fn remove_multiple(&mut self, ids: &Vec<usize>) -> Option<Self> {
+        match self {
+            Self::Empty => None,
+            Self::Collection(points) => Some(Self::Collection(Vec::from_iter(
+                ids.iter().map(|id| points.remove(*id)),
+            ))),
+        }
+    }
+
+    pub fn contains(&self, index: &usize) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::Collection(points) => match points.get(*index) {
+                Some(_) => true,
+                None => false,
+            },
+        }
+    }
+
+    pub fn get_point(&self, index: usize) -> Option<&Point> {
+        match self {
+            Self::Empty => {
+                panic!(
+                    "Tried to get point with index {index}, but there are no stored vectors in the index."
+                );
+            }
+            Self::Collection(points) => points.get(index),
+        }
+    }
+
+    pub fn get_points(&self, indices: &HashSet<usize, BuildNoHashHasher<usize>>) -> Vec<&Point> {
+        let points = match self {
+            Self::Empty => {
+                panic!("Tried to get points, but there are no stored vectors in the index.");
+            }
+            Self::Collection(points) => indices
+                .iter()
+                .map(|idx| points.get(*idx).unwrap())
+                .collect(),
+        };
+        points
+    }
+    pub fn get_point_mut(&mut self, index: usize) -> &mut Point {
+        let point: &mut Point = match self {
+            Self::Empty => {
+                panic!(
+                    "Tried to get point with index {index}, but there are no stored vectors in the index."
+                );
+            }
+            Self::Collection(points) => points.get_mut(index).unwrap(),
+        };
+
+        point
+    }
+
+    /// Extends the Collection variant with the provided Points struct,
+    /// or, in the case it is the Empty variant, fills it and changes the variant to Collection.
+    pub fn extend_or_fill(&mut self, other: Self) {
+        let points = match other {
+            Self::Empty => return (),
+            Self::Collection(points_other) => points_other,
+        };
+
+        match self {
+            Self::Empty => {
+                *self = Self::Collection(points);
+            }
+            Self::Collection(points_self) => {
+                let mut last_id = points_self.last().unwrap().id;
+                assert_eq!(last_id, points_self.len() - 1);
+                for mut point in points {
+                    point.id = last_id + 1;
+                    points_self.push(point);
+                    last_id += 1;
+                }
+            }
+        }
+    }
+
+    pub fn iterate(&self) -> impl Iterator<Item = (usize, &Point)> + '_ {
+        match self {
+            Self::Empty => {
+                panic!("Tried to iterate over empty collection of Points.");
+            }
+            Self::Collection(points) => points.iter().enumerate(),
+        }
+    }
+    pub fn iterate_mut(&mut self) -> impl Iterator<Item = (usize, &mut Point)> + '_ {
+        match self {
+            Self::Empty => {
+                panic!("Tried to iterate over empty collection of Points.");
+            }
+            Self::Collection(points) => points.iter_mut().enumerate(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Collection(points) => points.len(),
         }
     }
 
