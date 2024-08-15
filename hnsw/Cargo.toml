@@ -16,12 +16,6 @@ rand = "0.8.5"
 regex = "1.10.3"
 serde_json = "1.0.114"
 serde = { version = "1.0", features = ["derive"] }
-ndarray = { version = "0.15.6", features = ["serde"] }
-unroll = "0.1.5"
-# openblas-src = { version = "0.10.9", features = ["cblas"]}
-# ndarray-linalg = { version = "0.16", features = ["intel-mkl-static"] }
-# ndarray = { version = "0.15.6", features = ["blas", "serde"] }
-# blas-src = { version = "0.10", features = ["openblas"] }
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
