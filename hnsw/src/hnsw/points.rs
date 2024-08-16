@@ -1,3 +1,5 @@
+use rand::rngs::ThreadRng;
+use rand::Rng;
 use std::collections::{HashMap, HashSet};
 
 use nohash_hasher::BuildNoHashHasher;
@@ -328,10 +330,46 @@ impl Points {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PointsV2 {
     Empty,
-    Collection(Vec<Point>),
+    Collection((Vec<Point>, Vec<f32>)),
 }
 
 impl PointsV2 {
+    pub fn from_vecs(vectors: Vec<Vec<f32>>, ml: f32) -> Self {
+        let mut rng = rand::thread_rng();
+
+        let mut means = Vec::from_iter((0..vectors[0].len()).map(|_| 0.0));
+        for vector in vectors.iter() {
+            for (idx, val) in vector.iter().enumerate() {
+                means[idx] += val
+            }
+        }
+        for idx in 0..means.len() {
+            means[idx] /= vectors.len() as f32;
+        }
+
+        // vectors.iter_mut().for_each(|v| {
+        //     v.iter_mut()
+        //         .enumerate()
+        //         .for_each(|(idx, x)| *x -= means[idx])
+        // });
+
+        let collection = Vec::from_iter(
+            vectors
+                .iter()
+                .enumerate()
+                .map(|(id, v)| Point::new_quantized(id, get_new_node_layer(ml, &mut rng), v)),
+        );
+
+        Self::Collection((collection, means))
+    }
+
+    pub fn get_means(&self) -> Result<&Vec<f32>, String> {
+        match self {
+            Self::Empty => Err("There are no points in this struct.".to_string()),
+            Self::Collection(col) => Ok(&col.1),
+        }
+    }
+
     /// If you call this function, you can be sure that point IDs correspond
     /// to their positions in the vector of points.
     /// Will change the IDs of each point to correspond to their positions if it
@@ -343,13 +381,13 @@ impl PointsV2 {
             Self::Collection(ps) => ps,
         };
         let mut is_ok = true;
-        for (idx, point) in points.iter().enumerate() {
+        for (idx, point) in points.0.iter().enumerate() {
             is_ok = idx == point.id;
         }
         if is_ok {
             false
         } else {
-            for (idx, point) in points.iter_mut().enumerate() {
+            for (idx, point) in points.0.iter_mut().enumerate() {
                 point.id = idx;
             }
             true
@@ -361,7 +399,7 @@ impl PointsV2 {
             Self::Empty => {
                 panic!("Tried to get ids, but there are no stored vectors in the index.");
             }
-            Self::Collection(points) => points.iter().map(|p| p.id),
+            Self::Collection(points) => points.0.iter().map(|p| p.id),
         }
     }
 
@@ -371,17 +409,20 @@ impl PointsV2 {
             Self::Empty => {
                 panic!("Tried to get ids, but there are no stored vectors in the index.");
             }
-            Self::Collection(points) => points.iter().map(|point| (point.id, point.level)),
+            Self::Collection(points) => points.0.iter().map(|point| (point.id, point.level)),
         }
     }
 
     pub fn insert(&mut self, point: Point) {
         match self {
             Self::Empty => {
-                *self = Self::Collection(Vec::from([point]));
+                *self = Self::Collection((
+                    Vec::from([point.clone()]),
+                    Vec::from_iter(point.get_full_precision()),
+                ));
             }
             Self::Collection(points) => {
-                points.insert(point.id, point);
+                points.0.insert(point.id, point);
             }
         };
     }
@@ -389,31 +430,21 @@ impl PointsV2 {
     pub fn dim(&self) -> usize {
         match self {
             Self::Empty => 0,
-            Self::Collection(points) => points.get(0).unwrap().vector.dim(),
+            Self::Collection(points) => points.0.get(0).unwrap().vector.dim(),
         }
     }
 
     pub fn remove(&mut self, index: usize) -> Option<Point> {
         match self {
             Self::Empty => None,
-            Self::Collection(points) => Some(points.remove(index)),
-        }
-    }
-
-    /// Removes all the points with the ids and returns them in a new Points struct.
-    pub fn remove_multiple(&mut self, ids: &Vec<usize>) -> Option<Self> {
-        match self {
-            Self::Empty => None,
-            Self::Collection(points) => Some(Self::Collection(Vec::from_iter(
-                ids.iter().map(|id| points.remove(*id)),
-            ))),
+            Self::Collection(points) => Some(points.0.remove(index)),
         }
     }
 
     pub fn contains(&self, index: &usize) -> bool {
         match self {
             Self::Empty => false,
-            Self::Collection(points) => match points.get(*index) {
+            Self::Collection(points) => match points.0.get(*index) {
                 Some(_) => true,
                 None => false,
             },
@@ -427,7 +458,7 @@ impl PointsV2 {
                     "Tried to get point with index {index}, but there are no stored vectors in the index."
                 );
             }
-            Self::Collection(points) => points.get(index),
+            Self::Collection(points) => points.0.get(index),
         }
     }
 
@@ -438,7 +469,7 @@ impl PointsV2 {
             }
             Self::Collection(points) => indices
                 .iter()
-                .map(|idx| points.get(*idx).unwrap())
+                .map(|idx| points.0.get(*idx).unwrap())
                 .collect(),
         };
         points
@@ -450,7 +481,7 @@ impl PointsV2 {
                     "Tried to get point with index {index}, but there are no stored vectors in the index."
                 );
             }
-            Self::Collection(points) => points.get_mut(index).unwrap(),
+            Self::Collection(points) => points.0.get_mut(index).unwrap(),
         };
 
         point
@@ -471,10 +502,10 @@ impl PointsV2 {
                 *self = Self::Collection(points);
             }
             Self::Collection(points_self) => {
-                let mut last_id = points_self.last().unwrap().id;
-                for mut point in points {
+                let mut last_id = points_self.0.last().unwrap().id;
+                for mut point in points.0 {
                     point.id = last_id + 1;
-                    points_self.push(point);
+                    points_self.0.push(point);
                     last_id += 1;
                 }
             }
@@ -486,7 +517,7 @@ impl PointsV2 {
             Self::Empty => {
                 panic!("Tried to iterate over empty collection of Points.");
             }
-            Self::Collection(points) => points.iter().enumerate(),
+            Self::Collection(points) => points.0.iter().map(|p| (p.id, p)),
         }
     }
     pub fn iterate_mut(&mut self) -> impl Iterator<Item = (usize, &mut Point)> + '_ {
@@ -494,14 +525,14 @@ impl PointsV2 {
             Self::Empty => {
                 panic!("Tried to iterate over empty collection of Points.");
             }
-            Self::Collection(points) => points.iter_mut().enumerate(),
+            Self::Collection(points) => points.0.iter_mut().map(|p| (p.id, p)),
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
             Self::Empty => 0,
-            Self::Collection(points) => points.len(),
+            Self::Collection(points) => points.0.len(),
         }
     }
 
@@ -516,4 +547,17 @@ impl PointsV2 {
             point.to_full();
         }
     }
+}
+
+pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> usize {
+    let mut rand_nb = 0.0;
+    loop {
+        if (rand_nb == 0.0) | (rand_nb == 1.0) {
+            rand_nb = rng.gen::<f32>();
+        } else {
+            break;
+        }
+    }
+    let num = (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize;
+    num
 }

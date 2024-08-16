@@ -64,21 +64,21 @@ impl HNSW {
                 // because I am too lazy to change the current methods.
                 if neighbors.len() > (max_degree + 1) {
                     is_ok = false;
-                    // println!(
-                    //     "In layer {layer_nb}, node {node} has degree {0}, but limit is {1}",
-                    //     neighbors.len(),
-                    //     max_degree
-                    // );
+                    println!(
+                        "In layer {layer_nb}, node {node} has degree {0}, but limit is {1}",
+                        neighbors.len(),
+                        max_degree
+                    );
                 }
 
-                if neighbors.len() == 0 {
+                if (neighbors.len() == 0) & (layer.nb_nodes() > 1) {
                     is_ok = false;
-                    // println!("In layer {layer_nb}, node {node} has degree 0",);
+                    println!("In layer {layer_nb}, node {node} has degree 0",);
                 }
             }
         }
         if is_ok {
-            // println!("Index complies with params.")
+            println!("Index complies with params.")
         }
     }
 
@@ -108,7 +108,9 @@ impl HNSW {
         ep.insert(self.ep);
         let nb_layer = self.layers.len();
 
-        let point = Point::new_quantized(0, 0, vector);
+        // let vector = self.center_vector(vector)?;
+
+        let point = Point::new_quantized(0, 0, &vector);
 
         for layer_nb in (0..nb_layer).rev() {
             ep = self.search_layer(&self.layers.get(&(layer_nb)).unwrap(), &point, &mut ep, 1)?;
@@ -123,12 +125,7 @@ impl HNSW {
                 (dist, *x)
             }));
 
-        let anns: Vec<usize> = nearest_neighbors
-            .values()
-            .skip(1)
-            .take(n)
-            .cloned()
-            .collect();
+        let anns: Vec<usize> = nearest_neighbors.values().take(n).cloned().collect();
         Ok(anns)
     }
 
@@ -219,14 +216,7 @@ impl HNSW {
         let mut insertion_results = HashMap::with_hasher(BuildNoHashHasher::default());
         let bound = (current_layer_number + 1).min(self.layers.len());
 
-        for (layer_nb, limit) in (0..bound).rev().map(|nb| {
-            let limit = if nb == 0 {
-                self.params.mmax0
-            } else {
-                self.params.mmax
-            };
-            (nb, limit)
-        }) {
+        for layer_nb in (0..bound).rev() {
             let layer = self.layers.get(&layer_nb).unwrap();
 
             ep = self.search_layer(layer, point, &mut ep, self.params.ef_cons)?;
@@ -234,16 +224,17 @@ impl HNSW {
             let neighbors_to_connect =
                 self.select_heuristic(layer, point, &mut ep, self.params.m, false, true)?;
 
-            let prune_results = self.prune_connexions(limit, layer, &neighbors_to_connect)?;
+            // let prune_results = self.prune_connexions(limit, layer, &neighbors_to_connect)?;
 
             let mut layer_result = HashMap::with_hasher(BuildNoHashHasher::default());
-            layer_result.extend(
-                prune_results.iter().map(|x| (*x.0, x.1.to_owned())).chain(
-                    [(point.id, neighbors_to_connect)]
-                        .iter()
-                        .map(|x| (x.0, x.1.to_owned())),
-                ),
-            );
+            layer_result.insert(point.id, neighbors_to_connect);
+            // layer_result.extend(
+            //     prune_results.iter().map(|x| (*x.0, x.1.to_owned())).chain(
+            //         [(point.id, neighbors_to_connect)]
+            //             .iter()
+            //             .map(|x| (x.0, x.1.to_owned())),
+            //     ),
+            // );
             insertion_results.insert(layer_nb, layer_result);
         }
         Ok(insertion_results)
@@ -290,23 +281,27 @@ impl HNSW {
         &self,
         limit: usize,
         layer: &Graph,
-        connexions_made: &HashSet<usize, BuildNoHashHasher<usize>>,
-    ) -> Result<HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>, String> {
-        let mut prune_results = HashMap::new();
-        for neighbor in connexions_made.iter() {
-            if layer.degree(*neighbor)? > limit {
-                let neighbor_point = &self.points.get_point(*neighbor).unwrap();
-                let mut old_neighbors = layer.neighbors(*neighbor)?.clone();
-                let new_neighbors = self.select_heuristic(
-                    &layer,
-                    &neighbor_point,
-                    &mut old_neighbors,
-                    limit,
-                    false,
-                    false,
-                )?;
-                prune_results.insert(*neighbor, new_neighbors);
-            }
+        nodes_to_prune: &HashSet<usize, BuildNoHashHasher<usize>>,
+    ) -> Result<
+        HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>, BuildNoHashHasher<usize>>,
+        String,
+    > {
+        let mut prune_results = HashMap::with_hasher(BuildNoHashHasher::default());
+        for node in nodes_to_prune.iter() {
+            // if layer.degree(*node)? > limit {
+            let point = &self.points.get_point(*node).unwrap();
+            let mut old_neighbors = HashSet::with_hasher(BuildNoHashHasher::default());
+            old_neighbors.extend(
+                layer
+                    .neighbors(*node)?
+                    .iter()
+                    .filter(|old_n| layer.degree(**old_n).unwrap() > 1)
+                    .cloned(),
+            );
+            let new_neighbors =
+                self.select_heuristic(&layer, &point, &mut old_neighbors, limit, false, false)?;
+            prune_results.insert(*node, new_neighbors);
+            // }
         }
         Ok(prune_results)
     }
@@ -370,7 +365,6 @@ impl HNSW {
             return Ok(true);
         }
 
-        // TODO: points should hold whether they have been inserted
         if self.layers.get(&0).unwrap().contains(&point_id) & !reinsert {
             return Ok(true);
         }
@@ -379,8 +373,31 @@ impl HNSW {
         let max_layer_nb = self.layers.len() - 1;
         let ep = self.step_1(point, max_layer_nb, level, None)?;
         let insertion_results = self.step_2(point, ep, level)?;
+        let nodes_to_prune = insertion_results.clone();
 
         self.write_results(insertion_results, point_id, level, max_layer_nb)?;
+
+        let mut pruned_results = HashMap::with_hasher(BuildNoHashHasher::default());
+        for (layer_nb, layer) in self.layers.iter() {
+            let limit = if *layer_nb == 0 {
+                self.params.mmax0
+            } else {
+                self.params.mmax
+            };
+            if nodes_to_prune.contains_key(layer_nb) {
+                let neighbors = nodes_to_prune
+                    .get(layer_nb)
+                    .unwrap()
+                    .get(&point_id)
+                    .unwrap();
+                if neighbors.len() > limit {
+                    let new_node = self.prune_connexions(limit, layer, neighbors)?;
+                    pruned_results.insert(*layer_nb, new_node);
+                }
+            }
+        }
+
+        self.write_results(pruned_results, point_id, level, max_layer_nb)?;
 
         Ok(true)
     }
@@ -486,7 +503,7 @@ impl HNSW {
 
         for (idx, point_id) in ids.iter().enumerate() {
             if index.is_locked_exclusive() {
-                update_local_layer(&mut layer0, index.read().layers.get(&0).unwrap());
+                index.read().update_thread_layer(&mut layer0);
             }
 
             let read_ref = index.read();
@@ -513,9 +530,40 @@ impl HNSW {
         Ok(())
     }
 
-    fn update_layer0(&mut self, layer0: &Graph) {
+    fn prune_layer(&self, layer: &mut Graph) {
+        let mut to_prune = HashSet::with_hasher(BuildNoHashHasher::default());
+        for (node, neighbors) in layer.nodes.iter() {
+            if neighbors.len() > self.params.mmax0 {
+                to_prune.insert(*node);
+            }
+        }
+        let prune_results = self
+            .prune_connexions(self.params.mmax0, &layer, &to_prune)
+            .unwrap();
+        let pr_keys: HashSet<&usize> = HashSet::from_iter(prune_results.keys());
+        for (node, neighbors) in layer.nodes.iter_mut() {
+            if pr_keys.contains(node) {
+                *neighbors = prune_results.get(node).unwrap().clone();
+            }
+        }
+    }
+
+    fn update_thread_layer(&self, thread_layer: &mut Graph) {
+        for (node, new_neighbors) in self.layers.get(&0).unwrap().nodes.iter() {
+            let entry = thread_layer.nodes.entry(*node);
+            entry
+                .and_modify(|neighbors| {
+                    neighbors.extend(new_neighbors);
+                })
+                .or_insert(new_neighbors.clone());
+        }
+
+        self.prune_layer(thread_layer);
+    }
+
+    fn update_layer0(&mut self, thread_layer: &Graph) {
         let true_layer0 = self.layers.get_mut(&0).unwrap();
-        let layer0_nodes = layer0
+        let layer0_nodes = thread_layer
             .nodes
             .keys()
             .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
@@ -527,7 +575,7 @@ impl HNSW {
             .difference(&true_layer_nodes)
             .map(|x| **x)
             .collect();
-        for (node, new_neighbors) in layer0.nodes.iter() {
+        for (node, new_neighbors) in thread_layer.nodes.iter() {
             let entry = true_layer0.nodes.entry(*node);
             entry
                 .and_modify(|neighbors| {
@@ -606,6 +654,7 @@ impl HNSW {
                 layer.replace_neighbors(node, neighbors)?;
             }
         }
+
         if level > max_layer_nb {
             for layer_nb in max_layer_nb + 1..level + 1 {
                 let mut layer = Graph::new();
@@ -620,14 +669,16 @@ impl HNSW {
     /// Assigns IDs to all vectors (usize).
     /// Creates Point structs, giving a level to each Point.
     /// Stores the Point structs in a Points struct, in index.points
-    fn store_points(&mut self, mut vectors: Vec<Vec<f32>>) {
-        center_vectors(&mut vectors);
+    fn store_points(&mut self, vectors: Vec<Vec<f32>>) {
+        // center_vectors(&mut vectors);
 
-        let mut rng = rand::thread_rng();
-        let collection = Vec::from_iter(vectors.iter().enumerate().map(|(id, v)| {
-            Point::new_quantized(id, get_new_node_layer(self.params.ml, &mut rng), v)
-        }));
-        let points = PointsV2::Collection(collection);
+        // let mut rng = rand::thread_rng();
+        // let collection = Vec::from_iter(vectors.iter().enumerate().map(|(id, v)| {
+        //     Point::new_quantized(id, get_new_node_layer(self.params.ml, &mut rng), v)
+        // }));
+        // let points = PointsV2::Collection(collection);
+
+        let points = PointsV2::from_vecs(vectors, self.params.ml);
 
         self.points.extend_or_fill(points);
     }
@@ -640,6 +691,7 @@ impl HNSW {
     }
 
     fn reinsert_with_degree_zero(&mut self) {
+        println!("Reinserting nodes with degree 0");
         for _ in 0..3 {
             for (_, layer) in self.layers.clone().iter() {
                 for (node, neighbors) in layer.nodes.iter() {
@@ -738,7 +790,6 @@ impl HNSW {
         index.store_points(vectors);
         index.first_insert(0);
         index = HNSW::insert_non_zero(index, verbose)?;
-        // index.insert_non_zero(verbose)?;
 
         let (index, eps_ids_map) = HNSW::find_layer_eps(index, 1, verbose)?;
 
@@ -762,6 +813,7 @@ impl HNSW {
         for handle in handlers {
             let _ = handle.join().unwrap();
         }
+        index_arc.write().reinsert_with_degree_zero();
         index_arc.read().assert_param_compliance();
 
         Ok(Arc::into_inner(index_arc)
@@ -874,6 +926,7 @@ impl HNSW {
             let _ = handle.join().unwrap();
         }
 
+        index_arc.write().reinsert_with_degree_zero();
         index_arc.read().assert_param_compliance();
 
         Ok(Arc::into_inner(index_arc)
@@ -1028,6 +1081,17 @@ impl HNSW {
         Ok(result)
     }
 
+    /// Mean-centers each vector using each dimension's mean over the entire matrix.
+    fn center_vector(&self, vector: &Vec<f32>) -> Result<Vec<f32>, String> {
+        let means = self.points.get_means()?;
+
+        Ok(vector
+            .iter()
+            .enumerate()
+            .map(|(idx, x)| x - means[idx])
+            .collect())
+    }
+
     /// Saves the index to the specified path.
     /// Creates the path to the file if it didn't exist before.
     pub fn save(&self, index_path: &str) -> std::io::Result<()> {
@@ -1092,7 +1156,7 @@ impl HNSW {
             layers.insert(layer_nb, Graph::from_layer_data(this_layer));
         }
 
-        let points = match content
+        let (points, means) = match content
             .get("points")
             .expect("Error: key 'points' is not in the index file.")
         {
@@ -1100,13 +1164,15 @@ impl HNSW {
                 let err_msg =
                     "Error reading index file: could not find key 'Collection' in 'points', maybe the index is empty.";
                 match points_vec.get("Collection").expect(err_msg) {
-                    serde_json::Value::Array(points_final) => extract_points(points_final),
+                    serde_json::Value::Array(points_final) => {
+                        extract_points_and_means(points_final)
+                    }
                     _ => panic!("Something went wrong reading parameters of the index file."),
                 }
             }
             serde_json::Value::String(s) => {
                 if s == "Empty" {
-                    Vec::new()
+                    (Vec::new(), Vec::new())
                 } else {
                     panic!("Something went wrong reading parameters of the index file.");
                 }
@@ -1121,7 +1187,7 @@ impl HNSW {
             ep,
             params,
             layers,
-            points: PointsV2::Collection(points),
+            points: PointsV2::Collection((points, means)),
         })
     }
 }
@@ -1212,10 +1278,21 @@ fn extract_params(params: &serde_json::Map<String, serde_json::Value>) -> Params
     hnsw_params
 }
 
-fn extract_points(points_data: &Vec<serde_json::Value>) -> Vec<Point> {
+fn extract_points_and_means(points_data: &Vec<serde_json::Value>) -> (Vec<Point>, Vec<f32>) {
     let mut points = Vec::new();
+    let points_vec = points_data[0].as_array().unwrap();
+    let points_means = points_data[1]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| match v {
+            serde_json::Value::Number(n) => n.as_f64().unwrap() as f32,
+            _ => panic!("Not a number."),
+        })
+        .collect();
 
-    for (idx, value) in points_data.iter().enumerate() {
+    // 0 is the vec of Point, because PointsV2 holds the points and their means
+    for (idx, value) in points_vec.iter().enumerate() {
         let id = value.get("id").unwrap().as_u64().unwrap() as usize;
         assert_eq!(id, idx);
         let level = value.get("level").unwrap().as_u64().unwrap() as usize;
@@ -1271,26 +1348,7 @@ fn extract_points(points_data: &Vec<serde_json::Value>) -> Vec<Point> {
         let point = Point::from_vector(id, level, vector);
         points.push(point);
     }
-    points
-}
-
-/// Mean-centers each vector using each dimension's mean over the entire matrix.
-fn center_vectors(vectors: &mut Vec<Vec<f32>>) {
-    let mut means = Vec::from_iter((0..vectors[0].len()).map(|_| 0.0));
-    for vector in vectors.iter() {
-        for (idx, val) in vector.iter().enumerate() {
-            means[idx] += val
-        }
-    }
-    for idx in 0..means.len() {
-        means[idx] /= vectors.len() as f32;
-    }
-
-    vectors.iter_mut().for_each(|v| {
-        v.iter_mut()
-            .enumerate()
-            .for_each(|(idx, x)| *x -= means[idx])
-    });
+    (points, points_means)
 }
 
 fn _compute_stats(points: &PointsV2) -> (f32, f32) {
@@ -1381,15 +1439,4 @@ fn split_ids_levels(ids_levels: Vec<(usize, usize)>, nb_splits: usize) -> Vec<Ve
     assert!(sum_lens == ids_levels.len(), "sum: {sum_lens}");
 
     split_vector
-}
-
-fn update_local_layer(local: &mut Graph, current: &Graph) {
-    for (node, new_neighbors) in current.nodes.iter() {
-        let entry = local.nodes.entry(*node);
-        entry
-            .and_modify(|neighbors| {
-                neighbors.extend(new_neighbors);
-            })
-            .or_insert(new_neighbors.clone());
-    }
 }
