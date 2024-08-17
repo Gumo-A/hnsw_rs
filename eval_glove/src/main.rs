@@ -52,16 +52,16 @@ fn main() -> std::io::Result<()> {
     );
     estimate_recall(&index, &test_set, &bf_data);
 
-    // let embs = train_set.clone();
-    // let start = Instant::now();
-    // let index = HNSW::build_index_par_v2(m, None, embs, true).unwrap();
-    // let end = Instant::now();
-    // index.print_index();
-    // println!(
-    //     "Multi-thread elapsed time: {}ms",
-    //     start.elapsed().as_millis() - end.elapsed().as_millis()
-    // );
-    // estimate_recall(&index, &test_set, &bf_data);
+    let embs = train_set.clone();
+    let start = Instant::now();
+    let index = HNSW::build_index_par_v2(m, None, embs, true).unwrap();
+    let end = Instant::now();
+    index.print_index();
+    println!(
+        "Multi-thread elapsed time: {}ms",
+        start.elapsed().as_millis() - end.elapsed().as_millis()
+    );
+    estimate_recall(&index, &test_set, &bf_data);
 
     let train_words: Vec<String> = words
         .iter()

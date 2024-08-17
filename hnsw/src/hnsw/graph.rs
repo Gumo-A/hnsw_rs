@@ -99,7 +99,7 @@ impl Graph {
     pub fn replace_neighbors(
         &mut self,
         node_id: usize,
-        new_neighbors: HashSet<usize, BuildNoHashHasher<usize>>,
+        new_neighbors: &HashSet<usize, BuildNoHashHasher<usize>>,
     ) -> Result<(), String> {
         let to_remove: Vec<usize> = match self.nodes.get_mut(&node_id) {
             Some(old_neighbors) => {

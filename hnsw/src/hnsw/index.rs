@@ -7,7 +7,7 @@ use crate::hnsw::{graph::Graph, lvq::LVQVec};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use nohash_hasher::BuildNoHashHasher;
+use nohash_hasher::{BuildNoHashHasher, IntSet};
 
 use parking_lot::{RwLock, RwLockReadGuard};
 use std::sync::Arc;
@@ -251,27 +251,15 @@ impl HNSW {
         let neighbors_to_connect =
             index.select_heuristic(layer0, point, &mut ep, index.params.m, false, true)?;
 
+        layer0.add_node(point.id);
+        layer0.replace_neighbors(point.id, &neighbors_to_connect)?;
+
         let prune_results =
             index.prune_connexions(index.params.mmax0, layer0, &neighbors_to_connect)?;
 
-        let mut layer_result: HashMap<
-            usize,
-            HashSet<usize, BuildNoHashHasher<usize>>,
-            BuildNoHashHasher<usize>,
-        > = HashMap::with_hasher(BuildNoHashHasher::default());
-        layer_result.extend(
-            prune_results.iter().map(|x| (*x.0, x.1.to_owned())).chain(
-                [(point.id, neighbors_to_connect)]
-                    .iter()
-                    .map(|x| (x.0, x.1.to_owned())),
-            ),
-        );
-
-        for (node, neighbors) in layer_result.drain() {
-            if node == point.id {
-                layer0.add_node(point.id);
-            }
-            layer0.replace_neighbors(node, neighbors)?;
+        for (node_id, neighbors) in prune_results {
+            assert!(neighbors.len() <= index.params.mmax0);
+            layer0.replace_neighbors(node_id, &neighbors)?;
         }
 
         Ok(())
@@ -288,20 +276,21 @@ impl HNSW {
     > {
         let mut prune_results = HashMap::with_hasher(BuildNoHashHasher::default());
         for node in nodes_to_prune.iter() {
-            // if layer.degree(*node)? > limit {
-            let point = &self.points.get_point(*node).unwrap();
-            let mut old_neighbors = HashSet::with_hasher(BuildNoHashHasher::default());
-            old_neighbors.extend(
-                layer
-                    .neighbors(*node)?
-                    .iter()
-                    .filter(|old_n| layer.degree(**old_n).unwrap() > 1)
-                    .cloned(),
-            );
-            let new_neighbors =
-                self.select_heuristic(&layer, &point, &mut old_neighbors, limit, false, false)?;
-            prune_results.insert(*node, new_neighbors);
-            // }
+            if layer.degree(*node)? > limit {
+                let point = &self.points.get_point(*node).unwrap();
+                let mut old_neighbors = HashSet::with_hasher(BuildNoHashHasher::default());
+                old_neighbors.extend(
+                    layer
+                        .neighbors(*node)?
+                        .iter()
+                        // .filter(|old_n| layer.degree(**old_n).unwrap() > 1)
+                        .cloned(),
+                );
+                let new_neighbors =
+                    self.select_heuristic(&layer, &point, &mut old_neighbors, limit, false, false)?;
+                assert!(new_neighbors.len() <= limit);
+                prune_results.insert(*node, new_neighbors);
+            }
         }
         Ok(prune_results)
     }
@@ -348,7 +337,7 @@ impl HNSW {
             }
         }
         let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
-        for val in selected.values() {
+        for val in selected.values().take(m) {
             result.insert(*val);
         }
         Ok(result)
@@ -390,10 +379,16 @@ impl HNSW {
                     .unwrap()
                     .get(&point_id)
                     .unwrap();
-                if neighbors.len() > limit {
-                    let new_node = self.prune_connexions(limit, layer, neighbors)?;
-                    pruned_results.insert(*layer_nb, new_node);
-                }
+                let mut to_prune = HashSet::with_hasher(BuildNoHashHasher::default());
+                to_prune.extend(
+                    neighbors
+                        .iter()
+                        .filter(|node_id| layer.degree(**node_id).unwrap() > limit)
+                        .map(|node_id| *node_id),
+                );
+
+                let new_nodes = self.prune_connexions(limit, layer, &to_prune)?;
+                pruned_results.insert(*layer_nb, new_nodes);
             }
         }
 
@@ -540,22 +535,33 @@ impl HNSW {
         let prune_results = self
             .prune_connexions(self.params.mmax0, &layer, &to_prune)
             .unwrap();
-        let pr_keys: HashSet<&usize> = HashSet::from_iter(prune_results.keys());
-        for (node, neighbors) in layer.nodes.iter_mut() {
-            if pr_keys.contains(node) {
-                *neighbors = prune_results.get(node).unwrap().clone();
-            }
+        for (node, neighbors) in prune_results.iter() {
+            layer.add_node(*node);
+            layer.replace_neighbors(*node, &neighbors).unwrap();
+            assert!(neighbors.len() <= self.params.mmax0);
         }
     }
 
     fn update_thread_layer(&self, thread_layer: &mut Graph) {
-        for (node, new_neighbors) in self.layers.get(&0).unwrap().nodes.iter() {
-            let entry = thread_layer.nodes.entry(*node);
-            entry
-                .and_modify(|neighbors| {
-                    neighbors.extend(new_neighbors);
-                })
-                .or_insert(new_neighbors.clone());
+        let true_layer0 = self.layers.get(&0).unwrap();
+        let layer0_nodes = thread_layer
+            .nodes
+            .keys()
+            .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
+        let true_layer_nodes = true_layer0
+            .nodes
+            .keys()
+            .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
+        let new_nodes: Vec<usize> = true_layer_nodes
+            .difference(&layer0_nodes)
+            .map(|x| **x)
+            .collect();
+        for node in new_nodes.iter() {
+            let new_neighbors = true_layer0.neighbors(*node).unwrap();
+            thread_layer.add_node(*node);
+            thread_layer
+                .replace_neighbors(*node, new_neighbors)
+                .unwrap();
         }
 
         self.prune_layer(thread_layer);
@@ -571,32 +577,32 @@ impl HNSW {
             .nodes
             .keys()
             .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
-        let connexions_made = layer0_nodes
+        let new_nodes: Vec<usize> = layer0_nodes
             .difference(&true_layer_nodes)
             .map(|x| **x)
             .collect();
-        for (node, new_neighbors) in thread_layer.nodes.iter() {
-            let entry = true_layer0.nodes.entry(*node);
-            entry
-                .and_modify(|neighbors| {
-                    neighbors.extend(new_neighbors);
-                })
-                .or_insert(new_neighbors.clone());
+        for node in new_nodes.iter() {
+            let new_neighbors = thread_layer.neighbors(*node).unwrap();
+            true_layer0.add_node(*node);
+            true_layer0.replace_neighbors(*node, new_neighbors).unwrap();
+        }
+
+        let mut to_prune = IntSet::default();
+        for (node, neighbors) in true_layer0.nodes.iter() {
+            if neighbors.len() > self.params.mmax0 {
+                to_prune.insert(*node);
+            }
         }
 
         let true_layer0 = self.layers.get(&0).unwrap();
-        let pruned_connextions = self
-            .prune_connexions(self.params.mmax0, true_layer0, &connexions_made)
+        let prune_results = self
+            .prune_connexions(self.params.mmax0, true_layer0, &to_prune.into())
             .unwrap();
         let true_layer0 = self.layers.get_mut(&0).unwrap();
 
-        for (node, new_neighbors) in pruned_connextions.iter() {
-            let entry = true_layer0.nodes.entry(*node);
-            entry
-                .and_modify(|neighbors| {
-                    *neighbors = new_neighbors.clone();
-                })
-                .or_insert(new_neighbors.clone());
+        for (node, new_neighbors) in prune_results.iter() {
+            assert!(new_neighbors.len() <= self.params.mmax0);
+            true_layer0.replace_neighbors(*node, new_neighbors).unwrap();
         }
         // println!(
         //     "thread {tn} nb of nodes end of update {}",
@@ -651,7 +657,7 @@ impl HNSW {
                 if node == point_id {
                     layer.add_node(point_id);
                 }
-                layer.replace_neighbors(node, neighbors)?;
+                layer.replace_neighbors(node, &neighbors)?;
             }
         }
 
@@ -723,7 +729,7 @@ impl HNSW {
             index.insert(id, false)?;
             bar.inc(1);
         }
-        index.reinsert_with_degree_zero();
+        // index.reinsert_with_degree_zero();
         index.assert_param_compliance();
         Ok(index)
     }
@@ -813,7 +819,7 @@ impl HNSW {
         for handle in handlers {
             let _ = handle.join().unwrap();
         }
-        index_arc.write().reinsert_with_degree_zero();
+        // TODO prune connexions of all nodes in all layers before ending
         index_arc.read().assert_param_compliance();
 
         Ok(Arc::into_inner(index_arc)
