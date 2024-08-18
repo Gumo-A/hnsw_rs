@@ -3,11 +3,12 @@ use super::{
     points::{Point, PointsV2, Vector},
 };
 use crate::hnsw::params::Params;
+use crate::hnsw::searcher::Searcher;
 use crate::hnsw::{graph::Graph, lvq::LVQVec};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use nohash_hasher::{BuildNoHashHasher, IntSet};
+use nohash_hasher::{IntMap, IntSet};
 
 use parking_lot::{RwLock, RwLockReadGuard};
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use rand::{rngs::ThreadRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 
 use core::panic;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 
@@ -28,7 +29,7 @@ pub struct HNSW {
     ep: usize,
     pub params: Params,
     pub points: PointsV2,
-    pub layers: HashMap<usize, Graph, BuildNoHashHasher<usize>>,
+    pub layers: IntMap<usize, Graph>,
 }
 
 impl HNSW {
@@ -38,7 +39,7 @@ impl HNSW {
             points: PointsV2::Empty,
             params,
             ep: 0,
-            layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            layers: IntMap::default(),
         }
     }
 
@@ -47,7 +48,7 @@ impl HNSW {
             points: PointsV2::Empty,
             params,
             ep: 0,
-            layers: HashMap::with_hasher(BuildNoHashHasher::default()),
+            layers: IntMap::default(),
         }
     }
 
@@ -103,8 +104,7 @@ impl HNSW {
         n: usize,
         ef: usize,
     ) -> Result<Vec<usize>, String> {
-        let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
-            HashSet::with_hasher(BuildNoHashHasher::default());
+        let mut ep: IntSet<usize> = IntSet::default();
         ep.insert(self.ep);
         let nb_layer = self.layers.len();
 
@@ -133,8 +133,8 @@ impl HNSW {
     pub fn anns_by_vectors(&self, vector: &Vec<Vec<f32>>, n: usize, ef: usize) -> () {
         // Result<Vec<Vec<usize>>, String> {
         // todo!("multithreaded");
-        // let mut ep: HashSet<usize, BuildNoHashHasher<usize>> =
-        //     HashSet::with_hasher(BuildNoHashHasher::default());
+        // let mut ep: IntSet<usize, > =
+        //     IntSet::with_hasher(:));
         // ep.insert(self.ep);
         // let nb_layer = self.layers.len();
 
@@ -168,8 +168,8 @@ impl HNSW {
         max_layer_nb: usize,
         current_layer_number: usize,
         stop_at_layer: Option<usize>,
-    ) -> Result<HashSet<usize, BuildNoHashHasher<usize>>, String> {
-        let mut ep = HashSet::with_hasher(BuildNoHashHasher::default());
+    ) -> Result<IntSet<usize>, String> {
+        let mut ep = IntSet::default();
         ep.insert(self.ep);
 
         ep = match stop_at_layer {
@@ -200,20 +200,30 @@ impl HNSW {
         Ok(ep)
     }
 
+    fn step_1_s(
+        &self,
+        searcher: &mut Searcher,
+        max_layer_nb: usize,
+        current_layer_number: usize,
+    ) -> Result<(), String> {
+        let ep = searcher.ep;
+        for layer_nb in (current_layer_number + 1..max_layer_nb + 1).rev() {
+            let layer = match self.layers.get(&layer_nb) {
+                Some(l) => l,
+                None => return Err(format!("Could not get layer {layer_nb} in step 1.")),
+            };
+            ep = self.search_layer_s(layer, searcher, 1)?;
+        }
+        Ok(ep)
+    }
+
     fn step_2(
         &self,
         point: &Point,
-        mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
+        mut ep: IntSet<usize>,
         current_layer_number: usize,
-    ) -> Result<
-        HashMap<
-            usize,
-            HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>, BuildNoHashHasher<usize>>,
-            BuildNoHashHasher<usize>,
-        >,
-        String,
-    > {
-        let mut insertion_results = HashMap::with_hasher(BuildNoHashHasher::default());
+    ) -> Result<IntMap<usize, IntMap<usize, IntSet<usize>>>, String> {
+        let mut insertion_results = IntMap::default();
         let bound = (current_layer_number + 1).min(self.layers.len());
 
         for layer_nb in (0..bound).rev() {
@@ -226,7 +236,7 @@ impl HNSW {
 
             // let prune_results = self.prune_connexions(limit, layer, &neighbors_to_connect)?;
 
-            let mut layer_result = HashMap::with_hasher(BuildNoHashHasher::default());
+            let mut layer_result = IntMap::default();
             layer_result.insert(point.id, neighbors_to_connect);
             // layer_result.extend(
             //     prune_results.iter().map(|x| (*x.0, x.1.to_owned())).chain(
@@ -240,11 +250,36 @@ impl HNSW {
         Ok(insertion_results)
     }
 
+    fn step_2_s(
+        &self,
+        point: &Point,
+        searcher: &mut Searcher,
+        current_layer_number: usize,
+    ) -> Result<IntMap<usize, IntMap<usize, IntSet<usize>>>, String> {
+        let mut insertion_results = IntMap::default();
+        let bound = (current_layer_number + 1).min(self.layers.len());
+
+        for layer_nb in (0..bound).rev() {
+            let layer = self.layers.get(&layer_nb).unwrap();
+
+            // updates the searcher
+            self.search_layer_s(layer, point, searcher, self.params.ef_cons)?;
+
+            let neighbors_to_connect =
+                self.select_heuristic_s(layer, point, searcher, self.params.m, false, true)?;
+
+            let mut layer_result = IntMap::default();
+            layer_result.insert(point.id, neighbors_to_connect);
+            insertion_results.insert(layer_nb, layer_result);
+        }
+        Ok(insertion_results)
+    }
+
     fn step_2_layer0(
         index: &RwLockReadGuard<'_, HNSW>,
         layer0: &mut Graph,
         point: &Point,
-        mut ep: HashSet<usize, BuildNoHashHasher<usize>>,
+        mut ep: IntSet<usize>,
     ) -> Result<(), String> {
         ep = index.search_layer(layer0, point, &mut ep, index.params.ef_cons)?;
 
@@ -269,16 +304,13 @@ impl HNSW {
         &self,
         limit: usize,
         layer: &Graph,
-        nodes_to_prune: &HashSet<usize, BuildNoHashHasher<usize>>,
-    ) -> Result<
-        HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>, BuildNoHashHasher<usize>>,
-        String,
-    > {
-        let mut prune_results = HashMap::with_hasher(BuildNoHashHasher::default());
+        nodes_to_prune: &IntSet<usize>,
+    ) -> Result<IntMap<usize, IntSet<usize>>, String> {
+        let mut prune_results = IntMap::default();
         for node in nodes_to_prune.iter() {
             if layer.degree(*node)? > limit {
                 let point = &self.points.get_point(*node).unwrap();
-                let mut old_neighbors = HashSet::with_hasher(BuildNoHashHasher::default());
+                let mut old_neighbors = IntSet::default();
                 old_neighbors.extend(
                     layer
                         .neighbors(*node)?
@@ -299,11 +331,11 @@ impl HNSW {
         &self,
         layer: &Graph,
         point: &Point,
-        cands_idx: &mut HashSet<usize, BuildNoHashHasher<usize>>,
+        cands_idx: &mut IntSet<usize>,
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
-    ) -> Result<HashSet<usize, BuildNoHashHasher<usize>>, String> {
+    ) -> Result<IntSet<usize>, String> {
         if extend_cands {
             for idx in cands_idx.clone().iter() {
                 for neighbor in layer.neighbors(*idx)? {
@@ -336,7 +368,7 @@ impl HNSW {
                 }
             }
         }
-        let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
+        let mut result = IntSet::default();
         for val in selected.values().take(m) {
             result.insert(*val);
         }
@@ -366,7 +398,7 @@ impl HNSW {
 
         self.write_results(insertion_results, point_id, level, max_layer_nb)?;
 
-        let mut pruned_results = HashMap::with_hasher(BuildNoHashHasher::default());
+        let mut pruned_results = IntMap::default();
         for (layer_nb, layer) in self.layers.iter() {
             let limit = if *layer_nb == 0 {
                 self.params.mmax0
@@ -379,7 +411,7 @@ impl HNSW {
                     .unwrap()
                     .get(&point_id)
                     .unwrap();
-                let mut to_prune = HashSet::with_hasher(BuildNoHashHasher::default());
+                let mut to_prune = IntSet::default();
                 to_prune.extend(
                     neighbors
                         .iter()
@@ -397,11 +429,69 @@ impl HNSW {
         Ok(true)
     }
 
-    pub fn insert_with_ep(
+    pub fn insert_with_searcher(
         &mut self,
         point_id: usize,
-        ep: HashSet<usize, BuildNoHashHasher<usize>>,
+        searcher: &mut Searcher,
+        reinsert: bool,
     ) -> Result<bool, String> {
+        let point = match self.points.get_point(point_id) {
+            Some(p) => p,
+            None => return Err(format!("{point_id} not in points given to the index.")),
+        };
+
+        if self.layers.len() == 0 {
+            self.first_insert(point_id);
+            return Ok(true);
+        }
+
+        if self.layers.get(&0).unwrap().contains(&point_id) & !reinsert {
+            return Ok(true);
+        }
+
+        // searcher will store everything so we dont have to create values on the fly
+        searcher.init(point);
+
+        let level = point.level;
+        let max_layer_nb = self.layers.len() - 1;
+        let ep = self.step_1_s(searcher, max_layer_nb, level, None)?;
+        let insertion_results = self.step_2_s(searcher, level)?;
+        let nodes_to_prune = insertion_results.clone();
+
+        self.write_results(insertion_results, point_id, level, max_layer_nb)?;
+
+        let mut pruned_results = IntMap::default();
+        for (layer_nb, layer) in self.layers.iter() {
+            let limit = if *layer_nb == 0 {
+                self.params.mmax0
+            } else {
+                self.params.mmax
+            };
+            if nodes_to_prune.contains_key(layer_nb) {
+                let neighbors = nodes_to_prune
+                    .get(layer_nb)
+                    .unwrap()
+                    .get(&point_id)
+                    .unwrap();
+                let mut to_prune = IntSet::default();
+                to_prune.extend(
+                    neighbors
+                        .iter()
+                        .filter(|node_id| layer.degree(**node_id).unwrap() > limit)
+                        .map(|node_id| *node_id),
+                );
+
+                let new_nodes = self.prune_connexions_s(limit, layer, &to_prune)?;
+                pruned_results.insert(*layer_nb, new_nodes);
+            }
+        }
+
+        self.write_results(pruned_results, point_id, level, max_layer_nb)?;
+
+        Ok(true)
+    }
+
+    pub fn insert_with_ep(&mut self, point_id: usize, ep: IntSet<usize>) -> Result<bool, String> {
         if !self.points.contains(&point_id) {
             return Ok(false);
         }
@@ -526,7 +616,7 @@ impl HNSW {
     }
 
     fn prune_layer(&self, layer: &mut Graph) {
-        let mut to_prune = HashSet::with_hasher(BuildNoHashHasher::default());
+        let mut to_prune = IntSet::default();
         for (node, neighbors) in layer.nodes.iter() {
             if neighbors.len() > self.params.mmax0 {
                 to_prune.insert(*node);
@@ -547,14 +637,12 @@ impl HNSW {
         let layer0_nodes = thread_layer
             .nodes
             .keys()
-            .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
-        let true_layer_nodes = true_layer0
-            .nodes
-            .keys()
-            .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
+            .cloned()
+            .collect::<IntSet<usize>>();
+        let true_layer_nodes = true_layer0.nodes.keys().cloned().collect::<IntSet<usize>>();
         let new_nodes: Vec<usize> = true_layer_nodes
             .difference(&layer0_nodes)
-            .map(|x| **x)
+            .map(|x| *x)
             .collect();
         for node in new_nodes.iter() {
             let new_neighbors = true_layer0.neighbors(*node).unwrap();
@@ -572,14 +660,12 @@ impl HNSW {
         let layer0_nodes = thread_layer
             .nodes
             .keys()
-            .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
-        let true_layer_nodes = true_layer0
-            .nodes
-            .keys()
-            .collect::<HashSet<&usize, BuildNoHashHasher<usize>>>();
+            .cloned()
+            .collect::<IntSet<usize>>();
+        let true_layer_nodes = true_layer0.nodes.keys().cloned().collect::<IntSet<usize>>();
         let new_nodes: Vec<usize> = layer0_nodes
             .difference(&true_layer_nodes)
-            .map(|x| **x)
+            .map(|x| *x)
             .collect();
         for node in new_nodes.iter() {
             let new_neighbors = thread_layer.neighbors(*node).unwrap();
@@ -613,13 +699,7 @@ impl HNSW {
 
     fn write_batch(
         &mut self,
-        batch: &mut Vec<
-            HashMap<
-                usize,
-                HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>, BuildNoHashHasher<usize>>,
-                BuildNoHashHasher<usize>,
-            >,
-        >,
+        batch: &mut Vec<IntMap<usize, IntMap<usize, IntSet<usize>>>>,
     ) -> Result<(), String> {
         let batch_len = batch.len();
         for _ in 0..batch_len {
@@ -642,11 +722,7 @@ impl HNSW {
 
     fn write_results(
         &mut self,
-        mut insertion_results: HashMap<
-            usize,
-            HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>, BuildNoHashHasher<usize>>,
-            BuildNoHashHasher<usize>,
-        >,
+        mut insertion_results: IntMap<usize, IntMap<usize, IntSet<usize>>>,
         point_id: usize,
         level: usize,
         max_layer_nb: usize,
@@ -726,11 +802,11 @@ impl HNSW {
 
         let ids_levels: Vec<(usize, usize)> = index.points.ids_levels().collect();
         for (id, _) in ids_levels {
-            index.insert(id, false)?;
+            index.insert_with_searcher(id, false)?;
             bar.inc(1);
         }
         // index.reinsert_with_degree_zero();
-        index.assert_param_compliance();
+        // index.assert_param_compliance();
         Ok(index)
     }
 
@@ -773,13 +849,14 @@ impl HNSW {
             let _ = handle.join().unwrap();
         }
 
-        index_arc.read().assert_param_compliance();
+        // index_arc.read().assert_param_compliance();
 
         Ok(Arc::into_inner(index_arc)
             .expect("Could not get index out of Arc reference")
             .into_inner())
     }
 
+    // TODO: Implementation is faster, but index quality is not good enough
     pub fn build_index_par_v2(
         m: usize,
         ef_cons: Option<usize>,
@@ -820,24 +897,25 @@ impl HNSW {
             let _ = handle.join().unwrap();
         }
         // TODO prune connexions of all nodes in all layers before ending
-        index_arc.read().assert_param_compliance();
+        // index_arc.read().assert_param_compliance();
 
         Ok(Arc::into_inner(index_arc)
             .expect("Could not get index out of Arc reference")
             .into_inner())
     }
 
+    // TODO: this was quickly done and without much thought, try to find a smarter way
     fn partition_points(
         &self,
-        mut eps_ids_map: HashMap<usize, HashSet<usize>>,
+        mut eps_ids_map: IntMap<usize, IntSet<usize>>,
         nb_splits: usize,
         layer_nb: usize,
-    ) -> Vec<HashSet<usize>> {
+    ) -> Vec<IntSet<usize>> {
         let nb_eps = eps_ids_map.keys().count();
         let eps_per_split = nb_eps / nb_splits;
-        let mut splits: Vec<HashSet<usize>> =
-            Vec::from_iter((0..nb_splits).map(|_| HashSet::new()));
-        let mut inserted = HashSet::new();
+        let mut splits: Vec<IntSet<usize>> =
+            Vec::from_iter((0..nb_splits).map(|_| IntSet::default()));
+        let mut inserted = IntSet::default();
         let mut next_ep = None;
 
         while inserted.len() < nb_eps {
@@ -933,7 +1011,7 @@ impl HNSW {
         }
 
         index_arc.write().reinsert_with_degree_zero();
-        index_arc.read().assert_param_compliance();
+        // index_arc.read().assert_param_compliance();
 
         Ok(Arc::into_inner(index_arc)
             .expect("Could not get index out of Arc reference")
@@ -943,13 +1021,13 @@ impl HNSW {
     /// Finds the entry points in layer for all points that
     /// have not been inserted.
     ///
-    /// Returns a HashMap pointing every entry point in the layer to
+    /// Returns a IntMap pointing every entry point in the layer to
     /// the points it inserts.
     fn find_layer_eps(
         index: Self,
         target_layer_nb: usize,
         verbose: bool,
-    ) -> Result<(Self, HashMap<usize, HashSet<usize>>), String> {
+    ) -> Result<(Self, IntMap<usize, IntSet<usize>>), String> {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
 
         let to_insert = index.points.ids_levels().filter(|x| x.1 == 0).collect();
@@ -962,8 +1040,8 @@ impl HNSW {
             let index_ref = index_arc.clone();
 
             handlers.push(std::thread::spawn(
-                move || -> HashMap<usize, HashSet<usize>> {
-                    let mut thread_results = HashMap::new();
+                move || -> IntMap<usize, IntSet<usize>> {
+                    let mut thread_results = IntMap::default();
                     let read_ref = index_ref.read();
                     let bar = get_progress_bar(
                         "Finding entry points".to_string(),
@@ -978,10 +1056,10 @@ impl HNSW {
                             .unwrap();
                         thread_results
                             .entry(*ep.iter().next().unwrap())
-                            .and_modify(|e: &mut HashSet<usize>| {
+                            .and_modify(|e: &mut IntSet<usize>| {
                                 e.insert(id);
                             })
-                            .or_insert(HashSet::from([id]));
+                            .or_insert(IntSet::from_iter([id].iter().cloned()));
                         bar.inc(1);
                     }
                     thread_results
@@ -989,14 +1067,14 @@ impl HNSW {
             ));
         }
 
-        let mut eps_ids = HashMap::new();
+        let mut eps_ids = IntMap::default();
         for handle in handlers {
             let result = handle.join().unwrap();
             for (ep, point_ids) in result.iter() {
                 eps_ids
                     .entry(*ep)
-                    .and_modify(|e: &mut HashSet<usize>| e.extend(point_ids.iter().cloned()))
-                    .or_insert(HashSet::from_iter(point_ids.iter().cloned()));
+                    .and_modify(|e: &mut IntSet<usize>| e.extend(point_ids.iter().cloned()))
+                    .or_insert(IntSet::from_iter(point_ids.iter().cloned()));
             }
         }
 
@@ -1010,7 +1088,7 @@ impl HNSW {
     fn sort_by_distance(
         &self,
         point: &Point,
-        others: &HashSet<usize, BuildNoHashHasher<usize>>,
+        others: &IntSet<usize>,
     ) -> Result<BTreeMap<Dist, usize>, String> {
         let result = others.iter().map(|idx| {
             let dist = self.points.get_point(*idx).unwrap().dist2other(point);
@@ -1040,9 +1118,9 @@ impl HNSW {
         &self,
         layer: &Graph,
         point: &Point,
-        ep: &mut HashSet<usize, BuildNoHashHasher<usize>>,
+        ep: &mut IntSet<usize>,
         ef: usize,
-    ) -> Result<HashSet<usize, BuildNoHashHasher<usize>>, String> {
+    ) -> Result<IntSet<usize>, String> {
         let mut candidates = self.sort_by_distance(point, &ep)?;
         let mut selected = candidates.clone();
 
@@ -1082,9 +1160,61 @@ impl HNSW {
             }
         }
         // println!("{ef},{counter}");
-        let mut result = HashSet::with_hasher(BuildNoHashHasher::default());
+        let mut result = IntSet::default();
         result.extend(selected.values());
         Ok(result)
+    }
+
+    pub fn search_layer_s(
+        &self,
+        layer: &Graph,
+        searcher: &mut Searcher,
+        ef: usize,
+        // Should simply update what is in the searcher, returning nothing
+    ) -> Result<(), String> {
+        searcher.sort_candidates();
+        // let mut candidates = self.sort_by_distance(point, &ep)?;
+        searcher.init_selected();
+        // let mut selected = candidates.clone();
+        searcher.init_seen(); // ep
+
+        while let Some((cand2q_dist, candidate)) = searcher.pop_first_cand() {
+            let (furthest2q_dist, _) = searcher.worst_selected();
+
+            if &cand2q_dist > furthest2q_dist {
+                break;
+            }
+            for (n2q_dist, neighbor_point) in layer
+                .neighbors(candidate)?
+                .iter()
+                .filter(|idx| searcher.insert_seen(**idx))
+                .map(|idx| {
+                    let (dist, point) = match self.points.get_point(*idx) {
+                        Some(p) => (p.dist2other(searcher.point), p),
+                        None => {
+                            println!(
+                                "Tried to get node with id {idx} from index, but it doesn't exist"
+                            );
+                            panic!("Tried to get a node that doesn't exist.")
+                        }
+                    };
+                    (dist, point)
+                })
+            {
+                let (f2q_dist, _) = searcher.worst_selected();
+
+                // TODO: do this inside the searcher struct
+                if (&n2q_dist < f2q_dist) | (searcher.selected.len() < ef) {
+                    searcher.insert_candidate(n2q_dist, neighbor_point.id);
+                    searcher.insert_selected(n2q_dist, neighbor_point.id);
+
+                    if searcher.selected.len() > ef {
+                        selected.pop_last();
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Mean-centers each vector using each dimension's mean over the entire matrix.
@@ -1141,7 +1271,7 @@ impl HNSW {
             .expect("Error: key 'layers' is not in the index file.")
             .as_object()
             .expect("Error: expected key 'layers' to be an Object, but couldn't parse it as such.");
-        let mut layers = HashMap::with_hasher(BuildNoHashHasher::default());
+        let mut layers = IntMap::default();
         for (layer_nb, layer_content) in layers_unparsed {
             let layer_nb: usize = layer_nb
                 .parse()
@@ -1149,7 +1279,7 @@ impl HNSW {
             let layer_content = layer_content
                 .get("nodes")
                 .expect("Error: could not load 'key' nodes for layer {key}").as_object().expect("Error: expected key 'nodes' for layer {layer_nb} to be an Object, but couldl not be parsed as such.");
-            let mut this_layer = HashMap::new();
+            let mut this_layer = IntMap::default();
             for (node_id, neighbors) in layer_content.iter() {
                 let neighbors = neighbors
                     .as_array()

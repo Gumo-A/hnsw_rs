@@ -44,10 +44,10 @@ fn main() -> std::io::Result<()> {
 
     let embs: Vec<Vec<f32>> = train_set.clone();
     let start = Instant::now();
-    let index = HNSW::build_index(m, None, embs, true).unwrap();
+    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
     let end = Instant::now();
     println!(
-        "Single-thread elapsed time: {}ms",
+        "Multi-thread (orig) elapsed time: {}ms",
         start.elapsed().as_millis() - end.elapsed().as_millis()
     );
     estimate_recall(&index, &test_set, &bf_data);
@@ -58,7 +58,7 @@ fn main() -> std::io::Result<()> {
     let end = Instant::now();
     index.print_index();
     println!(
-        "Multi-thread elapsed time: {}ms",
+        "Multi-thread (v2) elapsed time: {}ms",
         start.elapsed().as_millis() - end.elapsed().as_millis()
     );
     estimate_recall(&index, &test_set, &bf_data);
@@ -104,6 +104,7 @@ fn main() -> std::io::Result<()> {
 fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
     for ef in (12..100).step_by(12) {
         println!("Finding ANNs ef={ef}");
+        let bar = ProgressBar::new(test_set.len() as u64);
 
         let mut recall_10 = Vec::new();
         for (idx, query) in test_set.iter().enumerate() {
@@ -116,6 +117,7 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
                 }
             }
             recall_10.push((hits as f32) / 10.0);
+            bar.inc(1);
         }
         let mut avg_recall = 0.0;
         for recall in recall_10.iter() {

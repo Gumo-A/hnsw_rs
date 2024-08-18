@@ -1,5 +1,4 @@
 extern crate hnsw;
-use core::panic;
 
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::index::HNSW;
@@ -20,14 +19,14 @@ fn hnsw_init() {
 fn hnsw_build() {
     let vectors = make_rand_vectors(N);
     let mut index = HNSW::build_index(12, None, vectors, false).unwrap();
-    index.insert(0, 0).unwrap();
+    index.insert(0, false).unwrap();
 
     assert_eq!(index.points.len(), N);
 }
 
 #[test]
 fn hnsw_build_small_loop() {
-    let (_, vectors) = load_glove_array(DIM, 10, true, 1).expect("Could not load glove");
+    let (_, vectors) = load_glove_array(DIM, 10, true, false).expect("Could not load glove");
     for _ in 0..100_000 {
         let _ = HNSW::build_index(12, None, vectors.clone(), false).unwrap();
     }
@@ -35,7 +34,7 @@ fn hnsw_build_small_loop() {
 
 #[test]
 fn hnsw_build_big() {
-    let (_, vectors) = load_glove_array(DIM, 40_000, true, 1).expect("Could not load glove");
+    let (_, vectors) = load_glove_array(DIM, 40_000, true, false).expect("Could not load glove");
     let _ = HNSW::build_index(24, None, vectors, false).unwrap();
 }
 

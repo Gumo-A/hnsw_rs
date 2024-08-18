@@ -18,7 +18,7 @@ fn insert_at_10000_m12(c: &mut Criterion) {
     //     .measurement_time(Duration::from_secs(1000));
 
     for dim in GLOVE_DIMS.iter() {
-        let (_, embeddings) = load_glove_array(*dim, 10_001, true, 1).unwrap();
+        let (_, embeddings) = load_glove_array(*dim, 10_001, true, false).unwrap();
         let index = HNSW::build_index(12, None, embeddings[0..10_000].to_vec(), false).unwrap();
         let vector = embeddings[10_000].clone();
         group.bench_function(BenchmarkId::from_parameter(dim), |b| {
@@ -42,7 +42,7 @@ fn build_10000_m12(c: &mut Criterion) {
     //     .measurement_time(Duration::from_secs(1000));
 
     for dim in GLOVE_DIMS.iter() {
-        let (_, embeddings) = load_glove_array(*dim, 10_000, true, 1).unwrap();
+        let (_, embeddings) = load_glove_array(*dim, 10_000, true, false).unwrap();
         group.bench_function(BenchmarkId::from_parameter(dim), |b| {
             b.iter_batched(
                 || embeddings.clone(),

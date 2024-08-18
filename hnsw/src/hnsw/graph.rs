@@ -1,24 +1,22 @@
 use core::panic;
-use nohash_hasher::BuildNoHashHasher;
+use nohash_hasher::{IntMap, IntSet};
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_set::Drain, HashMap, HashSet};
+use std::collections::hash_set::Drain;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Graph {
-    pub nodes: HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>, BuildNoHashHasher<usize>>,
+    pub nodes: IntMap<usize, IntSet<usize>>,
 }
 
 impl Graph {
     pub fn new() -> Graph {
         Graph {
-            nodes: HashMap::with_hasher(BuildNoHashHasher::default()),
+            nodes: IntMap::default(),
         }
     }
 
-    pub fn from_layer_data(
-        data: HashMap<usize, HashSet<usize, BuildNoHashHasher<usize>>>,
-    ) -> Graph {
-        let mut nodes = HashMap::with_hasher(BuildNoHashHasher::default());
+    pub fn from_layer_data(data: IntMap<usize, IntSet<usize>>) -> Graph {
+        let mut nodes = IntMap::default();
         for (node_id, neighbors) in data.iter() {
             nodes.insert(*node_id, neighbors.clone());
         }
@@ -29,8 +27,7 @@ impl Graph {
         if self.nodes.contains_key(&point_id) {
             return ();
         } else {
-            self.nodes
-                .insert(point_id, HashSet::with_hasher(BuildNoHashHasher::default()));
+            self.nodes.insert(point_id, IntSet::default());
         };
     }
 
@@ -84,10 +81,7 @@ impl Graph {
         Ok(())
     }
 
-    pub fn neighbors(
-        &self,
-        node_id: usize,
-    ) -> Result<&HashSet<usize, BuildNoHashHasher<usize>>, String> {
+    pub fn neighbors(&self, node_id: usize) -> Result<&IntSet<usize>, String> {
         match self.nodes.get(&node_id) {
             Some(neighbors) => Ok(neighbors),
             None => Err(format!(
@@ -99,7 +93,7 @@ impl Graph {
     pub fn replace_neighbors(
         &mut self,
         node_id: usize,
-        new_neighbors: &HashSet<usize, BuildNoHashHasher<usize>>,
+        new_neighbors: &IntSet<usize>,
     ) -> Result<(), String> {
         let to_remove: Vec<usize> = match self.nodes.get_mut(&node_id) {
             Some(old_neighbors) => {
