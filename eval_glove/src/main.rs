@@ -6,6 +6,8 @@ use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::index::HNSW;
 
+use rand::Rng;
+
 use indicatif::{ProgressBar, ProgressStyle};
 
 fn main() -> std::io::Result<()> {
@@ -42,62 +44,68 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let embs: Vec<Vec<f32>> = train_set.clone();
+    let mut embs: Vec<Vec<f32>> = train_set.clone();
+    // let mut rng = rand::thread_rng();
+    // while embs.len() < 10_000_000 {
+    //     let vector = (0..dim).map(|_| rng.gen::<f32>()).collect();
+    //     embs.push(vector);
+    // }
+
     let start = Instant::now();
-    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
+    let index = HNSW::build_index(m, None, embs, false).unwrap();
     let end = Instant::now();
-    println!(
-        "Multi-thread (orig) elapsed time: {}ms",
-        start.elapsed().as_millis() - end.elapsed().as_millis()
-    );
-    estimate_recall(&index, &test_set, &bf_data);
+    // println!(
+    //     "Single-thread elapsed time: {}ms",
+    //     start.elapsed().as_millis() - end.elapsed().as_millis()
+    // );
+    // estimate_recall(&index, &test_set, &bf_data);
 
-    let embs = train_set.clone();
-    let start = Instant::now();
-    let index = HNSW::build_index_par_v2(m, None, embs, true).unwrap();
-    let end = Instant::now();
-    index.print_index();
-    println!(
-        "Multi-thread (v2) elapsed time: {}ms",
-        start.elapsed().as_millis() - end.elapsed().as_millis()
-    );
-    estimate_recall(&index, &test_set, &bf_data);
+    // let embs = train_set.clone();
+    // let start = Instant::now();
+    // let index = HNSW::build_index_par(m, None, embs, true).unwrap();
+    // let end = Instant::now();
+    // index.print_index();
+    // println!(
+    //     "Multi-thread (v2) elapsed time: {}ms",
+    //     start.elapsed().as_millis() - end.elapsed().as_millis()
+    // );
+    // estimate_recall(&index, &test_set, &bf_data);
 
-    let train_words: Vec<String> = words
-        .iter()
-        .enumerate()
-        .filter(|(id, _)| train_ids.contains(id))
-        .map(|(_, w)| w.clone())
-        .collect();
-    let test_words: Vec<String> = words
-        .iter()
-        .enumerate()
-        .filter(|(id, _)| test_ids.contains(id))
-        .map(|(_, w)| w.clone())
-        .collect();
+    // let train_words: Vec<String> = words
+    //     .iter()
+    //     .enumerate()
+    //     .filter(|(id, _)| train_ids.contains(id))
+    //     .map(|(_, w)| w.clone())
+    //     .collect();
+    // let test_words: Vec<String> = words
+    //     .iter()
+    //     .enumerate()
+    //     .filter(|(id, _)| test_ids.contains(id))
+    //     .map(|(_, w)| w.clone())
+    //     .collect();
 
-    for (i, idx) in bf_data.keys().enumerate() {
-        if i > 3 {
-            break;
-        }
-        let point = test_set.get(*idx).unwrap();
-        let anns = index.ann_by_vector(point, 10, 16).unwrap();
-        println!("ANNs of {}", test_words[*idx]);
-        let anns_words: Vec<String> = anns
-            .iter()
-            .map(|x| train_words[*x as usize].clone())
-            .collect();
-        println!("{:?}", anns_words);
-        println!("True NN of {}", test_words[*idx]);
-        let true_nns: Vec<String> = bf_data
-            .get(&idx)
-            .unwrap()
-            .iter()
-            .map(|x| train_words[*x].clone())
-            .take(10)
-            .collect();
-        println!("{:?}", true_nns);
-    }
+    // for (i, idx) in bf_data.keys().enumerate() {
+    //     if i > 3 {
+    //         break;
+    //     }
+    //     let point = test_set.get(*idx).unwrap();
+    //     let anns = index.ann_by_vector(point, 10, 16).unwrap();
+    //     // println!("ANNs of {}", test_words[*idx]);
+    //     let anns_words: Vec<String> = anns
+    //         .iter()
+    //         .map(|x| train_words[*x as usize].clone())
+    //         .collect();
+    //     // println!("{:?}", anns_words);
+    //     // println!("True NN of {}", test_words[*idx]);
+    //     let true_nns: Vec<String> = bf_data
+    //         .get(&idx)
+    //         .unwrap()
+    //         .iter()
+    //         .map(|x| train_words[*x].clone())
+    //         .take(10)
+    //         .collect();
+    //     // println!("{:?}", true_nns);
+    // }
     Ok(())
 }
 

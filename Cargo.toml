@@ -6,3 +6,11 @@ members = [
   "eval_glove", 
   "load_index",
 ]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[build]
+rustflags = ["-C", "target-cpu=native"]

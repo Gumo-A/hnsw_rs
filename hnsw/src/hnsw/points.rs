@@ -2,7 +2,7 @@ use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
 
-use nohash_hasher::BuildNoHashHasher;
+use nohash_hasher::{BuildNoHashHasher, IntSet};
 use serde::{Deserialize, Serialize};
 
 use super::{dist::Dist, lvq::LVQVec};
@@ -462,7 +462,7 @@ impl PointsV2 {
         }
     }
 
-    pub fn get_points(&self, indices: &HashSet<usize, BuildNoHashHasher<usize>>) -> Vec<&Point> {
+    pub fn get_points(&self, indices: &IntSet<usize>) -> Vec<&Point> {
         let points = match self {
             Self::Empty => {
                 panic!("Tried to get points, but there are no stored vectors in the index.");
