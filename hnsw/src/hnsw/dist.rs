@@ -4,11 +4,12 @@ use std::cmp::Ordering;
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct Dist {
     pub dist: f32,
+    pub id: usize,
 }
 
 impl Dist {
-    pub fn new(f: f32) -> Self {
-        Dist { dist: f }
+    pub fn new(dist: f32, id: usize) -> Self {
+        Dist { dist, id }
     }
 }
 

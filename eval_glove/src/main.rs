@@ -45,20 +45,21 @@ fn main() -> std::io::Result<()> {
         .collect();
 
     let mut embs: Vec<Vec<f32>> = train_set.clone();
+    // let mut embs: Vec<Vec<f32>> = Vec::new();
     // let mut rng = rand::thread_rng();
-    // while embs.len() < 400_000 {
+    // while embs.len() < lim {
     //     let vector = (0..dim).map(|_| rng.gen::<f32>()).collect();
     //     embs.push(vector);
     // }
 
     let start = Instant::now();
-    let index = HNSW::build_index(m, None, embs, true).unwrap();
+    let index = HNSW::build_index(m, Some(100), embs, true).unwrap();
     let end = Instant::now();
     println!(
         "Single-thread elapsed time: {}ms",
         start.elapsed().as_millis() - end.elapsed().as_millis()
     );
-    // estimate_recall(&index, &test_set, &bf_data);
+    estimate_recall(&index, &test_set, &bf_data);
 
     // let embs = train_set.clone();
     // let start = Instant::now();

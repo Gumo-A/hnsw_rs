@@ -90,25 +90,26 @@ impl Point {
     }
 
     pub fn dist2other(&self, other: &Point) -> Dist {
-        self.dist2vec(&other.vector)
+        self.dist2vec(&other.vector, other.id)
     }
 
-    pub fn dist2vec(&self, other_vec: &Vector) -> Dist {
+    pub fn dist2vec(&self, other_vec: &Vector, id: usize) -> Dist {
         let dist = match &self.vector {
             Vector::Compressed(compressed_self) => match other_vec {
                 Vector::Compressed(compressed_other) => {
-                    compressed_self.dist2other(compressed_other)
+                    compressed_self.dist2other(compressed_other, id)
                 }
-                Vector::Full(full_other) => compressed_self.dist2vec(full_other),
+                Vector::Full(full_other) => compressed_self.dist2vec(full_other, id),
             },
             Vector::Full(full_self) => match other_vec {
-                Vector::Compressed(compressed_other) => compressed_other.dist2vec(full_self),
+                Vector::Compressed(compressed_other) => compressed_other.dist2vec(full_self, id),
                 Vector::Full(full_other) => Dist::new(
                     full_self
                         .iter()
                         .zip(full_other.iter())
                         .fold(0.0, |acc, e| acc + (e.0 - e.1).powi(2))
                         .sqrt(),
+                    id,
                 ),
             },
         };

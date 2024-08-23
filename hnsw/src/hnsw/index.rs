@@ -11,7 +11,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::{IntMap, IntSet};
 
 use parking_lot::{RwLock, RwLockReadGuard};
-use std::sync::Arc;
+use std::{sync::Arc, cmp::Reverse};
 
 use rand::Rng;
 use rand::{rngs::ThreadRng, seq::SliceRandom};
@@ -20,7 +20,7 @@ use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 
 use core::panic;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, BinaryHeap};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 
@@ -109,8 +109,7 @@ impl HNSW {
 
         let point = Point::new_quantized(0, 0, vector);
 
-        let mut ep: BTreeMap<Dist, usize> = BTreeMap::new();
-        ep.insert(point.dist2other(self.points.get_point(self.ep).unwrap()), self.ep);
+        let mut ep: BinaryHeap<Dist> = BinaryHeap::from([point.dist2other(self.points.get_point(self.ep).unwrap())]);
         let nb_layer = self.layers.len();
 
         for layer_nb in (0..nb_layer).rev() {
@@ -126,8 +125,9 @@ impl HNSW {
         //         (dist, *x)
         //     }));
 
-        let anns: Vec<usize> = nearest_neighbors.values().take(n).cloned().collect();
-        Ok(anns)
+        let mut anns: Vec<Dist> = nearest_neighbors.iter().take(n).copied().collect();
+        anns.sort();
+        Ok(anns.iter().map(|x| x.id).collect())
     }
 
     // TODO: multithreaded
@@ -169,12 +169,11 @@ impl HNSW {
         max_layer_nb: usize,
         level: usize,
         stop_at_layer: Option<usize>,
-    ) -> Result<BTreeMap<Dist, usize>, String> {
+    ) -> Result<BinaryHeap<Dist>, String> {
         // let mut ep = IntSet::default();
         // ep.insert(self.ep);
 
-        let mut ep: BTreeMap<Dist, usize> = BTreeMap::new();
-        ep.insert(point.dist2other(self.points.get_point(self.ep).unwrap()), self.ep);
+        let mut ep: BinaryHeap<Dist> = BinaryHeap::from([point.dist2other(self.points.get_point(self.ep).unwrap())]);
         let nb_layer = self.layers.len();
 
         ep = match stop_at_layer {
@@ -224,7 +223,7 @@ impl HNSW {
     fn step_2(
         &self,
         point: &Point,
-        mut ep: BTreeMap<Dist, usize>,
+        mut ep: BinaryHeap<Dist>,
         current_layer_number: usize,
     ) -> Result<IntMap<usize, IntMap<usize, IntMap<usize, Dist>>>, String> {
         // let s1 = Instant::now();
@@ -284,7 +283,7 @@ impl HNSW {
         index: &RwLockReadGuard<'_, HNSW>,
         layer0: &mut Graph,
         point: &Point,
-        mut ep: BTreeMap<Dist, usize>,
+        mut ep: BinaryHeap<Dist>,
     ) -> Result<(), String> {
         ep = index.search_layer(layer0, point, &mut ep, index.params.ef_cons)?;
 
@@ -319,7 +318,7 @@ impl HNSW {
             if layer.degree(*node)? > limit {
                 let point = &self.points.get_point(*node).unwrap();
                 let mut old_neighbors =
-                    BTreeMap::from_iter(layer.neighbors(*node)?.iter().map(|(id, dist)| (*dist, *id)));
+                    BinaryHeap::from_iter(layer.neighbors(*node)?.iter().map(|(_, dist)| *dist));
                 // old_neighbors.extend(layer.neighbors(*node)?.iter().cloned());
                 let new_neighbors =
                     self.select_heuristic(layer, point, &mut old_neighbors, limit, false, false)?;
@@ -334,45 +333,45 @@ impl HNSW {
         &self,
         layer: &Graph,
         point: &Point,
-        ep: &mut BTreeMap<Dist, usize>,
+        ep: &mut BinaryHeap<Dist>,
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
     ) -> Result<IntMap<usize, Dist>, String> {
-        let mut candidates = ep.clone();
+        let mut candidates = BinaryHeap::from_iter(ep.iter().map(|x| Reverse(*x)));
         if extend_cands {
-            for idx in candidates.values().cloned().collect::<Vec<usize>>() {
-                for neighbor in layer.neighbors(idx)?.keys() {
-                    candidates.insert(point.dist2other(self.points.get_point(*neighbor).unwrap()), *neighbor);
+            for dist in candidates.iter().copied().collect::<Vec<Reverse<Dist>>>() {
+                for neighbor in layer.neighbors(dist.0.id)?.keys() {
+                    candidates.push(Reverse(point.dist2other(self.points.get_point(*neighbor).unwrap())));
                 }
             }
         }
         // let mut candidates = self.sort_by_distance(point, cands)?;
-        let mut visited = BTreeMap::new();
-        let mut selected = BTreeMap::new();
+        let mut visited = BinaryHeap::new();
+        let mut selected = BinaryHeap::new();
 
-        let (dist_e, e) = candidates.pop_first().unwrap();
-        selected.insert(dist_e, e);
+        let dist_e = candidates.pop().unwrap();
+        selected.push(dist_e.0);
         while (!candidates.is_empty()) & (selected.len() < m) {
-            let (dist_e, e) = candidates.pop_first().unwrap();
-            let e_point = &self.points.get_point(e).unwrap();
+            let dist_e = candidates.pop().unwrap();
+            let e_point = &self.points.get_point(dist_e.0.id).unwrap();
 
-            let dist_from_s = self.get_nearest(e_point, selected.values().cloned());
+            let dist_from_s = self.get_nearest(e_point, selected.iter().map(|x| x.id));
 
-            if dist_e < dist_from_s {
-                selected.insert(dist_e, e);
+            if dist_e.0 < dist_from_s {
+                selected.push(dist_e.0);
             } else {
-                visited.insert(dist_e, e);
+                visited.push(dist_e);
             }
 
             if keep_pruned {
                 while (!visited.is_empty()) & (selected.len() < m) {
-                    let (dist_e, e) = visited.pop_first().unwrap();
-                    selected.insert(dist_e, e);
+                    let dist_e = visited.pop().unwrap();
+                    selected.push(dist_e.0);
                 }
             }
         }
-        let result = IntMap::from_iter(selected.iter().take(m).map(|(dist, id)| (*id, *dist)));
+        let result = IntMap::from_iter(selected.iter().take(m).map(|dist| (dist.id, *dist)));
         // for val in selected.values().take(m) {
         //     result.insert(*val);
         // }
@@ -1115,7 +1114,7 @@ impl HNSW {
                             .step_1(point, max_layer_nb, level, Some(target_layer_nb))
                             .unwrap();
                         thread_results
-                            .entry(*ep.values().next().unwrap())
+                            .entry(read_ref.get_nearest(point, ep.iter().map(|x| x.id)).id)
                             .and_modify(|e: &mut IntSet<usize>| {
                                 e.insert(id);
                             })
@@ -1182,23 +1181,22 @@ impl HNSW {
         &self,
         layer: &Graph,
         point: &Point,
-        ep: &BTreeMap<Dist, usize>,
+        ep: &BinaryHeap<Dist>,
         ef: usize,
-    ) -> Result<BTreeMap<Dist, usize>, String> {
+    ) -> Result<BinaryHeap<Dist>, String> {
         // let s1 = Instant::now();
         // let mut candidates = self.sort_by_distance(point, ep)?;
         // let mut selected = candidates.clone();
-        let mut candidates = ep.clone();
         let mut selected = ep.clone();
-        let mut seen = IntSet::from_iter(ep.values().copied());
+        let mut candidates: BinaryHeap<Reverse<Dist>> = BinaryHeap::from_iter(ep.iter().map(|x| Reverse(*x)));
+        let mut seen = IntSet::from_iter(ep.iter().map(|dist| dist.id));
         // println!("s1 {}", s1.elapsed().as_nanos());
 
-        while !candidates.is_empty() {
+        while let Some(cand_dist) = candidates.pop() {
             // let s2 = Instant::now();
-            let (cand2q_dist, candidate) = candidates.pop_first().unwrap();
-            let furthest2q_dist = *selected.last_key_value().unwrap().0;
+            let furthest2q_dist = selected.peek().unwrap();
 
-            if cand2q_dist > furthest2q_dist {
+            if cand_dist.0 > *furthest2q_dist {
                 break;
             }
             // if ((cand2q_dist.dist * 10000.0) as usize) % 9 == 0 {
@@ -1208,8 +1206,8 @@ impl HNSW {
             // }           
             // println!("s2 {}", s2.elapsed().as_nanos());
             // let s3 = Instant::now();
-            for (n2q_dist, neighbor_point) in layer
-                .neighbors(candidate)?
+            for (n2q_dist, _) in layer
+                .neighbors(cand_dist.0.id)?
                 .iter()
                 .filter(|(idx, _)| seen.insert(**idx))
                 // .filter(|(_, cand2neigh_dist)| { 
@@ -1237,16 +1235,16 @@ impl HNSW {
             {
                 // println!("0");
                 // let s2 = Instant::now();
-                let (f2q_dist, _) = selected.last_key_value().unwrap();
+                let f2q_dist = selected.peek().unwrap();
                 // println!("s2 {}", s2.elapsed().as_nanos());
 
                 // let s3 = Instant::now();
-                if (&n2q_dist < f2q_dist) | (selected.len() < ef) {
-                    candidates.insert(n2q_dist, neighbor_point.id);
-                    selected.insert(n2q_dist, neighbor_point.id);
+                if (n2q_dist < *f2q_dist) | (selected.len() < ef) {
+                    selected.push(n2q_dist);
+                    candidates.push(Reverse(n2q_dist));
 
                     if selected.len() > ef {
-                        selected.pop_last();
+                        selected.pop();
                     }
                 }
                 // println!("s3 {}", s3.elapsed().as_nanos());
@@ -1384,7 +1382,7 @@ impl HNSW {
                         let id_dist = neighbor.as_array().unwrap(); 
                         let id = id_dist.first().unwrap().as_u64().unwrap() as usize; 
                         let dist = id_dist.get(1).unwrap().as_f64().unwrap() as f32;
-                        (id, Dist { dist })
+                        (id, Dist { dist, id })
                     }));
                 this_layer.insert(node_id.parse::<usize>().unwrap(), neighbors);
             }
@@ -1595,7 +1593,7 @@ fn _compute_stats(points: &PointsV2) -> (f32, f32) {
             }
             dists
                 .entry((id.min(idx), id.max(idx)))
-                .or_insert(point.dist2vec(&pointx.vector).dist);
+                .or_insert(point.dist2vec(&pointx.vector, idx).dist);
         }
     }
 

@@ -14,10 +14,10 @@ impl Params {
     pub fn from_m(m: usize, dim: usize) -> Params {
         Params {
             m,
-            mmax: m + m / 2,
+            mmax: m,
             mmax0: m * 2,
             ml: 1.0 / (m as f32).log(std::f32::consts::E),
-            ef_cons: m * 2,
+            ef_cons: m,
             dim,
         }
     }
@@ -25,9 +25,9 @@ impl Params {
     pub fn from_m_efcons(m: usize, ef_cons: usize, dim: usize) -> Params {
         Params {
             m,
-            mmax: m + m / 2,
+            mmax: m,
             mmax0: m * 2,
-            ml: 1.0 / (m as f32).log(std::f32::consts::E),
+            ml: 1.0 / (m as f32).ln(),
             ef_cons,
             dim,
         }
@@ -43,10 +43,10 @@ impl Params {
     ) -> Params {
         Params {
             m,
-            mmax: mmax.unwrap_or(m + m / 2),
+            mmax: mmax.unwrap_or(m),
             mmax0: mmax0.unwrap_or(m * 2),
-            ml: ml.unwrap_or(1.0 / (m as f32).log(std::f32::consts::E)),
-            ef_cons: ef_cons.unwrap_or(m * 2),
+            ml: ml.unwrap_or(1.0 / (m as f32).ln()),
+            ef_cons: ef_cons.unwrap_or(m),
             dim,
         }
     }
