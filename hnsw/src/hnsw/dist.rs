@@ -1,6 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct Dist {
     pub dist: f32,
 }
