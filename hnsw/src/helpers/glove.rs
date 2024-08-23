@@ -26,11 +26,11 @@ pub fn load_glove_array(
             )
             .unwrap(),
         );
-        bar.set_message(format!("Loading Embeddings"));
+        bar.set_message("Loading Embeddings".to_string());
         bar
     } else {
-        let bar = ProgressBar::hidden();
-        bar
+        
+        ProgressBar::hidden()
     };
 
     for (idx, line_result) in reader.lines().enumerate() {
@@ -86,8 +86,8 @@ pub fn brute_force_nns(
         bar.set_message("Finding NNs");
         bar
     } else {
-        let bar = ProgressBar::hidden();
-        bar
+        
+        ProgressBar::hidden()
     };
 
     let mut brute_force_results: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -104,7 +104,7 @@ pub fn brute_force_nns(
 
 fn get_nn_bf(point: &Point, others: &Arc<PointsV2>, nb_nns: usize) -> Vec<usize> {
     let sorted = sort_by_distance(point, others);
-    sorted.iter().map(|(_, idx)| *idx).take(nb_nns).collect()
+    sorted.values().copied().take(nb_nns).collect()
 }
 
 fn sort_by_distance(point: &Point, others: &Arc<PointsV2>) -> BTreeMap<Dist, usize> {

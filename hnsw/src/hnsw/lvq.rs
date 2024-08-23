@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use super::dist::Dist;
 use serde::{Deserialize, Serialize};
 
@@ -80,7 +78,7 @@ impl LVQVec {
 
     #[inline(always)]
     pub fn dist2other(&self, other: &Self) -> Dist {
-        println!("1");
+        // println!("1");
         // let s1 = Instant::now();
         let mut acc = [0.0f32; CHUNK_SIZE];
         let chunks_iter = self.quantized_vec.chunks_exact(CHUNK_SIZE);

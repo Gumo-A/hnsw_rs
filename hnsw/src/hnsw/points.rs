@@ -97,12 +97,12 @@ impl Point {
         let dist = match &self.vector {
             Vector::Compressed(compressed_self) => match other_vec {
                 Vector::Compressed(compressed_other) => {
-                    compressed_self.dist2other(&compressed_other)
+                    compressed_self.dist2other(compressed_other)
                 }
-                Vector::Full(full_other) => compressed_self.dist2vec(&full_other),
+                Vector::Full(full_other) => compressed_self.dist2vec(full_other),
             },
             Vector::Full(full_self) => match other_vec {
-                Vector::Compressed(compressed_other) => compressed_other.dist2vec(&full_self),
+                Vector::Compressed(compressed_other) => compressed_other.dist2vec(full_self),
                 Vector::Full(full_other) => Dist::new(
                     full_self
                         .iter()
@@ -188,7 +188,7 @@ impl Points {
         match self {
             Self::Empty => None,
             Self::Collection(points) => {
-                let key = points.keys().next().unwrap().clone();
+                let key = *points.keys().next().unwrap();
                 points.remove(&key)
             }
         }
@@ -209,8 +209,8 @@ impl Points {
                 let mut collection = HashMap::with_hasher(BuildNoHashHasher::default());
                 for key in ids {
                     let point = points
-                        .remove(&key)
-                        .expect(format!("Could not find {key} in collection.").as_str());
+                        .remove(key)
+                        .unwrap_or_else(|| panic!("Could not find {key} in collection."));
                     collection.insert(*key, point);
                 }
                 Some(Self::Collection(collection))
@@ -264,7 +264,7 @@ impl Points {
     /// or, in the case it is the Empty variant, fills it and changes the variant to Collection.
     pub fn extend_or_fill(&mut self, other: Points) {
         let points = match other {
-            Self::Empty => return (),
+            Self::Empty => return,
             Self::Collection(points_map) => points_map,
         };
 
@@ -280,7 +280,7 @@ impl Points {
                 if intersection_len > 0 {
                     println!("At least one id in the new points are present in the old ids.");
                     println!("Cannot insert the new points to the collection.");
-                    return ();
+                    return;
                 }
 
                 for (id, point) in points {
@@ -430,7 +430,7 @@ impl PointsV2 {
     pub fn dim(&self) -> usize {
         match self {
             Self::Empty => 0,
-            Self::Collection(points) => points.0.get(0).unwrap().vector.dim(),
+            Self::Collection(points) => points.0.first().unwrap().vector.dim(),
         }
     }
 
@@ -444,10 +444,7 @@ impl PointsV2 {
     pub fn contains(&self, index: &usize) -> bool {
         match self {
             Self::Empty => false,
-            Self::Collection(points) => match points.0.get(*index) {
-                Some(_) => true,
-                None => false,
-            },
+            Self::Collection(points) => points.0.get(*index).is_some(),
         }
     }
 
@@ -493,7 +490,7 @@ impl PointsV2 {
         self.assert_ids();
 
         let points = match other {
-            Self::Empty => return (),
+            Self::Empty => return,
             Self::Collection(points_other) => points_other,
         };
 
@@ -558,6 +555,6 @@ pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> usize {
             break;
         }
     }
-    let num = (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize;
-    num
+
+    (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize
 }

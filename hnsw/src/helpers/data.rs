@@ -114,7 +114,7 @@ pub fn load_bf_data(
         let file = File::open(file_name.path())?;
         let reader = BufReader::new(file);
         let name_string = file_name.file_name().into_string().unwrap();
-        if name_string == "bf_data.json".to_string() {
+        if name_string == *"bf_data.json" {
             bf_data = serde_json::from_reader(reader)?;
         } else if name_string == "test_ids.json" {
             test_ids = serde_json::from_reader(reader)?;

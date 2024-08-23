@@ -224,6 +224,7 @@ dependencies = [
  "nohash-hasher",
  "parking_lot",
  "rand",
+ "rayon",
  "regex",
  "serde",
  "serde_json",

@@ -10,6 +10,12 @@ pub struct Graph {
     pub nodes: IntMap<usize, IntMap<usize, Dist>>,
 }
 
+impl Default for Graph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Graph {
     pub fn new() -> Graph {
         Graph {
@@ -26,11 +32,11 @@ impl Graph {
     }
 
     pub fn add_node(&mut self, point_id: usize) {
-        if self.nodes.contains_key(&point_id) {
-            return ();
+        if let std::collections::hash_map::Entry::Vacant(e) = self.nodes.entry(point_id) {
+            e.insert(IntMap::default());
         } else {
-            self.nodes.insert(point_id, IntMap::default());
-        };
+            
+        }
     }
 
     pub fn add_edge(&mut self, node_a: usize, node_b: usize, dist: Dist) -> Result<(), String> {
@@ -108,7 +114,7 @@ impl Graph {
     }
 
     pub fn remove_edges_with_node(&mut self, node_id: usize) {
-        for (node, dist) in self
+        for (node, _dist) in self
             .remove_neighbors(node_id)
             .collect::<Vec<(usize, Dist)>>()
         {

@@ -11,11 +11,11 @@ use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::{IntMap, IntSet};
 
 use parking_lot::{RwLock, RwLockReadGuard};
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use rand::Rng;
 use rand::{rngs::ThreadRng, seq::SliceRandom};
-use rand::{seq::index, thread_rng};
+use rand::thread_rng;
 
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +72,7 @@ impl HNSW {
                     );
                 }
 
-                if (neighbors.len() == 0) & (layer.nb_nodes() > 1) {
+                if (neighbors.is_empty()) & (layer.nb_nodes() > 1) {
                     is_ok = false;
                     println!("In layer {layer_nb}, node {node} has degree 0",);
                 }
@@ -104,33 +104,34 @@ impl HNSW {
         n: usize,
         ef: usize,
     ) -> Result<Vec<usize>, String> {
-        let mut ep: IntSet<usize> = IntSet::default();
-        ep.insert(self.ep);
-        let nb_layer = self.layers.len();
 
         // let vector = self.center_vector(vector)?;
 
-        let point = Point::new_quantized(0, 0, &vector);
+        let point = Point::new_quantized(0, 0, vector);
+
+        let mut ep: BTreeMap<Dist, usize> = BTreeMap::new();
+        ep.insert(point.dist2other(self.points.get_point(self.ep).unwrap()), self.ep);
+        let nb_layer = self.layers.len();
 
         for layer_nb in (0..nb_layer).rev() {
-            ep = self.search_layer(&self.layers.get(&(layer_nb)).unwrap(), &point, &mut ep, 1)?;
+            ep = self.search_layer(self.layers.get(&(layer_nb)).unwrap(), &point, &mut ep, 1)?;
         }
 
         let layer_0 = &self.layers.get(&0).unwrap();
-        let neighbors = self.search_layer(layer_0, &point, &mut ep, ef)?;
+        let nearest_neighbors = self.search_layer(layer_0, &point, &mut ep, ef)?;
 
-        let nearest_neighbors: BTreeMap<Dist, usize> =
-            BTreeMap::from_iter(neighbors.iter().map(|x| {
-                let dist = self.points.get_point(*x).unwrap().dist2other(&point);
-                (dist, *x)
-            }));
+        // let nearest_neighbors: BTreeMap<Dist, usize> =
+        //     BTreeMap::from_iter(neighbors.iter().map(|x| {
+        //         let dist = self.points.get_point(*x).unwrap().dist2other(&point);
+        //         (dist, *x)
+        //     }));
 
         let anns: Vec<usize> = nearest_neighbors.values().take(n).cloned().collect();
         Ok(anns)
     }
 
     // TODO: multithreaded
-    pub fn anns_by_vectors(&self, vector: &Vec<Vec<f32>>, n: usize, ef: usize) -> () {
+    pub fn anns_by_vectors(&self, _vector: &Vec<Vec<f32>>, _n: usize, _ef: usize) {
         // Result<Vec<Vec<usize>>, String> {
         // todo!("multithreaded");
         // let mut ep: IntSet<usize, > =
@@ -168,9 +169,13 @@ impl HNSW {
         max_layer_nb: usize,
         level: usize,
         stop_at_layer: Option<usize>,
-    ) -> Result<IntSet<usize>, String> {
-        let mut ep = IntSet::default();
-        ep.insert(self.ep);
+    ) -> Result<BTreeMap<Dist, usize>, String> {
+        // let mut ep = IntSet::default();
+        // ep.insert(self.ep);
+
+        let mut ep: BTreeMap<Dist, usize> = BTreeMap::new();
+        ep.insert(point.dist2other(self.points.get_point(self.ep).unwrap()), self.ep);
+        let nb_layer = self.layers.len();
 
         ep = match stop_at_layer {
             None => {
@@ -219,7 +224,7 @@ impl HNSW {
     fn step_2(
         &self,
         point: &Point,
-        mut ep: IntSet<usize>,
+        mut ep: BTreeMap<Dist, usize>,
         current_layer_number: usize,
     ) -> Result<IntMap<usize, IntMap<usize, IntMap<usize, Dist>>>, String> {
         // let s1 = Instant::now();
@@ -279,7 +284,7 @@ impl HNSW {
         index: &RwLockReadGuard<'_, HNSW>,
         layer0: &mut Graph,
         point: &Point,
-        mut ep: IntSet<usize>,
+        mut ep: BTreeMap<Dist, usize>,
     ) -> Result<(), String> {
         ep = index.search_layer(layer0, point, &mut ep, index.params.ef_cons)?;
 
@@ -292,7 +297,7 @@ impl HNSW {
         let prune_results = index.prune_connexions(
             index.params.mmax0,
             layer0,
-            &neighbors_to_connect.iter().map(|(id, _)| *id).collect(),
+            &neighbors_to_connect.keys().copied().collect(),
         )?;
 
         for (node_id, neighbors) in prune_results {
@@ -314,10 +319,10 @@ impl HNSW {
             if layer.degree(*node)? > limit {
                 let point = &self.points.get_point(*node).unwrap();
                 let mut old_neighbors =
-                    IntSet::from_iter(layer.neighbors(*node)?.iter().map(|(id, _)| *id));
+                    BTreeMap::from_iter(layer.neighbors(*node)?.iter().map(|(id, dist)| (*dist, *id)));
                 // old_neighbors.extend(layer.neighbors(*node)?.iter().cloned());
                 let new_neighbors =
-                    self.select_heuristic(&layer, &point, &mut old_neighbors, limit, false, false)?;
+                    self.select_heuristic(layer, point, &mut old_neighbors, limit, false, false)?;
                 assert!(new_neighbors.len() <= limit);
                 prune_results.insert(*node, new_neighbors);
             }
@@ -329,29 +334,30 @@ impl HNSW {
         &self,
         layer: &Graph,
         point: &Point,
-        cands_idx: &mut IntSet<usize>,
+        ep: &mut BTreeMap<Dist, usize>,
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
     ) -> Result<IntMap<usize, Dist>, String> {
+        let mut candidates = ep.clone();
         if extend_cands {
-            for idx in cands_idx.clone().iter() {
-                for (neighbor, dist) in layer.neighbors(*idx)? {
-                    cands_idx.insert(*neighbor);
+            for idx in candidates.values().cloned().collect::<Vec<usize>>() {
+                for neighbor in layer.neighbors(idx)?.keys() {
+                    candidates.insert(point.dist2other(self.points.get_point(*neighbor).unwrap()), *neighbor);
                 }
             }
         }
-        let mut candidates = self.sort_by_distance(point, &cands_idx)?;
+        // let mut candidates = self.sort_by_distance(point, cands)?;
         let mut visited = BTreeMap::new();
         let mut selected = BTreeMap::new();
 
         let (dist_e, e) = candidates.pop_first().unwrap();
         selected.insert(dist_e, e);
-        while (candidates.len() > 0) & (selected.len() < m) {
+        while (!candidates.is_empty()) & (selected.len() < m) {
             let (dist_e, e) = candidates.pop_first().unwrap();
             let e_point = &self.points.get_point(e).unwrap();
 
-            let (dist_from_s, _) = self.get_nearest(&e_point, selected.values().cloned());
+            let dist_from_s = self.get_nearest(e_point, selected.values().cloned());
 
             if dist_e < dist_from_s {
                 selected.insert(dist_e, e);
@@ -360,7 +366,7 @@ impl HNSW {
             }
 
             if keep_pruned {
-                while (visited.len() > 0) & (selected.len() < m) {
+                while (!visited.is_empty()) & (selected.len() < m) {
                     let (dist_e, e) = visited.pop_first().unwrap();
                     selected.insert(dist_e, e);
                 }
@@ -428,7 +434,7 @@ impl HNSW {
             None => return Err(format!("{point_id} not in points given to the index.")),
         };
 
-        if self.layers.len() == 0 {
+        if self.layers.is_empty() {
             self.first_insert(point_id);
             return Ok(true);
         }
@@ -543,41 +549,41 @@ impl HNSW {
     //     Ok(true)
     // }
 
-    pub fn insert_with_ep(&mut self, point_id: usize, ep: IntSet<usize>) -> Result<bool, String> {
-        if !self.points.contains(&point_id) {
-            return Ok(false);
-        }
+    // pub fn insert_with_ep(&mut self, point_id: usize, ep: IntSet<usize>) -> Result<bool, String> {
+    //     if !self.points.contains(&point_id) {
+    //         return Ok(false);
+    //     }
 
-        if self.layers.len() == 0 {
-            self.first_insert(0);
-            return Ok(true);
-        }
+    //     if self.layers.is_empty() {
+    //         self.first_insert(0);
+    //         return Ok(true);
+    //     }
 
-        let point = match self.points.get_point(point_id) {
-            Some(p) => p,
-            None => {
-                println!("Tried to insert node wirh id {point_id}, but it wasn't found in the index storage.");
-                return Ok(false);
-            }
-        };
+    //     let point = match self.points.get_point(point_id) {
+    //         Some(p) => p,
+    //         None => {
+    //             println!("Tried to insert node wirh id {point_id}, but it wasn't found in the index storage.");
+    //             return Ok(false);
+    //         }
+    //     };
 
-        let insertion_results = self.step_2(point, ep, 0)?;
+    //     let insertion_results = self.step_2(point, ep, 0)?;
 
-        for (layer_nb, node_data) in insertion_results.iter() {
-            let layer = self.layers.get_mut(&layer_nb).unwrap();
-            for (node, neighbors) in node_data.iter() {
-                if *node == point.id {
-                    layer.add_node(point_id);
-                }
-                layer.remove_edges_with_node(*node);
-                for (neighbor, dist) in neighbors.iter() {
-                    layer.add_edge(*node, *neighbor, *dist)?;
-                }
-            }
-        }
+    //     for (layer_nb, node_data) in insertion_results.iter() {
+    //         let layer = self.layers.get_mut(layer_nb).unwrap();
+    //         for (node, neighbors) in node_data.iter() {
+    //             if *node == point.id {
+    //                 layer.add_node(point_id);
+    //             }
+    //             layer.remove_edges_with_node(*node);
+    //             for (neighbor, dist) in neighbors.iter() {
+    //                 layer.add_edge(*node, *neighbor, *dist)?;
+    //             }
+    //         }
+    //     }
 
-        Ok(true)
-    }
+    //     Ok(true)
+    // }
 
     pub fn insert_par(
         index: &Arc<RwLock<Self>>,
@@ -593,8 +599,8 @@ impl HNSW {
 
             let point = read_ref.points.get_point(*point_id).unwrap();
             let max_layer_nb = read_ref.layers.len() - 1;
-            let ep = read_ref.step_1(&point, max_layer_nb, *level, None)?;
-            let insertion_results = read_ref.step_2(&point, ep, *level)?;
+            let ep = read_ref.step_1(point, max_layer_nb, *level, None)?;
+            let insertion_results = read_ref.step_2(point, ep, *level)?;
 
             drop(read_ref);
 
@@ -648,8 +654,8 @@ impl HNSW {
             let point = read_ref.points.get_point(*point_id).unwrap();
             let level = point.level;
             let max_layer_nb = read_ref.layers.len() - 1;
-            let ep = read_ref.step_1(&point, max_layer_nb, level, None)?;
-            HNSW::step_2_layer0(&read_ref, &mut layer0, &point, ep)?;
+            let ep = read_ref.step_1(point, max_layer_nb, level, None)?;
+            HNSW::step_2_layer0(&read_ref, &mut layer0, point, ep)?;
             drop(read_ref);
 
             bar.inc(1);
@@ -675,11 +681,11 @@ impl HNSW {
             }
         }
         let prune_results = self
-            .prune_connexions(self.params.mmax0, &layer, &to_prune)
+            .prune_connexions(self.params.mmax0, layer, &to_prune)
             .unwrap();
         for (node, neighbors) in prune_results.iter() {
             layer.add_node(*node);
-            layer.replace_neighbors(*node, &neighbors).unwrap();
+            layer.replace_neighbors(*node, neighbors).unwrap();
             assert!(neighbors.len() <= self.params.mmax0);
         }
     }
@@ -693,8 +699,7 @@ impl HNSW {
             .collect::<IntSet<usize>>();
         let true_layer_nodes = true_layer0.nodes.keys().cloned().collect::<IntSet<usize>>();
         let new_nodes: Vec<usize> = true_layer_nodes
-            .difference(&layer0_nodes)
-            .map(|x| *x)
+            .difference(&layer0_nodes).copied()
             .collect();
         for node in new_nodes.iter() {
             let new_neighbors = true_layer0.neighbors(*node).unwrap();
@@ -716,8 +721,7 @@ impl HNSW {
             .collect::<IntSet<usize>>();
         let true_layer_nodes = true_layer0.nodes.keys().cloned().collect::<IntSet<usize>>();
         let new_nodes: Vec<usize> = layer0_nodes
-            .difference(&true_layer_nodes)
-            .map(|x| *x)
+            .difference(&true_layer_nodes).copied()
             .collect();
         for node in new_nodes.iter() {
             let new_neighbors = thread_layer.neighbors(*node).unwrap();
@@ -734,7 +738,7 @@ impl HNSW {
 
         let true_layer0 = self.layers.get(&0).unwrap();
         let prune_results = self
-            .prune_connexions(self.params.mmax0, true_layer0, &to_prune.into())
+            .prune_connexions(self.params.mmax0, true_layer0, &to_prune)
             .unwrap();
         let true_layer0 = self.layers.get_mut(&0).unwrap();
 
@@ -757,10 +761,10 @@ impl HNSW {
         for _ in 0..batch_len {
             let batch_data = batch.pop().unwrap();
             for (layer_nb, node_data) in batch_data.iter() {
-                let layer = self.layers.get_mut(&layer_nb).unwrap();
+                let layer = self.layers.get_mut(layer_nb).unwrap();
                 for (node, neighbors) in node_data.iter() {
                     layer.add_node(*node);
-                    for (old_neighbor, dist) in layer.neighbors(*node)?.clone() {
+                    for (old_neighbor, _dist) in layer.neighbors(*node)?.clone() {
                         layer.remove_edge(*node, old_neighbor)?;
                     }
                     for (neighbor, dist) in neighbors.iter() {
@@ -829,7 +833,7 @@ impl HNSW {
         for _ in 0..3 {
             for (_, layer) in self.layers.clone().iter() {
                 for (node, neighbors) in layer.nodes.iter() {
-                    if neighbors.len() == 0 {
+                    if neighbors.is_empty() {
                         self.insert(*node, true).unwrap();
                     }
                 }
@@ -854,7 +858,7 @@ impl HNSW {
 
         // let mut searcher = Searcher::new();
         let ids: Vec<usize> = index.points.ids().collect();
-        for (idx, id) in ids.iter().enumerate() {
+        for (_idx, id) in ids.iter().enumerate() {
             // index.insert_with_searcher(id, &mut searcher, false)?;
             index.insert(*id, false)?;
             bar.inc(1);
@@ -900,7 +904,7 @@ impl HNSW {
             }));
         }
         for handle in handlers {
-            let _ = handle.join().unwrap();
+            handle.join().unwrap();
         }
 
         // index_arc.read().assert_param_compliance();
@@ -948,7 +952,7 @@ impl HNSW {
             }));
         }
         for handle in handlers {
-            let _ = handle.join().unwrap();
+            handle.join().unwrap();
         }
         // TODO prune connexions of all nodes in all layers before ending
         // index_arc.read().assert_param_compliance();
@@ -986,7 +990,7 @@ impl HNSW {
                         .unwrap(),
                     Some(n_ep) => n_ep,
                 };
-                let ep_point = self.points.get_point(reference_ep).unwrap();
+                let _ep_point = self.points.get_point(reference_ep).unwrap();
 
                 let split_mut = splits.get_mut(split_nb).unwrap();
                 split_mut.extend(eps_ids_map.get(&reference_ep).unwrap().iter());
@@ -1063,7 +1067,7 @@ impl HNSW {
             }));
         }
         for handle in handlers {
-            let _ = handle.join().unwrap();
+            handle.join().unwrap();
         }
 
         index_arc.write().reinsert_with_degree_zero();
@@ -1111,7 +1115,7 @@ impl HNSW {
                             .step_1(point, max_layer_nb, level, Some(target_layer_nb))
                             .unwrap();
                         thread_results
-                            .entry(*ep.iter().next().unwrap())
+                            .entry(*ep.values().next().unwrap())
                             .and_modify(|e: &mut IntSet<usize>| {
                                 e.insert(id);
                             })
@@ -1147,19 +1151,23 @@ impl HNSW {
         others: &IntSet<usize>,
     ) -> Result<BTreeMap<Dist, usize>, String> {
         let result = others.iter().map(|idx| {
+            // println!("1");
             let dist = self.points.get_point(*idx).unwrap().dist2other(point);
             (dist, *idx)
         });
         Ok(BTreeMap::from_iter(result))
     }
 
-    fn get_nearest<I>(&self, point: &Point, others: I) -> (Dist, usize)
+    fn get_nearest<I>(&self, point: &Point, others: I) -> Dist
     where
         I: Iterator<Item = usize>,
     {
         others
-            .map(|idx| (self.points.get_point(idx).unwrap().dist2other(point), idx))
-            .min_by_key(|x| x.0)
+            .map(|idx| {
+                // println!("1");
+                self.points.get_point(idx).unwrap().dist2other(point)
+            })
+            .min()
             .unwrap()
     }
 
@@ -1174,12 +1182,15 @@ impl HNSW {
         &self,
         layer: &Graph,
         point: &Point,
-        ep: &mut IntSet<usize>,
+        ep: &BTreeMap<Dist, usize>,
         ef: usize,
-    ) -> Result<IntSet<usize>, String> {
+    ) -> Result<BTreeMap<Dist, usize>, String> {
         // let s1 = Instant::now();
-        let mut candidates = self.sort_by_distance(point, &ep)?;
-        let mut selected = candidates.clone();
+        // let mut candidates = self.sort_by_distance(point, ep)?;
+        // let mut selected = candidates.clone();
+        let mut candidates = ep.clone();
+        let mut selected = ep.clone();
+        let mut seen = IntSet::from_iter(ep.values().copied());
         // println!("s1 {}", s1.elapsed().as_nanos());
 
         while !candidates.is_empty() {
@@ -1190,24 +1201,29 @@ impl HNSW {
             if cand2q_dist > furthest2q_dist {
                 break;
             }
+            // if ((cand2q_dist.dist * 10000.0) as usize) % 9 == 0 {
+            //     println!("cand2q_dist {cand2q_dist}");
+            //     println!("{:#?}", layer.neighbors(candidate)?);
+            //     println!();
+            // }           
             // println!("s2 {}", s2.elapsed().as_nanos());
             // let s3 = Instant::now();
             for (n2q_dist, neighbor_point) in layer
                 .neighbors(candidate)?
                 .iter()
-                .filter(|(idx, _)| ep.insert(**idx))
-                // .filter(|(_, cand2neigh_dist)| ) // Triangle inequality filter
-                .filter(|(_, cand2neigh_dist)| {
-                    let skip = !(cand2neigh_dist.dist > (2.0 * cand2q_dist.dist)) | !((cand2neigh_dist.dist - cand2q_dist.dist).abs() > furthest2q_dist.dist);
-                    if skip {
-                        // println!("skipped!");
-                    } 
-                    skip
-                }) // Triangle inequality filter
+                .filter(|(idx, _)| seen.insert(**idx))
+                // .filter(|(_, cand2neigh_dist)| { 
+                //     let skip = !(cand2neigh_dist.dist > (2.0 * cand2q_dist.dist)) | !((cand2neigh_dist.dist - cand2q_dist.dist).abs() > furthest2q_dist.dist); 
+                //     if !skip {
+                //         println!("skipped thanks to filter");
+                //     }  
+                //     skip 
+                // }) // Triangle inequality filter
                 .map(|(idx, _)| {
                     // let s1 = Instant::now();
+                    // println!("1");
                     let (dist, point) = match self.points.get_point(*idx) {
-                        Some(p) => (p.dist2other(point), p),
+                        Some(p) => (point.dist2other(p), p),
                         None => {
                             println!(
                                 "Tried to get node with id {idx} from index, but it doesn't exist"
@@ -1238,10 +1254,11 @@ impl HNSW {
             // println!("s3 {}", s3.elapsed().as_nanos());
         }
         // let s4 = Instant::now();
-        let mut result = IntSet::default();
-        result.extend(selected.values());
+        // let mut result = IntSet::default();
+        // result.extend(selected.values());
         // println!("s4 {}", s4.elapsed().as_nanos());
-        Ok(result)
+        // Ok(result)
+        Ok(selected)
     }
 
     // pub fn search_layer_s(
@@ -1337,7 +1354,7 @@ impl HNSW {
             .get("params")
             .expect("Error: key 'params' is not in the index file.")
         {
-            serde_json::Value::Object(params_map) => extract_params(&params_map),
+            serde_json::Value::Object(params_map) => extract_params(params_map),
             err => {
                 println!("{err}");
                 panic!("Something went wrong reading parameters of the index file.");
@@ -1365,7 +1382,7 @@ impl HNSW {
                     .iter()
                     .map(|neighbor| {
                         let id_dist = neighbor.as_array().unwrap(); 
-                        let id = id_dist.get(0).unwrap().as_u64().unwrap() as usize; 
+                        let id = id_dist.first().unwrap().as_u64().unwrap() as usize; 
                         let dist = id_dist.get(1).unwrap().as_f64().unwrap() as f32;
                         (id, Dist { dist })
                     }));
@@ -1436,8 +1453,8 @@ pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> usize {
             break;
         }
     }
-    let num = (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize;
-    num
+    
+    (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize
 }
 
 fn extract_params(params: &serde_json::Map<String, serde_json::Value>) -> Params {
