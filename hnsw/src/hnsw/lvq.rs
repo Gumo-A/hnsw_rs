@@ -145,7 +145,7 @@ mod tests {
         let query = (0..dim).map(|_| rng.gen::<f32>()).collect();
 
         for comp in compressed {
-            let dist = comp.dist2vec(&query);
+            let dist = comp.dist2vec(&query, 0);
             println!("Compressed: {dist}");
         }
         for vector in vecs {
@@ -173,7 +173,7 @@ mod tests {
 
         let start = Instant::now();
         for comp in compressed.iter() {
-            let _dist = comp.dist2vec(&query);
+            let _dist = comp.dist2vec(&query, 0);
         }
         let end = Instant::now();
         println!("Time with compressed: {0}", (end - start).as_secs_f32());

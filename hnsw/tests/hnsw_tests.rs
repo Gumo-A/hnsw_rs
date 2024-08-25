@@ -1,6 +1,9 @@
 extern crate hnsw;
 
+use std::collections::BinaryHeap;
+
 use hnsw::helpers::glove::load_glove_array;
+use hnsw::hnsw::dist::Dist;
 use hnsw::hnsw::index::HNSW;
 use hnsw::hnsw::params::Params;
 use rand::Rng;
@@ -48,6 +51,20 @@ fn hnsw_serialize() {
 
     assert_eq!(N, loaded_index.points.len());
     std::fs::remove_file(index_path).unwrap();
+}
+
+#[test]
+fn dist_binaryheap() {
+    let dist1 = Dist::new(0.5, 0);
+    let dist2 = Dist::new(0.2, 1);
+    let dist3 = Dist::new(0.7, 2);
+    let dist4 = Dist::new(0.1, 3);
+    let mut bh = BinaryHeap::from([dist1, dist2, dist3, dist4]);
+
+    assert_eq!(bh.pop().unwrap().dist, 0.7);
+    assert_eq!(bh.pop().unwrap().dist, 0.5);
+    assert_eq!(bh.pop().unwrap().dist, 0.2);
+    assert_eq!(bh.pop().unwrap().dist, 0.1);
 }
 
 fn make_rand_vectors(n: usize) -> Vec<Vec<f32>> {

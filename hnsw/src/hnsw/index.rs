@@ -174,7 +174,6 @@ impl HNSW {
         // ep.insert(self.ep);
 
         let mut ep: BinaryHeap<Dist> = BinaryHeap::from([point.dist2other(self.points.get_point(self.ep).unwrap())]);
-        let nb_layer = self.layers.len();
 
         ep = match stop_at_layer {
             None => {
