@@ -35,7 +35,6 @@ impl Graph {
         if let std::collections::hash_map::Entry::Vacant(e) = self.nodes.entry(point_id) {
             e.insert(IntMap::default());
         } else {
-            
         }
     }
 
@@ -46,8 +45,11 @@ impl Graph {
             return Ok(());
         }
 
+        let dist_to_a = Dist::new(dist.dist, node_a);
+        let dist_to_b = Dist::new(dist.dist, node_b);
+
         match self.nodes.get_mut(&node_a) {
-            Some(a_n) => a_n.insert(node_b, dist),
+            Some(a_n) => a_n.insert(node_b, dist_to_b),
             None => {
                 let msg = format!("Error adding edge: {node_a} is not in the graph.");
                 return Err(msg);
@@ -55,7 +57,7 @@ impl Graph {
         };
 
         match self.nodes.get_mut(&node_b) {
-            Some(b_n) => b_n.insert(node_a, dist),
+            Some(b_n) => b_n.insert(node_a, dist_to_a),
             None => {
                 let msg = format!("Error adding edge: {node_b} is not in the graph.");
                 return Err(msg);

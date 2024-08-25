@@ -53,13 +53,14 @@ fn main() -> std::io::Result<()> {
     // }
 
     let start = Instant::now();
-    let index = HNSW::build_index(m, Some(100), embs, true).unwrap();
+    let index = HNSW::build_index(m, None, embs, false).unwrap();
     let end = Instant::now();
-    println!(
-        "Single-thread elapsed time: {}ms",
-        start.elapsed().as_millis() - end.elapsed().as_millis()
-    );
-    estimate_recall(&index, &test_set, &bf_data);
+    // index.print_index();
+    // println!(
+    //     "Single-thread elapsed time: {}ms",
+    //     start.elapsed().as_millis() - end.elapsed().as_millis()
+    // );
+    // estimate_recall(&index, &test_set, &bf_data);
 
     // let embs = train_set.clone();
     // let start = Instant::now();
@@ -91,13 +92,13 @@ fn main() -> std::io::Result<()> {
     //     }
     //     let point = test_set.get(*idx).unwrap();
     //     let anns = index.ann_by_vector(point, 10, 16).unwrap();
-    //     // println!("ANNs of {}", test_words[*idx]);
+    //     println!("ANNs of {}", test_words[*idx]);
     //     let anns_words: Vec<String> = anns
     //         .iter()
     //         .map(|x| train_words[*x as usize].clone())
     //         .collect();
-    //     // println!("{:?}", anns_words);
-    //     // println!("True NN of {}", test_words[*idx]);
+    //     println!("{:?}", anns_words);
+    //     println!("True NN of {}", test_words[*idx]);
     //     let true_nns: Vec<String> = bf_data
     //         .get(&idx)
     //         .unwrap()
@@ -105,7 +106,7 @@ fn main() -> std::io::Result<()> {
     //         .map(|x| train_words[*x].clone())
     //         .take(10)
     //         .collect();
-    //     // println!("{:?}", true_nns);
+    //     println!("{:?}", true_nns);
     // }
     Ok(())
 }

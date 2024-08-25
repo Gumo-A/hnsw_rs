@@ -4,6 +4,7 @@ use std::collections::BinaryHeap;
 
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::dist::Dist;
+use hnsw::hnsw::index::Searcher;
 use hnsw::hnsw::index::HNSW;
 use hnsw::hnsw::params::Params;
 use rand::Rng;
@@ -22,7 +23,8 @@ fn hnsw_init() {
 fn hnsw_build() {
     let vectors = make_rand_vectors(N);
     let mut index = HNSW::build_index(12, None, vectors, false).unwrap();
-    index.insert(0, false).unwrap();
+    let mut searcher = Searcher::new();
+    index.insert(0, &mut searcher, false).unwrap();
 
     assert_eq!(index.points.len(), N);
 }
