@@ -16,8 +16,8 @@ impl Params {
             m,
             mmax: m,
             mmax0: m * 2,
-            ml: 1.0 / (m as f32).log(std::f32::consts::E),
-            ef_cons: m,
+            ml: 1.0 / (m as f32).ln(),
+            ef_cons: m * 2,
             dim,
         }
     }
@@ -46,7 +46,7 @@ impl Params {
             mmax: mmax.unwrap_or(m),
             mmax0: mmax0.unwrap_or(m * 2),
             ml: ml.unwrap_or(1.0 / (m as f32).ln()),
-            ef_cons: ef_cons.unwrap_or(m),
+            ef_cons: ef_cons.unwrap_or(m * 2),
             dim,
         }
     }

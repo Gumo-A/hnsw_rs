@@ -69,6 +69,22 @@ fn dist_binaryheap() {
     assert_eq!(bh.pop().unwrap().dist, 0.1);
 }
 
+#[test]
+fn set_dist() {
+    let mut set = nohash_hasher::IntSet::default();
+    let dist1 = Dist::new(0.5, 0);
+    set.insert(dist1);
+    let dist2 = Dist::new(0.2, 1);
+    set.insert(dist2);
+    let dist3 = Dist::new(0.7, 2);
+    set.insert(dist3);
+    let dist4 = Dist::new(0.1, 3);
+    set.insert(dist4);
+
+    assert!(!set.insert(Dist::new(0.0, 0)));
+    assert!(set.remove(&Dist::new(0.0, 3)));
+}
+
 fn make_rand_vectors(n: usize) -> Vec<Vec<f32>> {
     let mut rng = rand::thread_rng();
     let mut vectors = Vec::new();

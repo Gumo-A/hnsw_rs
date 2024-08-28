@@ -1,13 +1,13 @@
 use core::panic;
-use nohash_hasher::IntMap;
+use nohash_hasher::{IntMap, IntSet};
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::Drain;
+use std::{collections::hash_set::Drain, time::Instant};
 
 use super::dist::Dist;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Graph {
-    pub nodes: IntMap<usize, IntMap<usize, Dist>>,
+    pub nodes: IntMap<usize, IntSet<Dist>>,
 }
 
 impl Default for Graph {
@@ -26,72 +26,63 @@ impl Graph {
     pub fn from_layer_data(data: IntMap<usize, IntMap<usize, Dist>>) -> Graph {
         let mut nodes = IntMap::default();
         for (node_id, neighbors) in data.iter() {
-            nodes.insert(*node_id, neighbors.clone());
+            nodes.insert(*node_id, IntSet::from_iter(neighbors.values().copied()));
         }
         Graph { nodes }
     }
 
     pub fn add_node(&mut self, point_id: usize) {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.nodes.entry(point_id) {
-            e.insert(IntMap::default());
-        } else {
-        }
+        self.nodes.entry(point_id).or_insert(IntSet::default());
     }
 
     pub fn add_edge(&mut self, node_a: usize, node_b: usize, dist: Dist) -> Result<(), String> {
-        if (node_a == node_b)
-            | (!self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b))
-        {
+        // This if statatements garantee the unwraps() below won't fail.
+        if node_a == node_b {
             return Ok(());
+        }
+
+        if !self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b) {
+            println!("node_a is in graph {}", self.nodes.contains_key(&node_a));
+            println!("node_b is in graph {}", self.nodes.contains_key(&node_b));
+            return Err(format!(
+                "Error adding edge, one of the nodes is not in the graph."
+            ));
         }
 
         let dist_to_a = Dist::new(dist.dist, node_a);
         let dist_to_b = Dist::new(dist.dist, node_b);
 
-        match self.nodes.get_mut(&node_a) {
-            Some(a_n) => a_n.insert(node_b, dist_to_b),
-            None => {
-                let msg = format!("Error adding edge: {node_a} is not in the graph.");
-                return Err(msg);
-            }
-        };
-
-        match self.nodes.get_mut(&node_b) {
-            Some(b_n) => b_n.insert(node_a, dist_to_a),
-            None => {
-                let msg = format!("Error adding edge: {node_b} is not in the graph.");
-                return Err(msg);
-            }
-        };
+        self.nodes.get_mut(&node_a).unwrap().insert(dist_to_b);
+        self.nodes.get_mut(&node_b).unwrap().insert(dist_to_a);
 
         Ok(())
     }
 
-    pub fn remove_edge(&mut self, node_a: usize, node_b: usize) -> Result<(), String> {
-        if (node_a == node_b)
-            | (!self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b))
-        {
-            return Ok(());
+    /// Removes an edge from the Graph.
+    /// Since the add_edge method won't allow for self-connecting nodes, we don't check that here.
+    /// Returns whether the edge was removed.
+    pub fn remove_edge(&mut self, node_a: usize, dist: Dist) -> Result<bool, String> {
+        if !self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&dist.id) {
+            return Err(format!(
+                "Error removing edge, one of the nodes don't exist in the graph."
+            ));
         }
 
-        match self.nodes.get_mut(&node_a) {
-            Some(a_n) => a_n.remove(&node_b),
-            None => {
-                return Err(format!("Error adding edge: {node_a} is not in the graph."));
-            }
-        };
+        if (self.degree(node_a)? == 1) | (self.degree(dist.id)? == 1) {
+            return Ok(false);
+        }
 
-        match self.nodes.get_mut(&node_b) {
-            Some(b_n) => b_n.remove(&node_a),
-            None => {
-                return Err(format!("Error adding edge: {node_b} is not in the graph."));
-            }
-        };
+        let a_rem = self.nodes.get_mut(&node_a).unwrap().remove(&dist);
+        let b_rem = self
+            .nodes
+            .get_mut(&dist.id)
+            .unwrap()
+            .remove(&Dist::new(dist.dist, node_a));
 
-        Ok(())
+        Ok(a_rem & b_rem)
     }
 
-    pub fn neighbors(&self, node_id: usize) -> Result<&IntMap<usize, Dist>, String> {
+    pub fn neighbors(&self, node_id: usize) -> Result<&IntSet<Dist>, String> {
         match self.nodes.get(&node_id) {
             Some(neighbors) => Ok(neighbors),
             None => Err(format!(
@@ -100,31 +91,47 @@ impl Graph {
         }
     }
 
-    pub fn replace_neighbors(
+    pub fn replace_or_add_neighbors<I>(
         &mut self,
         node_id: usize,
-        new_neighbors: &IntMap<usize, Dist>,
-    ) -> Result<(), String> {
-        let olds = self.nodes.get(&node_id).unwrap().clone();
-        for (old, _) in olds {
-            self.remove_edge(node_id, old)?;
+        new_neighbors: I,
+    ) -> Result<(), String>
+    where
+        I: Iterator<Item = Dist>,
+    {
+        if self.degree(node_id)? == 0 {
+            for dist in new_neighbors {
+                self.add_edge(node_id, dist.id, dist)?;
+            }
+            return Ok(());
         }
-        for (node, dist) in new_neighbors {
-            self.add_edge(node_id, *node, *dist)?;
+        let news = IntSet::from_iter(new_neighbors);
+        let olds = self.neighbors(node_id)?;
+
+        let to_remove: Vec<Dist> = olds.difference(&news).copied().collect();
+        let to_add: Vec<Dist> = news.difference(olds).copied().collect();
+
+        for dist in to_add {
+            self.add_edge(node_id, dist.id, dist)?;
         }
+
+        for dist in to_remove {
+            self.remove_edge(node_id, dist)?;
+        }
+
         Ok(())
     }
 
     pub fn remove_edges_with_node(&mut self, node_id: usize) {
-        for (node, _dist) in self
-            .remove_neighbors(node_id)
-            .collect::<Vec<(usize, Dist)>>()
-        {
-            self.nodes.get_mut(&node).unwrap().remove(&node_id);
+        for dist in self.remove_neighbors(node_id).collect::<Vec<Dist>>() {
+            self.nodes
+                .get_mut(&dist.id)
+                .unwrap()
+                .remove(&Dist::new(0.0, node_id));
         }
     }
 
-    fn remove_neighbors(&mut self, node_id: usize) -> Drain<'_, usize, Dist> {
+    fn remove_neighbors(&mut self, node_id: usize) -> Drain<'_, Dist> {
         match self.nodes.get_mut(&node_id) {
             Some(neighbors) => neighbors.drain(),
             None => {
@@ -137,7 +144,7 @@ impl Graph {
         match self.nodes.get(&node_id) {
             Some(neighbors) => Ok(neighbors.len()),
             None => Err(format!(
-                "Error getting neighbors of {node_id}, (function 'degree') it is not in the graph."
+                "Error getting degree of {node_id}, it is not in the graph."
             )),
         }
     }

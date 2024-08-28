@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
-use hnsw::helpers::glove::load_glove_array;
+use hnsw::helpers::glove::{load_glove_array, load_sift_array};
 use hnsw::hnsw::index::HNSW;
 
 use rand::Rng;
@@ -22,6 +22,7 @@ fn main() -> std::io::Result<()> {
     };
 
     let (words, embeddings) = load_glove_array(dim, lim, true, true).unwrap();
+    // let embeddings = load_sift_array(lim, true).unwrap();
 
     let (bf_data, train_ids, test_ids) = match load_bf_data(dim, lim) {
         Ok(data) => data,
@@ -52,9 +53,9 @@ fn main() -> std::io::Result<()> {
     //     embs.push(vector);
     // }
 
-    let start = Instant::now();
-    let index = HNSW::build_index(m, None, embs, false).unwrap();
-    let end = Instant::now();
+    // let start = Instant::now();
+    // let index = HNSW::build_index(m, None, embs, true).unwrap();
+    // let end = Instant::now();
     // index.print_index();
     // println!(
     //     "Single-thread elapsed time: {}ms",
@@ -64,14 +65,25 @@ fn main() -> std::io::Result<()> {
 
     // let embs = train_set.clone();
     // let start = Instant::now();
-    // let index = HNSW::build_index_par_v2(m, None, embs, true).unwrap();
+    // let index = HNSW::build_index_par(m, None, embs, true).unwrap();
     // let end = Instant::now();
     // index.print_index();
     // println!(
-    //     "Multi-thread (v2) elapsed time: {}ms",
+    //     "Multi-thread (v1) elapsed time: {}ms",
     //     start.elapsed().as_millis() - end.elapsed().as_millis()
     // );
     // estimate_recall(&index, &test_set, &bf_data);
+
+    let embs = train_set.clone();
+    let start = Instant::now();
+    let index = HNSW::build_index_par_v2(m, Some(700), embs, true).unwrap();
+    let end = Instant::now();
+    index.print_index();
+    println!(
+        "Multi-thread (v2) elapsed time: {}ms",
+        start.elapsed().as_millis() - end.elapsed().as_millis()
+    );
+    estimate_recall(&index, &test_set, &bf_data);
 
     // let train_words: Vec<String> = words
     //     .iter()
@@ -112,9 +124,14 @@ fn main() -> std::io::Result<()> {
 }
 
 fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
-    for ef in (12..100).step_by(12) {
+    for ef in (12..200).step_by(12) {
         println!("Finding ANNs ef={ef}");
         let bar = ProgressBar::new(test_set.len() as u64);
+        bar.set_style(
+            ProgressStyle::with_template("{msg} {bar:60} {per_sec}")
+                .unwrap()
+                .progress_chars(">>-"),
+        );
 
         let mut recall_10 = Vec::new();
         for (idx, query) in test_set.iter().enumerate() {
@@ -129,11 +146,12 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
             recall_10.push((hits as f32) / 10.0);
             bar.inc(1);
         }
+        let query_time = (1.0 / bar.per_sec()) * 1000.0;
         let mut avg_recall = 0.0;
         for recall in recall_10.iter() {
             avg_recall += recall;
         }
         avg_recall /= recall_10.len() as f32;
-        println!("Recall@10 {avg_recall}");
+        println!("Recall@10 {avg_recall}, Query Time: {query_time}");
     }
 }

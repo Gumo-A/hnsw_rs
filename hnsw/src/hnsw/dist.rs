@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct Dist {
@@ -12,6 +13,14 @@ impl Dist {
         Dist { dist, id }
     }
 }
+
+impl Hash for Dist {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl nohash_hasher::IsEnabled for Dist {}
 
 impl Ord for Dist {
     fn cmp(&self, other: &Dist) -> Ordering {

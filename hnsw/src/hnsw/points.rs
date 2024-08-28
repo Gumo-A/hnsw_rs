@@ -52,13 +52,6 @@ impl Vector {
             Self::Full(full) => full.len(),
         }
     }
-
-    pub fn get_vec(&self) -> Vec<f32> {
-        match self {
-            Self::Full(full) => full.clone(),
-            Self::Compressed(quant) => quant.reconstruct(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +107,19 @@ impl Point {
             },
         };
         dist
+    }
+
+    pub fn dist2others<'a, I>(&'a self, others: I) -> impl Iterator<Item = Dist> + 'a
+    where
+        I: Iterator<Item = &'a Point> + 'a,
+    {
+        match &self.vector {
+            Vector::Compressed(lvq) => lvq.dist2many(others.map(|p| match &p.vector {
+                Vector::Compressed(lvq_other) => (lvq_other, p.id),
+                _ => panic!("nope!"),
+            })),
+            _ => panic!("nope!"),
+        }
     }
 
     pub fn quantize(&mut self) {
@@ -335,7 +341,7 @@ pub enum PointsV2 {
 }
 
 impl PointsV2 {
-    pub fn from_vecs(vectors: Vec<Vec<f32>>, ml: f32) -> Self {
+    pub fn from_vecs(mut vectors: Vec<Vec<f32>>, ml: f32) -> Self {
         let mut rng = rand::thread_rng();
 
         let mut means = Vec::from_iter((0..vectors[0].len()).map(|_| 0.0));
@@ -348,11 +354,11 @@ impl PointsV2 {
             means[idx] /= vectors.len() as f32;
         }
 
-        // vectors.iter_mut().for_each(|v| {
-        //     v.iter_mut()
-        //         .enumerate()
-        //         .for_each(|(idx, x)| *x -= means[idx])
-        // });
+        vectors.iter_mut().for_each(|v| {
+            v.iter_mut()
+                .enumerate()
+                .for_each(|(idx, x)| *x -= means[idx])
+        });
 
         let collection = Vec::from_iter(
             vectors
@@ -383,7 +389,10 @@ impl PointsV2 {
         };
         let mut is_ok = true;
         for (idx, point) in points.0.iter().enumerate() {
-            is_ok = idx == point.id;
+            if !(idx == point.id) {
+                is_ok = false;
+                break;
+            }
         }
         if is_ok {
             false
@@ -451,11 +460,7 @@ impl PointsV2 {
 
     pub fn get_point(&self, index: usize) -> Option<&Point> {
         match self {
-            Self::Empty => {
-                panic!(
-                    "Tried to get point with index {index}, but there are no stored vectors in the index."
-                );
-            }
+            Self::Empty => None,
             Self::Collection(points) => points.0.get(index),
         }
     }

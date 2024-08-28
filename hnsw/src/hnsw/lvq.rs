@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use super::dist::Dist;
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +112,37 @@ impl LVQVec {
         let dist = acc.iter().sum::<f32>().sqrt();
         // println!("s4 {}", s4.elapsed().as_nanos());
         Dist::new(dist, id)
+    }
+
+    #[inline(always)]
+    pub fn dist2many<'a, I>(&'a self, others: I) -> impl Iterator<Item = Dist> + 'a
+    where
+        I: Iterator<Item = (&'a Self, usize)> + 'a,
+    {
+        let self_full = self.reconstruct();
+        others.map(move |(other, id)| {
+            let mut acc = [0.0f32; CHUNK_SIZE];
+            let chunks_iter = self_full.chunks_exact(CHUNK_SIZE);
+            let vector_chunks = other.quantized_vec.chunks_exact(CHUNK_SIZE);
+            let self_rem = chunks_iter.remainder();
+            let other_rem = vector_chunks.remainder();
+
+            for (chunkx, chunky) in chunks_iter.zip(vector_chunks) {
+                let acc_iter = chunkx.iter().zip(chunky);
+                for (idx, (x, y)) in acc_iter.enumerate() {
+                    let y_f32 = ((*y as f32) * other.delta) + other.lower;
+                    acc[idx] += (x - y_f32).powi(2);
+                }
+            }
+
+            for (x, y) in self_rem.iter().zip(other_rem) {
+                let y_f32 = (*y as f32) * other.delta + other.lower;
+                acc[0] += (x - y_f32).powi(2);
+            }
+
+            let dist = acc.iter().sum::<f32>().sqrt();
+            Dist::new(dist, id)
+        })
     }
 
     pub fn dim(&self) -> usize {

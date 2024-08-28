@@ -29,7 +29,6 @@ pub fn load_glove_array(
         bar.set_message("Loading Embeddings".to_string());
         bar
     } else {
-        
         ProgressBar::hidden()
     };
 
@@ -68,6 +67,50 @@ pub fn load_glove_array(
     Ok((words, embeddings))
 }
 
+pub fn load_sift_array(lim: usize, verbose: bool) -> Result<Vec<Vec<f32>>> {
+    let file = File::open(format!("/home/gamal/sift/SIFT10M/sift10m.txt"))?;
+    let reader = BufReader::new(file);
+    let limit = if lim == 0 {
+        reader.lines().count()
+    } else {
+        lim
+    };
+    let file = File::open(format!("/home/gamal/sift/SIFT10M/sift10m.txt"))?;
+    let reader = BufReader::new(file);
+
+    let mut embeddings: Vec<Vec<f32>> = Vec::new();
+
+    let bar = if verbose {
+        let bar = ProgressBar::new(limit as u64);
+        bar.set_style(
+            ProgressStyle::with_template(
+                "{msg} {wide_bar} {human_pos}/{human_len} {percent}% [ ETA: {eta} : Elapsed: {elapsed} ] {per_sec}",
+            )
+            .unwrap(),
+        );
+        bar.set_message("Loading SIFT features".to_string());
+        bar
+    } else {
+        ProgressBar::hidden()
+    };
+
+    for (idx, line_result) in reader.lines().enumerate() {
+        if (lim > 0) & (idx >= limit) {
+            break;
+        }
+        let line = line_result?;
+        let parts = line.split_whitespace();
+
+        let values: Vec<f32> = parts
+            .map(|s| s.parse::<f32>().expect("Could not parse float"))
+            .collect();
+        embeddings.push(values);
+
+        bar.inc(1);
+    }
+    Ok(embeddings)
+}
+
 pub fn brute_force_nns(
     nb_nns: usize,
     train_set: Arc<PointsV2>,
@@ -86,7 +129,6 @@ pub fn brute_force_nns(
         bar.set_message("Finding NNs");
         bar
     } else {
-        
         ProgressBar::hidden()
     };
 
