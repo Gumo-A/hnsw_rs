@@ -122,6 +122,15 @@ impl Graph {
         Ok(())
     }
 
+    pub fn remove_node(&mut self, node_id: usize) -> Result<(), String> {
+        let neighbors = self.neighbors(node_id)?.clone();
+        for neigh in neighbors {
+            self.remove_edge(node_id, neigh)?;
+        }
+        self.nodes.remove(&node_id);
+        Ok(())
+    }
+
     pub fn remove_edges_with_node(&mut self, node_id: usize) {
         for dist in self.remove_neighbors(node_id).collect::<Vec<Dist>>() {
             self.nodes

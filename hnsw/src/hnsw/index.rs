@@ -11,7 +11,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::{IntMap, IntSet};
 
 use parking_lot::{RwLock, RwLockReadGuard};
-use std::{sync::Arc, cmp::Reverse, time::Instant};
+use std::{sync::Arc, cmp::Reverse, time::Instant, collections::BTreeSet};
 
 use rand::Rng;
 use rand::{rngs::ThreadRng, seq::SliceRandom};
@@ -231,77 +231,33 @@ impl HNSW {
         point: &Point,
         level: usize,
     ) -> Result<(), String> {
-        // let s1 = Instant::now();
         let bound = (level + 1).min(self.layers.len());
-        // println!("s1 {}", s1.elapsed().as_nanos());
 
         for layer_nb in (0..bound).rev() {
-            // let mmax = if layer_nb == 0 {
-            //     self.params.mmax0
-            // } else {
-            //     self.params.mmax
-            // };
-        //     let s2 = Instant::now();
             let layer = self.layers.get(&layer_nb).unwrap();
-        //     println!("s2 {}", s2.elapsed().as_nanos());
 
-        //     let s3 = Instant::now();
             self.search_layer(searcher, layer, point, self.params.ef_cons)?;
-        //     println!("s3 {}", s3.elapsed().as_nanos());
 
-
-        //     let s4 = Instant::now();
             self.select_heuristic(searcher, layer, point, self.params.m, false, true)?;
-        //     println!("s4 {}", s4.elapsed().as_nanos());
 
-        //     let s5 = Instant::now();
             let layer_result = searcher.insertion_results.entry(layer_nb).or_insert(IntMap::default());
-        //     println!("s5 {}", s5.elapsed().as_nanos());
-
-            // Pruning
-        //     let s6 = Instant::now();
             let point_neighbors = searcher.selected.clone();
-            // let exceeding_neighbors: Vec<Dist> = searcher.selected.iter().filter(|x| layer.degree(x.id).unwrap() >= mmax).copied().collect();
-            // for exc_neigh in exceeding_neighbors {
-            //     let worst_neighbor = layer.neighbors(exc_neigh.id)?.iter().max().unwrap();
-            //     if *worst_neighbor >= exc_neigh {
-            //         // remove worst neighbor from that node
-            //         layer_result.insert(exc_neigh.id, BinaryHeap::from_iter(layer.neighbors(exc_neigh.id)?.iter().filter(|dist| dist.id != worst_neighbor.id).copied()));
-            //     } else {
-            //         // dont connect point.id with that node
-            //         point_neighbors = BinaryHeap::from_iter(searcher.selected.iter().filter(|x| x.id != exc_neigh.id).map(|x| *x));
-            //     }
-            // }
-        //     println!("s6 {}", s6.elapsed().as_nanos());
-
-        //     let s7 = Instant::now();
             layer_result.insert(point.id, point_neighbors);
-        //     println!("s7 {}", s7.elapsed().as_nanos());
         }
         Ok(())
     }
 
     fn step_2_layer0(
-        index: &RwLockReadGuard<'_, HNSW>,
+        index: &Arc<Self>,
         searcher: &mut Searcher,
         layer0: &mut Graph,
         point: &Point,
     ) -> Result<(), String> {
-        index.search_layer(searcher, layer0, point, index.params.ef_cons)?;
 
+        index.search_layer(searcher, layer0, point, index.params.ef_cons)?;
         index.select_heuristic(searcher, layer0, point, index.params.m, false, true)?;
         let layer_result = searcher.insertion_results.entry(0).or_insert(IntMap::default());
-        let point_neighbors = searcher.selected.clone();
-        layer_result.insert(point.id, point_neighbors);
-
-        // index.write_results(searcher, point.id, 0, 0);
-
-        // layer0.add_node(point.id);
-        // layer0.replace_neighbors(point.id, searcher.selected.iter().copied())?;
-
-        // index.prune_connexions(searcher)?;
-
-        // index.write_results_prune(searcher);
+        layer_result.insert(point.id, searcher.selected.clone());
 
         Ok(())
     }
@@ -329,10 +285,10 @@ impl HNSW {
                         .map(|x| *x);
 
                 for dist in to_prune {
-                    searcher.clear_searchers();
-                    HNSW::select_simple(searcher, layer.neighbors(dist.id)?.iter().copied(), limit)?;
+                    // searcher.clear_searchers();
+                    let nearest = HNSW::select_simple(layer.neighbors(dist.id)?.iter().copied(), limit)?;
                     let entry = searcher.prune_results.entry(*layer_nb).or_insert(IntMap::default());
-                    entry.insert(dist.id, searcher.selected.clone());
+                    entry.insert(dist.id, nearest);
                 }
             }
 
@@ -347,22 +303,20 @@ impl HNSW {
     ) -> Result<(), String>  {
         searcher.prune_results.clear();
 
-        for (layer_nb, node_neighbors) in searcher.insertion_results.clone().iter() {
-            for (_, neighbors) in node_neighbors.iter() {
-
+        for (layer_nb, mut node_neighbors) in searcher.insertion_results.drain() {
+            for (_, neighbors) in node_neighbors.drain() {
                 let to_prune = neighbors
                         .iter()
                         .filter(|x| layer.degree(x.id).unwrap() > mmax)
                         .map(|x| *x);
 
                 for dist in to_prune {
-                    searcher.clear_searchers();
-                    HNSW::select_simple(searcher, layer.neighbors(dist.id)?.iter().copied(), mmax)?;
-                    let entry = searcher.prune_results.entry(*layer_nb).or_insert(IntMap::default());
-                    entry.insert(dist.id, searcher.selected.clone());
+                    // searcher.clear_searchers();
+                    let nearest = HNSW::select_simple(layer.neighbors(dist.id)?.iter().copied(), mmax)?;
+                    let entry = searcher.prune_results.entry(layer_nb).or_insert(IntMap::default());
+                    entry.insert(dist.id, nearest);
                 }
             }
-
         }
         Ok(())
     }
@@ -431,20 +385,21 @@ impl HNSW {
     }
     
     fn select_simple<I>(
-        searcher: &mut Searcher,
+        // searcher: &mut Searcher,
         candidate_dists: I,
         m: usize,
-    ) -> Result<(), String> where I: Iterator<Item = Dist>{
+    ) -> Result<BinaryHeap<Dist>, String> where I: Iterator<Item = Dist>{
 
-        searcher.candidates.clear();
-        searcher.selected.clear();
-        searcher.candidates.extend(candidate_dists.map(|dist| Reverse(dist)));
+        // searcher.candidates.clear();
+        // searcher.selected.clear();
+        // searcher.candidates.extend(candidate_dists.map(|dist| Reverse(dist)));
 
-        while (!searcher.candidates.is_empty()) & (searcher.selected.len() < m) {
-            let dist_e = searcher.candidates.pop().unwrap();
-            searcher.selected.push(dist_e.0);
-        }
-        Ok(())
+        // while (!searcher.candidates.is_empty()) & (searcher.selected.len() < m) {
+        //     let dist_e = searcher.candidates.pop().unwrap();
+        //     searcher.selected.push(dist_e.0);
+        // }
+        let cands = BTreeSet::from_iter(candidate_dists);
+        Ok(BinaryHeap::from_iter(cands.iter().copied().take(m)))
     }
        
     pub fn insert(&mut self, point_id: usize, searcher: &mut Searcher, reinsert: bool) -> Result<bool, String> {
@@ -592,68 +547,52 @@ impl HNSW {
     }
 
     pub fn insert_par_v2(
-        index: &Arc<RwLock<Self>>,
+        index: &Arc<Self>,
         ids: Vec<usize>,
+        other_threads_eps: Vec<usize>,
         bar: ProgressBar,
-    ) -> Result<(), String> {
-        let points_len = ids.len();
-
-        let mut thread_layer0 = index.read().layers.get(&0).unwrap().clone();
+    ) -> Result<Graph, String> {
+        let mut thread_layer0 = index.layers.get(&0).unwrap().clone();
+        for other_threads_ep in other_threads_eps {
+            thread_layer0.remove_node(other_threads_ep);
+        }
         let mut searcher = Searcher::new();
 
-        for (idx, point_id) in ids.iter().enumerate() {
+        for point_id in ids.iter() {
            
-            // let s0 = Instant::now();
-            let read_ref = if index.is_locked_exclusive() {
-                let reference = index.read();
-                reference.update_thread_layer(&mut thread_layer0)?;
-                reference
-            } else {
-                index.read()
-            };
-            // println!("s0 {}", s0.elapsed().as_nanos());
-
             // let s1 = Instant::now();
             searcher.clear_all();
-            let point = read_ref.points.get_point(*point_id).unwrap();
-            searcher.selected.push(point.dist2other(read_ref.points.get_point(read_ref.ep).unwrap()));
+            let point = index.points.get_point(*point_id).unwrap();
+            searcher.selected.push(point.dist2other(index.points.get_point(index.ep).unwrap()));
             let level = point.level;
-            let max_layer_nb = read_ref.layers.len() - 1;
+            let max_layer_nb = index.layers.len() - 1;
             // println!("s1 {}", s1.elapsed().as_nanos());
 
             // let s2 = Instant::now();
-            read_ref.step_1(&mut searcher, point, max_layer_nb, level, None)?;
+            index.step_1(&mut searcher, point, max_layer_nb, level, None)?;
             // println!("s2 {}", s2.elapsed().as_nanos());
 
             // let s3 = Instant::now();
-            HNSW::step_2_layer0(&read_ref, &mut searcher, &mut thread_layer0, point)?;
+            HNSW::step_2_layer0(&index, &mut searcher, &mut thread_layer0, point)?;
             // println!("s3 {}", s3.elapsed().as_nanos());
 
             // let s4 = Instant::now();
             HNSW::write_results_layer(&searcher, &mut thread_layer0)?;
             // println!("s4 {}", s4.elapsed().as_nanos());
 
-            HNSW::prune_connexions_layer(&mut searcher, &thread_layer0, read_ref.params.mmax0)?;
+            // let s5 = Instant::now();
+            HNSW::prune_connexions_layer(&mut searcher, &thread_layer0, index.params.mmax0)?;
+            // println!("s5 {}", s5.elapsed().as_nanos());
 
-            HNSW::write_prune_layer(&searcher, &mut thread_layer0)?;
+            // let s6 = Instant::now();
+            HNSW::write_prune_layer(&mut searcher, &mut thread_layer0)?;
+            // println!("s6 {}", s6.elapsed().as_nanos());
 
             if !bar.is_hidden() {
                 bar.inc(1);
             }
-            drop(read_ref);
-
-            // add other conditions if you wish to sync more frequently
-            let last_idx = idx == (points_len - 1);
-
-            // let s5 = Instant::now();
-            if last_idx {
-                index.write().update_layer0(&thread_layer0)?;
-            } else {
-                continue;
-            };
-            // println!("s5 {}", s5.elapsed().as_nanos());
         }
-        Ok(())
+        Ok(thread_layer0)
     }
 
     // fn prune_layer(&self, layer: &mut Graph) {
@@ -841,16 +780,15 @@ impl HNSW {
     }
     
     fn write_prune_layer(
-        searcher: &Searcher,
+        searcher: &mut Searcher,
         layer: &mut Graph
     ) -> Result<(), String> {
-        for (_, node_data) in searcher.prune_results.iter() {
-            for (node, neighbors) in node_data.iter() {
-                layer.add_node(*node);
-                layer.replace_or_add_neighbors(*node, neighbors.iter().copied())?;
+        for (_, mut node_data) in searcher.prune_results.drain() {
+            for (node, mut neighbors) in node_data.drain() {
+                layer.add_node(node);
+                layer.replace_or_add_neighbors(node, neighbors.drain())?;
             }
         }
-
         Ok(())
     }
 
@@ -972,7 +910,7 @@ impl HNSW {
         verbose: bool,
     ) -> Result<Self, String> {
         let nb_threads = std::thread::available_parallelism().unwrap().get();
-        // let nb_threads = 1;
+        // let nb_threads = 3;
         let dim = match vectors.first() {
             Some(vector) => vector.len(),
             None => return Err("Could not read vector dimension.".to_string()),
@@ -983,34 +921,107 @@ impl HNSW {
         index = HNSW::insert_non_zero(index, verbose)?;
 
         let (index, eps_ids_map) = HNSW::find_layer_eps(index, 1, verbose)?;
+        let ids_eps_map = IntMap::from_iter(eps_ids_map.iter().map(|(ep, ids)| ids.iter().map(|id| (*id, *ep))).flatten());
 
-        let mut points_split = index.partition_points(eps_ids_map, nb_threads, 1);
+        let (mut points_split, split_eps) = index.partition_points(eps_ids_map, nb_threads, 1);
 
-        let index_arc = Arc::new(RwLock::new(index));
+        let index_arc = Arc::new(index);
         let multibar = Arc::new(indicatif::MultiProgress::new());
 
         let mut handlers = Vec::new();
         for thread_idx in 0..nb_threads {
-            let index_copy = index_arc.clone();
-            let ids: Vec<usize> = points_split.pop().unwrap().iter().cloned().collect();
+            let other_threads_eps = split_eps.iter().filter(|(idx, _)| **idx != thread_idx).map(|(_, eps)| eps.iter()).flatten().copied().collect();
+            let index_clone = index_arc.clone();
+            let ids: Vec<usize> = points_split.remove(&thread_idx).unwrap().iter().copied().collect();
             let bar = multibar.insert(
                 thread_idx,
                 get_progress_bar(format!("Thread {}:", thread_idx), ids.len(), verbose),
             );
-            handlers.push(std::thread::spawn(move || -> Result<(), String> {
-                Self::insert_par_v2(&index_copy, ids, bar)?;
-                Ok(())
+            handlers.push(std::thread::spawn(move || -> (usize, Result<Graph, String>) {
+                (thread_idx, Self::insert_par_v2(&index_clone, ids, other_threads_eps, bar))
             }));
         }
+        let mut thread_results = IntMap::default();
         for handle in handlers {
-            handle.join().unwrap()?;
+            let (thread_idx, result) = handle.join().unwrap();
+            thread_results.insert(thread_idx, result?);
         }
-        // TODO prune connexions of all nodes in layer 0 before ending
-        index_arc.read().assert_param_compliance();
+        let mut index = Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
 
-        Ok(Arc::into_inner(index_arc)
-            .expect("Could not get index out of Arc reference")
-            .into_inner())
+        let mut merged = IntSet::default();
+        for (idx, (thread_idx, layer0)) in thread_results.iter_mut().enumerate() {
+            if idx == 0 {
+                *index.layers.get_mut(&0).unwrap() = layer0.clone();
+                merged.insert(*thread_idx);
+                continue;
+            }
+            index.join_thread_result(layer0, *thread_idx, &split_eps, &merged, &ids_eps_map, verbose)?;
+            merged.insert(*thread_idx);
+        }
+
+        Ok(index)
+    }
+
+    fn join_thread_result(
+        &mut self, 
+        other_layer: &mut Graph, 
+        thread_idx: usize, 
+        split_eps: &IntMap<usize, IntSet<usize>>, 
+        merged: &IntSet<usize>, 
+        ids_eps_map: &IntMap<usize, usize>,
+        verbose: bool
+    ) -> Result<(), String> {
+
+        let merged_layer = self.layers.get_mut(&0).unwrap();
+        // let merged_eps = IntSet::from_iter(split_eps.iter().filter(|(thrd_idx, _)| merged.contains(*thrd_idx)).map(|(_, eps)| eps.iter().copied()).flatten());
+        // let mut other_frontier_points = IntSet::default();
+        // for merged_ep in merged_eps.iter() {
+        //     let ep_neighbors = IntSet::from_iter(other_layer.neighbors(*merged_ep)?.clone());
+        //     other_frontier_points.extend(ep_neighbors.iter().map(|dist| dist.id));
+        //     for frontier_point in ep_neighbors.iter() {
+        //         other_layer.remove_edge(*merged_ep, *frontier_point)?;
+        //     }
+        // }
+
+        // let other_eps = split_eps.get(&thread_idx).unwrap().iter();
+        // // This variable maps the other's eps and their connexions in merged
+        // let mut merged_frontier_points: IntMap<usize, IntSet<usize>> = IntMap::default();
+        // for other_ep in other_eps {
+        //     let ep_neighbors = merged_layer.neighbors(*other_ep)?.clone();
+        //     merged_frontier_points
+        //         .entry(*other_ep)
+        //         .and_modify(|front_points| 
+        //             front_points
+        //                 .extend(ep_neighbors.iter().map(|dist| dist.id))
+        //         )
+        //         .or_insert(IntSet::from_iter(ep_neighbors.iter().map(|dist| dist.id)));
+        //     for frontier_point in ep_neighbors.iter() {
+        //         merged_layer.remove_edge(*other_ep, *frontier_point)?;
+        //     }
+        // }
+
+        for node in other_layer.nodes.keys() {
+            merged_layer.add_node(*node);
+        }
+
+        let bar = get_progress_bar(format!("Merging thread {thread_idx}"), other_layer.nb_nodes(), verbose);
+
+        // let other_eps = split_eps.get(&thread_idx).unwrap().iter();
+        // let other_eps = IntSet::from_iter(other_eps.copied());
+        // println!("1 {} {}", merged_frontier_points.len(), other_frontier_points.len());
+        for (node, neighbors) in other_layer.nodes.iter() {
+            bar.inc(1);
+            // if merged_eps.contains(node) {
+            //     continue;
+            // }
+            // if other_frontier_points.contains(node) {
+            merged_layer.replace_or_add_neighbors(*node, neighbors.iter().copied())?;
+                // continue;
+            // }
+            // merged_layer.replace_or_add_neighbors(*node, neighbors.iter().copied())?;
+        }
+        
+        Ok(())
     }
 
     // TODO: this was quickly done and without much thought, try to find a smarter way
@@ -1019,11 +1030,12 @@ impl HNSW {
         mut eps_ids_map: IntMap<usize, IntSet<usize>>,
         nb_splits: usize,
         layer_nb: usize,
-    ) -> Vec<IntSet<usize>> {
+    ) -> (IntMap<usize, IntSet<usize>>, IntMap<usize, IntSet<usize>>) {
         let nb_eps = eps_ids_map.keys().count();
         let eps_per_split = nb_eps / nb_splits;
-        let mut splits: Vec<IntSet<usize>> =
-            Vec::from_iter((0..nb_splits).map(|_| IntSet::default()));
+        let mut splits: IntMap<usize, IntSet<usize>> =
+            IntMap::from_iter((0..nb_splits).map(|thread_idx| (thread_idx, IntSet::default())));
+        let mut thread_ep_map = IntMap::from_iter((0..nb_splits).map(|thread_idx| (thread_idx, IntSet::default())));
         let mut inserted = IntSet::default();
         let mut next_ep = None;
 
@@ -1041,11 +1053,11 @@ impl HNSW {
                         .unwrap(),
                     Some(n_ep) => n_ep,
                 };
-                let _ep_point = self.points.get_point(reference_ep).unwrap();
 
-                let split_mut = splits.get_mut(split_nb).unwrap();
+                let split_mut = splits.get_mut(&split_nb).unwrap();
                 split_mut.extend(eps_ids_map.get(&reference_ep).unwrap().iter());
                 inserted.insert(reference_ep);
+                thread_ep_map.get_mut(&split_nb).unwrap().insert(reference_ep);
                 eps_ids_map.remove(&reference_ep);
                 let mut inserted_eps = 1;
 
@@ -1056,7 +1068,6 @@ impl HNSW {
                     .neighbors(reference_ep)
                     .unwrap();
 
-                // let mut sorted_neighbors = self.sort_by_distance(ep_point, ep_neighbors).unwrap();
                 let mut sorted_neighbors =
                     BTreeMap::from_iter(ep_neighbors.iter().map(|dist| (*dist, dist.id)));
                 while inserted_eps < eps_per_split {
@@ -1073,6 +1084,7 @@ impl HNSW {
                     };
                     split_mut.extend(point_ids_to_insert.iter());
                     inserted.insert(nearest_neighbor);
+                    thread_ep_map.get_mut(&split_nb).unwrap().insert(nearest_neighbor);
                     eps_ids_map.remove(&nearest_neighbor);
                     inserted_eps += 1;
                     if inserted.len() == nb_eps {
@@ -1093,6 +1105,82 @@ impl HNSW {
             }
             next_ep = None;
         }
+        (splits, thread_ep_map)
+    }
+    
+    fn partition_points_v2(
+        &self,
+        eps_ids_map: &IntMap<usize, IntSet<usize>>,
+        nb_splits: usize,
+        layer_nb: usize,
+        points_per_thread: usize
+    ) -> Vec<IntSet<usize>> {
+        // let eps_to_thread_nb = IntMap::default();
+
+        let mut splits: Vec<IntSet<usize>> =
+            Vec::from_iter((0..nb_splits).map(|_| IntSet::default()));
+
+        let mut inserted = IntSet::default();
+
+        for split_nb in 0..nb_splits {
+
+            let split_mut = splits.get_mut(split_nb).unwrap();
+
+            let reference_ep = None;
+            let mut been_ref = IntSet::default();
+
+            while split_mut.len() >= points_per_thread {
+
+                let reference_ep = match reference_ep {
+                    None => *eps_ids_map
+                        .keys()
+                        .filter(|x| !inserted.contains(*x))
+                        .take(1)
+                        .next()
+                        .unwrap(),
+                    Some(ref_ep) => {
+                        let sorted_neighbors = BTreeSet::from_iter(self.layers.get(&layer_nb).unwrap().neighbors(ref_ep).unwrap().iter());
+                        sorted_neighbors.iter().filter(|x| !been_ref.contains(&x.id)).next().unwrap().id
+                    }
+                };
+                been_ref.insert(reference_ep);
+
+                let ep_neighbors = self
+                    .layers
+                    .get(&layer_nb)
+                    .unwrap()
+                    .neighbors(reference_ep)
+                    .unwrap();
+
+                let sorted_neighbors = BTreeSet::from_iter(ep_neighbors.iter().filter(|x| !inserted.contains(&x.id)));
+
+                if !inserted.contains(&reference_ep) {
+                    split_mut.extend(eps_ids_map.get(&reference_ep).unwrap().iter());
+                    inserted.insert(reference_ep);
+                }
+                if split_mut.len() >= points_per_thread {
+                    continue;
+                }
+
+                for nearest_neighbor in sorted_neighbors.iter() {
+                    if inserted.contains(&nearest_neighbor.id) {
+                        continue;
+                    }
+                    let point_ids_to_insert = match eps_ids_map.get(&nearest_neighbor.id) {
+                        Some(p_ids) => p_ids,
+                        None => continue,
+                    };
+                    split_mut.extend(point_ids_to_insert.iter());
+                    inserted.insert(nearest_neighbor.id);
+                    if split_mut.len() >= points_per_thread {
+                        break;
+                    }
+                    // if inserted.len() == nb_eps {
+                    //     break;
+                    // }
+                }
+            }
+        }
         splits
     }
 
@@ -1111,10 +1199,6 @@ impl HNSW {
                 bar.inc(1);
             }
         }
-
-        // index_arc.write().reinsert_with_degree_zero();
-        // index_arc.read().assert_param_compliance();
-
         Ok(index)
     }
 
@@ -1134,15 +1218,14 @@ impl HNSW {
         let mut to_insert_split = split_ids_levels(to_insert, nb_threads);
 
         let mut handlers = Vec::new();
-        let index_arc = Arc::new(RwLock::new(index));
+        let index_arc = Arc::new(index);
         for thread_nb in 0..nb_threads {
             let thread_split = to_insert_split.pop().unwrap();
-            let index_ref = index_arc.clone();
+            let index_clone = index_arc.clone();
 
             handlers.push(std::thread::spawn(
                 move || -> IntMap<usize, IntSet<usize>> {
                     let mut thread_results = IntMap::default();
-                    let read_ref = index_ref.read();
                     let bar = get_progress_bar(
                         "Finding entry points".to_string(),
                         thread_split.len(),
@@ -1151,10 +1234,10 @@ impl HNSW {
                     let mut searcher = Searcher::new();
                     for (id, level) in thread_split {
                         searcher.clear_searchers();
-                        let point = read_ref.points.get_point(id).unwrap();
-                        searcher.selected.push(point.dist2other(read_ref.points.get_point(read_ref.ep).unwrap()));
-                        let max_layer_nb = read_ref.layers.len() - 1;
-                        read_ref
+                        let point = index_clone.points.get_point(id).unwrap();
+                        searcher.selected.push(point.dist2other(index_clone.points.get_point(index_clone.ep).unwrap()));
+                        let max_layer_nb = index_clone.layers.len() - 1;
+                        index_clone
                             .step_1(&mut searcher, point, max_layer_nb, level, Some(target_layer_nb))
                             .unwrap();
                         thread_results
@@ -1184,8 +1267,7 @@ impl HNSW {
         }
 
         let index = Arc::into_inner(index_arc)
-            .expect("Could not get index out of Arc reference")
-            .into_inner();
+            .expect("Could not get index out of Arc reference");
 
         Ok((index, eps_ids))
     }

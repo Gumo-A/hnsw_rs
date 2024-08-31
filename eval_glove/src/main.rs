@@ -76,7 +76,7 @@ fn main() -> std::io::Result<()> {
 
     let embs = train_set.clone();
     let start = Instant::now();
-    let index = HNSW::build_index_par_v2(m, Some(700), embs, true).unwrap();
+    let index = HNSW::build_index_par_v2(m, None, embs, true).unwrap();
     let end = Instant::now();
     index.print_index();
     println!(
