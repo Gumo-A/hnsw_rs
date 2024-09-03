@@ -63,27 +63,30 @@ fn main() -> std::io::Result<()> {
     // );
     // estimate_recall(&index, &test_set, &bf_data);
 
-    // let embs = train_set.clone();
-    // let start = Instant::now();
-    // let index = HNSW::build_index_par(m, None, embs, true).unwrap();
-    // let end = Instant::now();
-    // index.print_index();
-    // println!(
-    //     "Multi-thread (v1) elapsed time: {}ms",
-    //     start.elapsed().as_millis() - end.elapsed().as_millis()
-    // );
-    // estimate_recall(&index, &test_set, &bf_data);
-
     let embs = train_set.clone();
     let start = Instant::now();
-    let index = HNSW::build_index_par_v2(m, None, embs, true).unwrap();
+    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
     let end = Instant::now();
     index.print_index();
     println!(
-        "Multi-thread (v2) elapsed time: {}ms",
+        "Multi-thread (v3) elapsed time: {}ms",
         start.elapsed().as_millis() - end.elapsed().as_millis()
     );
     estimate_recall(&index, &test_set, &bf_data);
+    index.assert_param_compliance();
+
+    // let embs = train_set.clone();
+    // let start = Instant::now();
+    // let index = HNSW::build_index_par_v2(m, None, embs, true).unwrap();
+    // let end = Instant::now();
+    // index.print_index();
+    // println!(
+    // "Multi-thread (v2) elapsed time: {}ms",
+    // start.elapsed().as_millis() - end.elapsed().as_millis()
+    // );
+    // index.assert_param_compliance();
+    // estimate_recall(&index, &test_set, &bf_data);
+    // println!("{:#?}", index.layers[&0]);
 
     // let train_words: Vec<String> = words
     //     .iter()
@@ -124,7 +127,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
-    for ef in (12..200).step_by(12) {
+    for ef in (12..100).step_by(12) {
         println!("Finding ANNs ef={ef}");
         let bar = ProgressBar::new(test_set.len() as u64);
         bar.set_style(

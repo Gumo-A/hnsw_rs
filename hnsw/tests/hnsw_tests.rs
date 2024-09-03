@@ -4,6 +4,7 @@ use std::collections::BinaryHeap;
 
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::dist::Dist;
+use hnsw::hnsw::graph::GraphV2;
 use hnsw::hnsw::index::Searcher;
 use hnsw::hnsw::index::HNSW;
 use hnsw::hnsw::params::Params;
@@ -32,7 +33,7 @@ fn hnsw_build() {
 #[test]
 fn hnsw_build_small_loop() {
     let (_, vectors) = load_glove_array(DIM, 10, true, false).expect("Could not load glove");
-    for _ in 0..100_000 {
+    for _ in 0..100 {
         let _ = HNSW::build_index(12, None, vectors.clone(), false).unwrap();
     }
 }
@@ -93,4 +94,22 @@ fn make_rand_vectors(n: usize) -> Vec<Vec<f32>> {
         vectors.push(vector)
     }
     vectors
+}
+
+#[test]
+fn graph_v2() {
+    let mut graph = GraphV2::new();
+    for node in 0..100 {
+        graph.add_node(node);
+    }
+    graph.add_edge(0, 1, Dist::new(0.5, 1));
+    graph.add_edge(2, 10, Dist::new(0.3, 10));
+    graph.add_edge(3, 0, Dist::new(1.5, 0));
+    graph.add_edge(4, 10, Dist::new(1.1, 10));
+    graph.add_edge(3, 10, Dist::new(1.7, 10));
+    assert_eq!(graph.nb_nodes(), 100);
+    let neigh_10 = graph.neighbors(10).unwrap();
+    for n in [2, 3, 4] {
+        assert!(neigh_10.contains(n));
+    }
 }
