@@ -1,17 +1,14 @@
 use std::env;
 
-pub fn parse_args_bf() -> Result<(usize, usize, usize), &'static str> {
+pub fn parse_args_bf() -> Result<(usize, usize), &'static str> {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 4 {
-        return Err("Expected exactly 3 positional arguments.");
+    if args.len() != 3 {
+        return Err("Expected exactly 2 positional arguments.");
     }
     let dim = args[1].parse::<usize>().expect("Could not parse dimention");
     let lim = args[2].parse::<usize>().expect("Could not parse limit");
-    let splits = args[3]
-        .parse::<usize>()
-        .expect("Could not parse number of splits");
-    Ok((dim, lim, splits))
+    Ok((dim, lim))
 }
 
 pub fn parse_args() -> (usize, usize) {

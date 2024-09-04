@@ -2,5 +2,15 @@
 resolver = "2"
 members = [
   "hnsw",
-  "brute_force", "eval_glove", "load_index",
+  "brute_force", 
+  "eval_glove", 
+  "load_index",
 ]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[build]
+rustflags = ["-C", "target-cpu=native"]
