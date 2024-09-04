@@ -1,7 +1,7 @@
 use super::{
     dist::Dist,
-    graph::GraphV2,
-    points::{Point, PointsV2, Vector},
+    graph::Graph,
+    points::{Point, Points, Vector},
 };
 use crate::hnsw::lvq::LVQVec;
 use crate::{helpers::data::split_ids, hnsw::params::Params};
@@ -69,8 +69,8 @@ impl Searcher {
 pub struct HNSW {
     ep: usize,
     pub params: Params,
-    pub points: PointsV2,
-    pub layers: IntMap<usize, GraphV2>,
+    pub points: Points,
+    pub layers: IntMap<usize, Graph>,
 }
 
 impl HNSW {
@@ -81,7 +81,7 @@ impl HNSW {
             Params::from_m(m, dim)
         };
         HNSW {
-            points: PointsV2::Empty,
+            points: Points::Empty,
             params,
             ep: 0,
             layers: IntMap::default(),
@@ -90,7 +90,7 @@ impl HNSW {
 
     pub fn from_params(params: Params) -> HNSW {
         HNSW {
-            points: PointsV2::Empty,
+            points: Points::Empty,
             params,
             ep: 0,
             layers: IntMap::default(),
@@ -335,7 +335,7 @@ impl HNSW {
     fn select_heuristic(
         &self,
         searcher: &mut Searcher,
-        layer: &GraphV2,
+        layer: &Graph,
         point: &Point,
         m: usize,
         extend_cands: bool,
@@ -585,7 +585,7 @@ impl HNSW {
 
         if level > max_layer_nb {
             for layer_nb in max_layer_nb + 1..level + 1 {
-                let mut layer = GraphV2::new();
+                let mut layer = Graph::new();
                 layer.add_node(point_id);
                 self.layers.insert(layer_nb, layer);
             }
@@ -638,7 +638,7 @@ impl HNSW {
     /// Creates all the layers and stores the points in their levels.
     /// Stores the Point structs in index.points.
     fn store_points(&mut self, vectors: Vec<Vec<f32>>) {
-        let points = PointsV2::from_vecs(vectors, self.params.ml);
+        let points = Points::from_vecs(vectors, self.params.ml);
         // TODO: if this is a bulk update, make sure to use the max between
         // the current max level and the new points' max level.
         let max_layer_nb = points
@@ -647,7 +647,7 @@ impl HNSW {
             .max()
             .unwrap();
         for layer_nb in 0..=max_layer_nb {
-            self.layers.entry(layer_nb).or_insert(GraphV2::new());
+            self.layers.entry(layer_nb).or_insert(Graph::new());
         }
         for (point_id, point) in points.iterate() {
             for l in 0..=point.level {
@@ -666,7 +666,7 @@ impl HNSW {
     }
 
     fn first_insert(&mut self, point_id: usize) {
-        let mut layer = GraphV2::new();
+        let mut layer = Graph::new();
         layer.add_node(point_id);
         self.layers.insert(0, layer);
         self.ep = point_id;
@@ -860,7 +860,7 @@ impl HNSW {
     pub fn search_layer(
         &self,
         searcher: &mut Searcher,
-        layer: &GraphV2,
+        layer: &Graph,
         point: &Point,
         ef: usize,
     ) -> Result<(), String> {
@@ -1237,7 +1237,7 @@ fn extract_points_and_means(points_data: &Vec<serde_json::Value>) -> (Vec<Point>
     (points, points_means)
 }
 
-fn _compute_stats(points: &PointsV2) -> (f32, f32) {
+fn _compute_stats(points: &Points) -> (f32, f32) {
     let mut dists: HashMap<(usize, usize), f32> = HashMap::new();
     for (id, point) in points.iterate() {
         for (idx, pointx) in points.iterate() {

@@ -1,5 +1,5 @@
 use crate::hnsw::dist::Dist;
-use crate::hnsw::points::{Point, PointsV2};
+use crate::hnsw::points::{Point, Points};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -113,8 +113,8 @@ pub fn load_sift_array(lim: usize, verbose: bool) -> Result<Vec<Vec<f32>>> {
 
 pub fn brute_force_nns(
     nb_nns: usize,
-    train_set: Arc<PointsV2>,
-    test_set: Arc<PointsV2>,
+    train_set: Arc<Points>,
+    test_set: Arc<Points>,
     ids: Vec<usize>,
     verbose: bool,
 ) -> HashMap<usize, Vec<usize>> {
@@ -144,12 +144,12 @@ pub fn brute_force_nns(
     brute_force_results
 }
 
-fn get_nn_bf(point: &Point, others: &Arc<PointsV2>, nb_nns: usize) -> Vec<usize> {
+fn get_nn_bf(point: &Point, others: &Arc<Points>, nb_nns: usize) -> Vec<usize> {
     let sorted = sort_by_distance(point, others);
     sorted.values().copied().take(nb_nns).collect()
 }
 
-fn sort_by_distance(point: &Point, others: &Arc<PointsV2>) -> BTreeMap<Dist, usize> {
+fn sort_by_distance(point: &Point, others: &Arc<Points>) -> BTreeMap<Dist, usize> {
     let result = others.iterate().map(|(idx, p)| {
         let dist = p.dist2other(point);
         (dist, idx)

@@ -9,7 +9,7 @@ use rand::seq::IteratorRandom;
 use hnsw::helpers::args::parse_args_bf;
 use hnsw::helpers::data::split_ids;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
-use hnsw::hnsw::points::PointsV2;
+use hnsw::hnsw::points::Points;
 
 const NB_NNS: usize = 100;
 
@@ -34,8 +34,8 @@ fn main() -> std::io::Result<()> {
     let test_frac = 0.01;
     let (train_set, test_set, train_idx, test_idx) = split_glove(embeddings, test_frac);
 
-    let train_set = PointsV2::from_vecs(train_set, 0.0);
-    let test_set = PointsV2::from_vecs(test_set, 0.0);
+    let train_set = Points::from_vecs(train_set, 0.0);
+    let test_set = Points::from_vecs(test_set, 0.0);
 
     let train_arc = Arc::new(train_set);
     let test_arc = Arc::new(test_set);

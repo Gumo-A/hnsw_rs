@@ -4,7 +4,7 @@ use std::collections::BinaryHeap;
 
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::dist::Dist;
-use hnsw::hnsw::graph::GraphV2;
+use hnsw::hnsw::graph::Graph;
 use hnsw::hnsw::index::Searcher;
 use hnsw::hnsw::index::HNSW;
 use hnsw::hnsw::params::Params;
@@ -98,7 +98,7 @@ fn make_rand_vectors(n: usize) -> Vec<Vec<f32>> {
 
 #[test]
 fn graph_v2() {
-    let mut graph = GraphV2::new();
+    let mut graph = Graph::new();
     for node in 0..100 {
         graph.add_node(node);
     }
