@@ -3,8 +3,8 @@ use super::{
     graph::GraphV2,
     points::{Point, PointsV2, Vector},
 };
-use crate::{helpers::data::split_ids, hnsw::params::Params};
 use crate::hnsw::lvq::LVQVec;
+use crate::{helpers::data::split_ids, hnsw::params::Params};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::{IntMap, IntSet};
@@ -1301,4 +1301,3 @@ fn _write_stats(dists: &HashMap<(usize, usize), f32>) -> std::io::Result<()> {
 
 //     split_vector
 // }
->>>>>>> perfs

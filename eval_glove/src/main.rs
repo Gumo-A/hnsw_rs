@@ -21,37 +21,31 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    // let (words, embeddings) = load_glove_array(dim, lim, true, true).unwrap();
-    let embs = load_sift_array(lim, true).unwrap();
+    let (words, embeddings) = load_glove_array(dim, lim, true, true).unwrap();
+    // let embs = load_sift_array(lim, true).unwrap();
 
-    // let (bf_data, train_ids, test_ids) = match load_bf_data(dim, lim) {
-    //     Ok(data) => data,
-    //     Err(err) => {
-    //         println!("Error loading bf data: {err}");
-    //         return Ok(());
-    //     }
-    // };
+    let (bf_data, train_ids, test_ids) = match load_bf_data(dim, lim) {
+        Ok(data) => data,
+        Err(err) => {
+            println!("Error loading bf data: {err}");
+            return Ok(());
+        }
+    };
 
-    // let train_set: Vec<Vec<f32>> = embeddings
-    //     .iter()
-    //     .enumerate()
-    //     .filter(|(id, _)| train_ids.contains(id))
-    //     .map(|(_, v)| v.clone())
-    //     .collect();
-    // let test_set: Vec<Vec<f32>> = embeddings
-    //     .iter()
-    //     .enumerate()
-    //     .filter(|(id, _)| test_ids.contains(id))
-    //     .map(|(_, v)| v.clone())
-    //     .collect();
+    let train_set: Vec<Vec<f32>> = embeddings
+        .iter()
+        .enumerate()
+        .filter(|(id, _)| train_ids.contains(id))
+        .map(|(_, v)| v.clone())
+        .collect();
+    let test_set: Vec<Vec<f32>> = embeddings
+        .iter()
+        .enumerate()
+        .filter(|(id, _)| test_ids.contains(id))
+        .map(|(_, v)| v.clone())
+        .collect();
 
-    // let mut embs: Vec<Vec<f32>> = train_set.clone();
-    // let mut embs: Vec<Vec<f32>> = Vec::new();
-    // let mut rng = rand::thread_rng();
-    // while embs.len() < lim {
-    //     let vector = (0..dim).map(|_| rng.gen::<f32>()).collect();
-    //     embs.push(vector);
-    // }
+    let mut embs: Vec<Vec<f32>> = train_set.clone();
 
     // let start = Instant::now();
     // let index = HNSW::build_index(m, None, embs, true).unwrap();
@@ -72,7 +66,7 @@ fn main() -> std::io::Result<()> {
         "Multi-thread (v3) elapsed time: {}ms",
         start.elapsed().as_millis() - end.elapsed().as_millis()
     );
-    // estimate_recall(&index, &test_set, &bf_data);
+    estimate_recall(&index, &test_set, &bf_data);
     // index.assert_param_compliance();
 
     // let train_words: Vec<String> = words
