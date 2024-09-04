@@ -65,7 +65,7 @@ fn main() -> std::io::Result<()> {
 
     // let embs = train_set.clone();
     let start = Instant::now();
-    let index = HNSW::build_index_par(m, Some(100), embs, true).unwrap();
+    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
     let end = Instant::now();
     index.print_index();
     println!(
@@ -114,7 +114,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
-    for ef in (12..100).step_by(12) {
+    for ef in (10..=100).step_by(10) {
         println!("Finding ANNs ef={ef}");
         let bar = ProgressBar::new(test_set.len() as u64);
         bar.set_style(
@@ -124,6 +124,7 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
         );
 
         let mut recall_10 = Vec::new();
+        let start = Instant::now();
         for (idx, query) in test_set.iter().enumerate() {
             let anns = index.ann_by_vector(query, 10, ef).unwrap();
             let true_nns: &Vec<usize> = bf_data.get(&idx).unwrap();
@@ -136,12 +137,14 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
             recall_10.push((hits as f32) / 10.0);
             bar.inc(1);
         }
-        let query_time = (1.0 / bar.per_sec()) * 1000.0;
+        let mut query_time = (start.elapsed().as_nanos() as f32) / (test_set.len() as f32);
+        query_time = query_time.trunc();
+        query_time /= 1_000_000.0;
         let mut avg_recall = 0.0;
         for recall in recall_10.iter() {
             avg_recall += recall;
         }
         avg_recall /= recall_10.len() as f32;
-        println!("Recall@10 {avg_recall}, Query Time: {query_time}");
+        println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
     }
 }

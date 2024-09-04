@@ -11,7 +11,11 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use nohash_hasher::{IntMap, IntSet};
 
-use std::{cmp::Reverse, collections::BTreeSet, sync::Arc};
+use std::{
+    cmp::Reverse,
+    collections::BTreeSet,
+    sync::{Arc, RwLock},
+};
 
 use rand::rngs::ThreadRng;
 use rand::Rng;
@@ -140,7 +144,6 @@ impl HNSW {
         println!("ep: {:?}", self.ep);
     }
 
-    // TODO: add multithreaded functionality for ANN search.
     pub fn ann_by_vector(
         &self,
         vector: &Vec<f32>,
@@ -173,37 +176,68 @@ impl HNSW {
     }
 
     // TODO: multithreaded
-    pub fn anns_by_vectors(&self, _vector: &Vec<Vec<f32>>, _n: usize, _ef: usize) {
-        // Result<Vec<Vec<usize>>, String> {
-        // todo!("multithreaded");
-        // let mut ep: IntSet<usize, > =
-        //     IntSet::with_hasher(:));
-        // ep.insert(self.ep);
-        // let nb_layer = self.layers.len();
+    // pub fn anns_by_vectors(
+    //     index: &Self,
+    //     vectors: &Vec<Vec<f32>>,
+    //     n: usize,
+    //     ef: usize,
+    //     verbose: bool,
+    // ) -> Result<Vec<Vec<usize>>, String> {
+    //     let nb_threads = std::thread::available_parallelism().unwrap().get();
+    //     let per_thread = vectors.len() / nb_threads;
+    //     let index_arc = Arc::new(index);
+    //     let vectors_arc = Arc::new(vectors);
 
-        // let point = Point::new_quantized(0, None, vector);
+    //     let mut handlers = Vec::new();
+    //     std::thread::scope(|s| {
+    //         let mut buffer = 0;
+    //         for thread_idx in 0..nb_threads {
+    //             let vectors_ref = Arc::clone(&vectors_arc);
+    //             let thread_vector_ids = if thread_idx == (nb_threads - 1) {
+    //                 buffer..vectors_ref.len()
+    //             } else {
+    //                 buffer..(buffer + per_thread)
+    //             };
+    //             let thread_len = thread_vector_ids.clone().count();
+    //             buffer += per_thread;
+    //             let index_ref = Arc::clone(&index_arc);
+    //             handlers.push(
+    //                 s.spawn(move || -> Result<(usize, Vec<Vec<usize>>), String> {
+    //                     let mut thread_results = Vec::with_capacity(thread_len);
+    //                     let bar = get_progress_bar(
+    //                         format!("T{thread_idx}: Finding ANNs with ef{ef}"),
+    //                         thread_len,
+    //                         verbose,
+    //                     );
+    //                     for i in thread_vector_ids {
+    //                         thread_results.push(index_ref.ann_by_vector(
+    //                             vectors_ref.get(i).unwrap(),
+    //                             n,
+    //                             ef,
+    //                         )?);
+    //                         bar.inc(1);
+    //                     }
+    //                     Ok((thread_idx, thread_results))
+    //                 }),
+    //             );
+    //         }
+    //     });
 
-        // for layer_nb in (0..nb_layer).rev() {
-        //     ep = self.search_layer(&self.layers.get(&(layer_nb)).unwrap(), &point, &mut ep, 1)?;
-        // }
-
-        // let layer_0 = &self.layers.get(&0).unwrap();
-        // let neighbors = self.search_layer(layer_0, &point, &mut ep, ef)?;
-
-        // let nearest_neighbors: BTreeMap<Dist, usize> =
-        //     BTreeMap::from_iter(neighbors.iter().map(|x| {
-        //         let dist = self.points.get_point(*x).unwrap().dist2other(&point);
-        //         (dist, *x)
-        //     }));
-
-        // let anns: Vec<usize> = nearest_neighbors
-        //     .values()
-        //     .skip(1)
-        //     .take(n)
-        //     .cloned()
-        //     .collect();
-        // Ok(anns)
-    }
+    //     let mut intermediate_results: Vec<(usize, Vec<Vec<usize>>)> =
+    //         Vec::with_capacity(nb_threads);
+    //     for handle in handlers {
+    //         let thread_results = handle.join().unwrap()?;
+    //         intermediate_results.push(thread_results);
+    //     }
+    //     intermediate_results.sort_by_key(|(thread_idx, _)| *thread_idx);
+    //     let results = Vec::from_iter(
+    //         intermediate_results
+    //             .iter()
+    //             .map(|(_, thread_results)| thread_results.iter().cloned())
+    //             .flatten(),
+    //     );
+    //     Ok(results)
+    // }
 
     fn step_1(
         &self,
@@ -502,12 +536,7 @@ impl HNSW {
     //     Ok(())
     // }
 
-    pub fn insert_par_v3(
-        index: Arc<Self>,
-        ids: Vec<usize>,
-        // layer_nb: usize,
-        bar: ProgressBar,
-    ) -> Result<(), String> {
+    pub fn insert_par(index: Arc<Self>, ids: Vec<usize>, bar: ProgressBar) -> Result<(), String> {
         let mut searcher = Searcher::new();
         let max_layer_nb = index.layers.len() - 1;
 
@@ -721,7 +750,7 @@ impl HNSW {
                     (verbose) & (thread_idx == 0),
                 );
                 handlers.push(std::thread::spawn(move || {
-                    Self::insert_par_v3(index_copy, ids_split, bar).unwrap();
+                    Self::insert_par(index_copy, ids_split, bar).unwrap();
                 }));
             }
             for handle in handlers {
