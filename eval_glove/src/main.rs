@@ -21,7 +21,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let (words, embeddings) = load_glove_array(dim, lim, true, true).unwrap();
+    let (words, embeddings) = load_glove_array(dim, lim, true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
 
     let (bf_data, train_ids, test_ids) = match load_bf_data(dim, lim) {
@@ -47,19 +47,9 @@ fn main() -> std::io::Result<()> {
 
     let mut embs: Vec<Vec<f32>> = train_set.clone();
 
-    // let start = Instant::now();
-    // let index = HNSW::build_index(m, None, embs, true).unwrap();
-    // let end = Instant::now();
-    // index.print_index();
-    // println!(
-    //     "Single-thread elapsed time: {}ms",
-    //     start.elapsed().as_millis() - end.elapsed().as_millis()
-    // );
-    // estimate_recall(&index, &test_set, &bf_data);
-
-    // let embs = train_set.clone();
+    let embs = train_set.clone();
     let start = Instant::now();
-    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
+    let index = HNSW::build_index(m, None, embs, true).unwrap();
     let end = Instant::now();
     index.print_index();
     println!(
@@ -69,41 +59,47 @@ fn main() -> std::io::Result<()> {
     estimate_recall(&index, &test_set, &bf_data);
     // index.assert_param_compliance();
 
-    // let train_words: Vec<String> = words
-    //     .iter()
-    //     .enumerate()
-    //     .filter(|(id, _)| train_ids.contains(id))
-    //     .map(|(_, w)| w.clone())
-    //     .collect();
-    // let test_words: Vec<String> = words
-    //     .iter()
-    //     .enumerate()
-    //     .filter(|(id, _)| test_ids.contains(id))
-    //     .map(|(_, w)| w.clone())
-    //     .collect();
+    let train_words: Vec<String> = words
+        .iter()
+        .enumerate()
+        .filter(|(id, _)| train_ids.contains(id))
+        .map(|(_, w)| w.clone())
+        .collect();
+    let test_words: Vec<String> = words
+        .iter()
+        .enumerate()
+        .filter(|(id, _)| test_ids.contains(id))
+        .map(|(_, w)| w.clone())
+        .collect();
 
-    // for (i, idx) in bf_data.keys().enumerate() {
-    //     if i > 3 {
-    //         break;
-    //     }
-    //     let point = test_set.get(*idx).unwrap();
-    //     let anns = index.ann_by_vector(point, 10, 16).unwrap();
-    //     println!("ANNs of {}", test_words[*idx]);
-    //     let anns_words: Vec<String> = anns
-    //         .iter()
-    //         .map(|x| train_words[*x as usize].clone())
-    //         .collect();
-    //     println!("{:?}", anns_words);
-    //     println!("True NN of {}", test_words[*idx]);
-    //     let true_nns: Vec<String> = bf_data
-    //         .get(&idx)
-    //         .unwrap()
-    //         .iter()
-    //         .map(|x| train_words[*x].clone())
-    //         .take(10)
-    //         .collect();
-    //     println!("{:?}", true_nns);
-    // }
+    for (i, idx) in bf_data.keys().enumerate() {
+        if i > 3 {
+            break;
+        }
+        let point = test_set.get(*idx).unwrap();
+        let anns = index.ann_by_vector(point, 10, 16).unwrap();
+        println!("ANNs of {}", test_words[*idx]);
+        let anns_words: Vec<String> = anns
+            .iter()
+            .map(|x| train_words[*x as usize].clone())
+            .collect();
+        println!("{:?}", anns_words);
+        println!("True NN of {}", test_words[*idx]);
+        let true_nns: Vec<String> = bf_data
+            .get(&idx)
+            .unwrap()
+            .iter()
+            .map(|x| train_words[*x].clone())
+            .take(10)
+            .collect();
+        println!("{:?}", true_nns);
+    }
+    println!("test 100 {}", test_words[100]);
+    println!("test 100 {:?}", bf_data[&100]);
+    println!(
+        "test 0 {:?}",
+        test_set[0].iter().take(10).collect::<Vec<&f32>>()
+    );
     Ok(())
 }
 

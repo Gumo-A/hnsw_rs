@@ -177,6 +177,35 @@ impl Points {
         Self::Collection((collection, means))
     }
 
+    pub fn from_vecs_full(mut vectors: Vec<Vec<f32>>, ml: f32) -> Self {
+        let mut rng = rand::thread_rng();
+
+        let mut means = Vec::from_iter((0..vectors[0].len()).map(|_| 0.0));
+        for vector in vectors.iter() {
+            for (idx, val) in vector.iter().enumerate() {
+                means[idx] += val
+            }
+        }
+        for idx in 0..means.len() {
+            means[idx] /= vectors.len() as f32;
+        }
+
+        vectors.iter_mut().for_each(|v| {
+            v.iter_mut()
+                .enumerate()
+                .for_each(|(idx, x)| *x -= means[idx])
+        });
+
+        let collection = Vec::from_iter(
+            vectors
+                .iter()
+                .enumerate()
+                .map(|(id, v)| Point::new_full(id, get_new_node_layer(ml, &mut rng), v.clone())),
+        );
+
+        Self::Collection((collection, means))
+    }
+
     pub fn get_means(&self) -> Result<&Vec<f32>, String> {
         match self {
             Self::Empty => Err("There are no points in this struct.".to_string()),

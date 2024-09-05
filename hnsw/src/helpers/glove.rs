@@ -9,7 +9,6 @@ use std::sync::Arc;
 pub fn load_glove_array(
     dim: usize,
     lim: usize,
-    normalize: bool,
     verbose: bool,
 ) -> Result<(Vec<String>, Vec<Vec<f32>>)> {
     let file = File::open(format!("/home/gamal/glove_dataset/glove.6B.{dim}d.txt"))?;
@@ -42,26 +41,10 @@ pub fn load_glove_array(
 
         let word = parts.next().expect("Empty line");
 
-        let mut values: Vec<f32> = parts
+        let values: Vec<f32> = parts
             .map(|s| s.parse::<f32>().expect("Could not parse float"))
             .collect();
-        let norm: f32 = if normalize {
-            values
-                .clone()
-                .iter()
-                .map(|x| x.powf(2.0))
-                .sum::<f32>()
-                .powf(0.5)
-        } else {
-            1.0
-        };
-        values = values.iter().map(|x| x / norm).collect();
         embeddings.push(values);
-        // for (jdx, val) in values.enumerate() {
-        //     let entry = embeddings.get_mut((idx, jdx)).unwrap();
-        //     *entry = val / norm
-        // }
-
         words.push(word.to_string());
     }
     Ok((words, embeddings))

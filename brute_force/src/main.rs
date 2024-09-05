@@ -28,14 +28,13 @@ fn main() -> std::io::Result<()> {
         "/home/gamal/glove_dataset/test_data/dim{dim}_lim{lim}/"
     ));
 
-    let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) =
-        load_glove_array(dim, lim, true, true).unwrap();
+    let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) = load_glove_array(dim, lim, true).unwrap();
 
     let test_frac = 0.01;
     let (train_set, test_set, train_idx, test_idx) = split_glove(embeddings, test_frac);
 
-    let train_set = Points::from_vecs(train_set, 0.0);
-    let test_set = Points::from_vecs(test_set, 0.0);
+    let train_set = Points::from_vecs_full(train_set, 0.0);
+    let test_set = Points::from_vecs_full(test_set, 0.0);
 
     let train_arc = Arc::new(train_set);
     let test_arc = Arc::new(test_set);
