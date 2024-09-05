@@ -9,3 +9,4 @@ edition = "2021"
 hnsw = { path = "../hnsw"}
 indicatif = "0.17.8"
 rand = "0.8.5"
+text_io = "0.1.12"
