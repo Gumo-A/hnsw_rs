@@ -4,7 +4,7 @@ members = [
   "hnsw",
   "brute_force", 
   "eval_glove", 
-  "load_index",
+  "load_index", "binary_files",
 ]
 
 [profile.release]

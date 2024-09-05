@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use super::dist::Dist;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Graph {
     pub nodes: IntMap<usize, Arc<Mutex<IntSet<Dist>>>>,
 }

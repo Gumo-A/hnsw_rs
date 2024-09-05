@@ -9,11 +9,7 @@ use crate::{helpers::data::split_ids, hnsw::params::Params};
 use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::{IntMap, IntSet};
 
-use std::{
-    cmp::Reverse,
-    collections::BTreeSet,
-    sync::{Arc, RwLock},
-};
+use std::{cmp::Reverse, collections::BTreeSet, sync::Arc};
 
 use rand::rngs::ThreadRng;
 use rand::Rng;
@@ -64,7 +60,7 @@ impl Searcher {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 // #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HNSW {
     ep: usize,
@@ -74,7 +70,7 @@ pub struct HNSW {
 }
 
 impl HNSW {
-    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> HNSW {
+    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
         let params = if ef_cons.is_some() {
             Params::from_m_efcons(m, ef_cons.unwrap(), dim)
         } else {
@@ -88,7 +84,7 @@ impl HNSW {
         }
     }
 
-    pub fn from_params(params: Params) -> HNSW {
+    pub fn from_params(params: Params) -> Self {
         HNSW {
             points: Points::Empty,
             params,
@@ -972,20 +968,19 @@ impl HNSW {
             .collect())
     }
 
-    // TODO
-    // /// Saves the index to the specified path.
-    // /// Creates the path to the file if it didn't exist before.
-    // pub fn save(&self, index_path: &str) -> std::io::Result<()> {
-    //     let index_path = std::path::Path::new(index_path);
-    //     if !index_path.parent().unwrap().exists() {
-    //         std::fs::create_dir_all(index_path.parent().unwrap())?;
-    //     }
-    //     let file = File::create(index_path)?;
-    //     let mut writer = BufWriter::new(file);
-    //     serde_json::to_writer(&mut writer, &self)?;
-    //     writer.flush()?;
-    //     Ok(())
-    // }
+    /// Saves the index to the specified path.
+    /// Creates the path to the file if it didn't exist before.
+    /// SQLite uses big-endian, so I'll try to stick to that standard.
+    pub fn save(&self, index_path: &str) -> std::io::Result<()> {
+        let index_path = std::path::Path::new(index_path);
+        if !index_path.parent().unwrap().exists() {
+            std::fs::create_dir_all(index_path.parent().unwrap())?;
+        }
+        let file = File::create(index_path)?;
+        let mut writer = BufWriter::new(file);
+        writer.flush()?;
+        Ok(())
+    }
 
     // TODO
     // pub fn from_path(index_path: &str) -> std::io::Result<Self> {
