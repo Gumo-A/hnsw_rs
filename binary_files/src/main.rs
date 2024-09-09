@@ -76,9 +76,27 @@ fn modify(path: &str) -> std::io::Result<()> {
 
     println!("Now at {}, is this undefined?", file.stream_position()?);
 
-    for byte in file.bytes() {
+    for byte in file.try_clone()?.bytes() {
         println!("{}", byte?);
     }
+
+    file.rewind()?;
+    println!("Went back to the start");
+    let file_clone = file.try_clone()?;
+
+    let bytes = file_clone.bytes();
+    for i in bytes.take(2) {
+        println!("{}", i?);
+    }
+
+    println!("Read two bytes from copy");
+
+    let bytes = file.bytes();
+    for i in bytes.take(2) {
+        println!("{}", i?);
+    }
+
+    println!("Read two bytes from org");
 
     Ok(())
 }
