@@ -1,6 +1,9 @@
 use core::panic;
 use nohash_hasher::{IntMap, IntSet};
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 
 use super::dist::Dist;
 
@@ -30,7 +33,102 @@ impl Graph {
                 Arc::new(Mutex::new(IntSet::from_iter(neighbors.values().copied()))),
             );
         }
-        Graph { nodes }
+        Self { nodes }
+    }
+
+    pub fn from_edge_list(list: &Vec<(u64, u64, f32)>) -> Self {
+        let mut nodes: IntMap<usize, Arc<Mutex<IntSet<Dist>>>> = IntMap::default();
+        for (node_a, node_b, weight) in list.iter() {
+            let node_a = *node_a as usize;
+            let node_b = *node_b as usize;
+            nodes
+                .entry(node_a)
+                .and_modify(|e| {
+                    e.lock().unwrap().insert(Dist::new(*weight, node_b));
+                })
+                .or_insert(Arc::new(Mutex::new(IntSet::from_iter([Dist::new(
+                    *weight, node_b,
+                )]))));
+
+            nodes
+                .entry(node_b)
+                .and_modify(|e| {
+                    e.lock().unwrap().insert(Dist::new(*weight, node_a));
+                })
+                .or_insert(Arc::new(Mutex::new(IntSet::from_iter([Dist::new(
+                    *weight, node_a,
+                )]))));
+        }
+        Self { nodes }
+    }
+
+    pub fn from_edge_list_bytes(list: &Vec<u8>) -> Self {
+        let mut list_parsed = Vec::new();
+        assert_eq!(list.len() % 20, 0);
+
+        let mut cursor = 0;
+        for _ in 0..(list.len() / 20) {
+            let mut node_a_bytes: [u8; 8] = [0; 8];
+            let mut node_b_bytes: [u8; 8] = [0; 8];
+            let mut weight_bytes: [u8; 4] = [0; 4];
+            for (idx, byte) in list[cursor..(cursor + 8)].iter().enumerate() {
+                node_a_bytes[idx] = *byte;
+            }
+            for (idx, byte) in list[(cursor + 8)..(cursor + 16)].iter().enumerate() {
+                node_b_bytes[idx] = *byte;
+            }
+            for (idx, byte) in list[(cursor + 16)..(cursor + 20)].iter().enumerate() {
+                weight_bytes[idx] = *byte;
+            }
+            list_parsed.push((
+                u64::from_be_bytes(node_a_bytes),
+                u64::from_be_bytes(node_b_bytes),
+                f32::from_be_bytes(weight_bytes),
+            ));
+            cursor += 20;
+        }
+        Self::from_edge_list(&list_parsed)
+    }
+
+    pub fn to_edge_list(&self) -> Vec<(u64, u64, f32)> {
+        let mut list = HashSet::new();
+        for (node, neighbors) in self.nodes.iter() {
+            for semi_edge in neighbors.lock().unwrap().iter() {
+                let node_min = node.min(&semi_edge.id);
+                let node_max = node.max(&semi_edge.id);
+                list.insert((*node_min, *node_max, *semi_edge));
+            }
+        }
+        Vec::from_iter(
+            list.iter()
+                .map(|(a, b, dist)| (*a as u64, *b as u64, dist.dist)),
+        )
+    }
+
+    pub fn to_edge_list_bytes(&self) -> Vec<Vec<u8>> {
+        self.to_edge_list()
+            .iter()
+            .map(|(a, b, weight)| {
+                let (a, b, weight) = (a.to_be_bytes(), b.to_be_bytes(), weight.to_be_bytes());
+                let mut edge = Vec::with_capacity(20);
+                edge.extend_from_slice(&a);
+                edge.extend_from_slice(&b);
+                edge.extend_from_slice(&weight);
+                assert_eq!(edge.len(), 20);
+                edge
+            })
+            .collect()
+    }
+
+    pub fn to_bytes(&self) -> (usize, Vec<u8>) {
+        let edges = self.to_edge_list_bytes();
+        let nb_edges = edges.len();
+        let edges_stream = edges
+            .iter()
+            .map(|edge| edge.iter().copied())
+            .flatten()
+            .collect();
+        (nb_edges, edges_stream)
     }
 
     pub fn add_node(&mut self, point_id: usize) {
