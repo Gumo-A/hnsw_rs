@@ -1,8 +1,6 @@
+use nohash_hasher::IntSet;
 use rand::rngs::ThreadRng;
 use rand::Rng;
-use std::collections::{HashMap, HashSet};
-
-use nohash_hasher::{BuildNoHashHasher, IntSet};
 use serde::{Deserialize, Serialize};
 
 use super::{dist::Dist, lvq::LVQVec};

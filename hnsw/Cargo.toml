@@ -17,10 +17,8 @@ rustflags = ["-C", "target-cpu=native"]
 bench = false
 
 [dependencies]
-rayon = "1.10.0"
 indicatif = "0.17.8"
 nohash-hasher = "0.2.0"
-parking_lot = "0.12.1"
 rand = "0.8.5"
 regex = "1.10.3"
 serde_json = "1.0.114"

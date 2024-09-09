@@ -4,7 +4,7 @@
 // functions that are called during insertion.
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hnsw::helpers::glove::load_glove_array;
-use hnsw::hnsw::index::HNSW;
+use hnsw::hnsw::index::{Searcher, HNSW};
 use hnsw::hnsw::points::Point;
 use rand::Rng;
 
@@ -18,15 +18,15 @@ fn insert_at_10000_m12(c: &mut Criterion) {
     //     .measurement_time(Duration::from_secs(1000));
 
     for dim in GLOVE_DIMS.iter() {
-        let (_, embeddings) = load_glove_array(*dim, 10_001, true, false).unwrap();
+        let (_, embeddings) = load_glove_array(10_000, format!("glove.6B.{dim}d"), false).unwrap();
         let index = HNSW::build_index(12, None, embeddings[0..10_000].to_vec(), false).unwrap();
         let vector = embeddings[10_000].clone();
         group.bench_function(BenchmarkId::from_parameter(dim), |b| {
             b.iter_batched(
-                || (index.clone(), vector.clone()),
-                move |(mut i, vect): (HNSW, Vec<f32>)| {
+                || (index.clone(), vector.clone(), Searcher::new()),
+                move |(mut i, vect, mut searcher): (HNSW, Vec<f32>, Searcher)| {
                     i.points.insert(Point::new_quantized(10_000, 0, &vect));
-                    i.insert(10_000, false).unwrap();
+                    i.insert(10_000, &mut searcher).unwrap();
                 },
                 criterion::BatchSize::LargeInput,
             )
@@ -42,7 +42,7 @@ fn build_10000_m12(c: &mut Criterion) {
     //     .measurement_time(Duration::from_secs(1000));
 
     for dim in GLOVE_DIMS.iter() {
-        let (_, embeddings) = load_glove_array(*dim, 10_000, true, false).unwrap();
+        let (_, embeddings) = load_glove_array(10_000, format!("glove.6B.{dim}d"), false).unwrap();
         group.bench_function(BenchmarkId::from_parameter(dim), |b| {
             b.iter_batched(
                 || embeddings.clone(),

@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -5,8 +6,6 @@ use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::{load_glove_array, load_sift_array};
 use hnsw::hnsw::index::HNSW;
-
-use rand::Rng;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -21,10 +20,13 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let (words, embeddings) = load_glove_array(dim, lim, true).unwrap();
+    // let file_name = format!("glove.twitter.27B.{dim}d");
+    let file_name = format!("glove.6B.{dim}d");
+
+    let (words, embeddings) = load_glove_array(lim, file_name.clone(), true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
 
-    let (bf_data, train_ids, test_ids) = match load_bf_data(dim, lim) {
+    let (bf_data, train_ids, test_ids) = match load_bf_data(lim, file_name) {
         Ok(data) => data,
         Err(err) => {
             println!("Error loading bf data: {err}");
@@ -47,7 +49,7 @@ fn main() -> std::io::Result<()> {
 
     let embs = train_set.clone();
     let start = Instant::now();
-    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
+    let index = HNSW::build_index_par(m, Some(100), embs, true).unwrap();
     let end = Instant::now();
     index.print_index();
     println!(

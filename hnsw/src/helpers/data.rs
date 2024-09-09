@@ -97,15 +97,15 @@ pub fn split_eps(
 }
 
 pub fn load_bf_data(
-    dim: usize,
     lim: usize,
+    file_name: String,
 ) -> Result<(HashMap<usize, Vec<usize>>, HashSet<usize>, HashSet<usize>)> {
     let mut bf_data: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut test_ids: HashSet<usize> = HashSet::new();
     let mut train_ids: HashSet<usize> = HashSet::new();
 
     let paths: ReadDir = fs::read_dir(format!(
-        "/home/gamal/glove_dataset/test_data/dim{dim}_lim{lim}"
+        "/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}"
     ))
     .unwrap();
 

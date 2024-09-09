@@ -25,14 +25,15 @@ fn hnsw_build() {
     let vectors = make_rand_vectors(N);
     let mut index = HNSW::build_index(12, None, vectors, false).unwrap();
     let mut searcher = Searcher::new();
-    index.insert(0, &mut searcher, false).unwrap();
+    index.insert(0, &mut searcher).unwrap();
 
     assert_eq!(index.points.len(), N);
 }
 
 #[test]
 fn hnsw_build_small_loop() {
-    let (_, vectors) = load_glove_array(DIM, 10, true, false).expect("Could not load glove");
+    let (_, vectors) =
+        load_glove_array(10, format!("glove.6B.{DIM}d"), false).expect("Could not load glove");
     for _ in 0..100 {
         let _ = HNSW::build_index(12, None, vectors.clone(), false).unwrap();
     }
@@ -40,7 +41,8 @@ fn hnsw_build_small_loop() {
 
 #[test]
 fn hnsw_build_big() {
-    let (_, vectors) = load_glove_array(DIM, 40_000, true, false).expect("Could not load glove");
+    let (_, vectors) =
+        load_glove_array(40_000, format!("glove.6B.{DIM}d"), false).expect("Could not load glove");
     let _ = HNSW::build_index(24, None, vectors, false).unwrap();
 }
 
@@ -94,22 +96,4 @@ fn make_rand_vectors(n: usize) -> Vec<Vec<f32>> {
         vectors.push(vector)
     }
     vectors
-}
-
-#[test]
-fn graph_v2() {
-    let mut graph = Graph::new();
-    for node in 0..100 {
-        graph.add_node(node);
-    }
-    graph.add_edge(0, 1, Dist::new(0.5, 1));
-    graph.add_edge(2, 10, Dist::new(0.3, 10));
-    graph.add_edge(3, 0, Dist::new(1.5, 0));
-    graph.add_edge(4, 10, Dist::new(1.1, 10));
-    graph.add_edge(3, 10, Dist::new(1.7, 10));
-    assert_eq!(graph.nb_nodes(), 100);
-    let neigh_10 = graph.neighbors(10).unwrap();
-    for n in [2, 3, 4] {
-        assert!(neigh_10.contains(n));
-    }
 }

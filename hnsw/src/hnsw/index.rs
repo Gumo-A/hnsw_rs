@@ -982,95 +982,94 @@ impl HNSW {
         Ok(())
     }
 
-    // TODO
-    // pub fn from_path(index_path: &str) -> std::io::Result<Self> {
-    //     let file = File::open(index_path)?;
-    //     let reader = BufReader::new(file);
-    //     let content: serde_json::Value = serde_json::from_reader(reader)?;
+    pub fn from_path(index_path: &str) -> std::io::Result<Self> {
+        let file = File::open(index_path)?;
+        let reader = BufReader::new(file);
+        let content: serde_json::Value = serde_json::from_reader(reader)?;
 
-    //     let ep = content
-    //         .get("ep")
-    //         .expect("Error: key 'ep' is not in the index file.")
-    //         .as_number()
-    //         .expect("Error: entry point could not be parsed as a number.")
-    //         .as_i64()
-    //         .unwrap() as usize;
+        let ep = content
+            .get("ep")
+            .expect("Error: key 'ep' is not in the index file.")
+            .as_number()
+            .expect("Error: entry point could not be parsed as a number.")
+            .as_i64()
+            .unwrap() as usize;
 
-    //     let params = match content
-    //         .get("params")
-    //         .expect("Error: key 'params' is not in the index file.")
-    //     {
-    //         serde_json::Value::Object(params_map) => extract_params(params_map),
-    //         err => {
-    //             println!("{err}");
-    //             panic!("Something went wrong reading parameters of the index file.");
-    //         }
-    //     };
+        let params = match content
+            .get("params")
+            .expect("Error: key 'params' is not in the index file.")
+        {
+            serde_json::Value::Object(params_map) => extract_params(params_map),
+            err => {
+                println!("{err}");
+                panic!("Something went wrong reading parameters of the index file.");
+            }
+        };
 
-    //     let layers_unparsed = content
-    //         .get("layers")
-    //         .expect("Error: key 'layers' is not in the index file.")
-    //         .as_object()
-    //         .expect("Error: expected key 'layers' to be an Object, but couldn't parse it as such.");
-    //     let mut layers = IntMap::default();
-    //     for (layer_nb, layer_content) in layers_unparsed {
-    //         let layer_nb: usize = layer_nb
-    //             .parse()
-    //             .expect("Error: could not load key {key} into layer number");
-    //         let layer_content = layer_content
-    //             .get("nodes")
-    //             .expect("Error: could not load 'key' nodes for layer {key}").as_object().expect("Error: expected key 'nodes' for layer {layer_nb} to be an Object, but couldl not be parsed as such.");
-    //         let mut this_layer = IntMap::default();
-    //         for (node_id, neighbors) in layer_content.iter() {
-    //             let neighbors = IntMap::from_iter(neighbors
-    //                 .as_array()
-    //                 .expect("Error: could not load the neighbors of node {node_id} in layer {layer_nb} as an Array.")
-    //                 .iter()
-    //                 .map(|neighbor| {
-    //                     let id_dist = neighbor.as_array().unwrap();
-    //                     let id = id_dist.first().unwrap().as_u64().unwrap() as usize;
-    //                     let dist = id_dist.get(1).unwrap().as_f64().unwrap() as f32;
-    //                     (id, Dist { dist, id })
-    //                 }));
-    //             this_layer.insert(node_id.parse::<usize>().unwrap(), neighbors);
-    //         }
-    //         layers.insert(layer_nb, Graph::from_layer_data(this_layer));
-    //     }
+        let layers_unparsed = content
+            .get("layers")
+            .expect("Error: key 'layers' is not in the index file.")
+            .as_object()
+            .expect("Error: expected key 'layers' to be an Object, but couldn't parse it as such.");
+        let mut layers = IntMap::default();
+        for (layer_nb, layer_content) in layers_unparsed {
+            let layer_nb: usize = layer_nb
+                .parse()
+                .expect("Error: could not load key {key} into layer number");
+            let layer_content = layer_content
+                .get("nodes")
+                .expect("Error: could not load 'key' nodes for layer {key}").as_object().expect("Error: expected key 'nodes' for layer {layer_nb} to be an Object, but couldl not be parsed as such.");
+            let mut this_layer = IntMap::default();
+            for (node_id, neighbors) in layer_content.iter() {
+                let neighbors = IntMap::from_iter(neighbors
+                    .as_array()
+                    .expect("Error: could not load the neighbors of node {node_id} in layer {layer_nb} as an Array.")
+                    .iter()
+                    .map(|neighbor| {
+                        let id_dist = neighbor.as_array().unwrap();
+                        let id = id_dist.first().unwrap().as_u64().unwrap() as usize;
+                        let dist = id_dist.get(1).unwrap().as_f64().unwrap() as f32;
+                        (id, Dist { dist, id })
+                    }));
+                this_layer.insert(node_id.parse::<usize>().unwrap(), neighbors);
+            }
+            layers.insert(layer_nb, Graph::from_layer_data(this_layer));
+        }
 
-    //     let (points, means) = match content
-    //         .get("points")
-    //         .expect("Error: key 'points' is not in the index file.")
-    //     {
-    //         serde_json::Value::Object(points_vec) => {
-    //             let err_msg =
-    //                 "Error reading index file: could not find key 'Collection' in 'points', maybe the index is empty.";
-    //             match points_vec.get("Collection").expect(err_msg) {
-    //                 serde_json::Value::Array(points_final) => {
-    //                     extract_points_and_means(points_final)
-    //                 }
-    //                 _ => panic!("Something went wrong reading parameters of the index file."),
-    //             }
-    //         }
-    //         serde_json::Value::String(s) => {
-    //             if s == "Empty" {
-    //                 (Vec::new(), Vec::new())
-    //             } else {
-    //                 panic!("Something went wrong reading parameters of the index file.");
-    //             }
-    //         }
-    //         err => {
-    //             println!("{err:?}");
-    //             panic!("Something went wrong reading parameters of the index file.");
-    //         }
-    //     };
+        let (points, means) = match content
+            .get("points")
+            .expect("Error: key 'points' is not in the index file.")
+        {
+            serde_json::Value::Object(points_vec) => {
+                let err_msg =
+                    "Error reading index file: could not find key 'Collection' in 'points', maybe the index is empty.";
+                match points_vec.get("Collection").expect(err_msg) {
+                    serde_json::Value::Array(points_final) => {
+                        extract_points_and_means(points_final)
+                    }
+                    _ => panic!("Something went wrong reading parameters of the index file."),
+                }
+            }
+            serde_json::Value::String(s) => {
+                if s == "Empty" {
+                    (Vec::new(), Vec::new())
+                } else {
+                    panic!("Something went wrong reading parameters of the index file.");
+                }
+            }
+            err => {
+                println!("{err:?}");
+                panic!("Something went wrong reading parameters of the index file.");
+            }
+        };
 
-    //     Ok(HNSW {
-    //         ep,
-    //         params,
-    //         layers,
-    //         points: PointsV2::Collection((points, means)),
-    //     })
-    // }
+        Ok(HNSW {
+            ep,
+            params,
+            layers,
+            points: Points::Collection((points, means)),
+        })
+    }
 }
 
 fn get_progress_bar(message: String, remaining: usize, verbose: bool) -> ProgressBar {

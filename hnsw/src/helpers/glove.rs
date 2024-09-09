@@ -7,11 +7,20 @@ use std::io::{BufRead, BufReader, Result};
 use std::sync::Arc;
 
 pub fn load_glove_array(
-    dim: usize,
     lim: usize,
+    file_name: String,
     verbose: bool,
 ) -> Result<(Vec<String>, Vec<Vec<f32>>)> {
-    let file = File::open(format!("/home/gamal/glove_dataset/glove.6B.{dim}d.txt"))?;
+    let file = File::open(format!("/home/gamal/glove_dataset/{file_name}.txt"))?;
+    let reader = BufReader::new(file);
+
+    let lim = if lim == 0 {
+        reader.lines().count()
+    } else {
+        lim
+    };
+
+    let file = File::open(format!("/home/gamal/glove_dataset/{file_name}.txt"))?;
     let reader = BufReader::new(file);
 
     let mut embeddings: Vec<Vec<f32>> = Vec::new();

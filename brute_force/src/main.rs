@@ -24,11 +24,14 @@ fn main() -> std::io::Result<()> {
         }
     };
 
+    let file_name = format!("glove.6B.{dim}d");
+
     let _ = create_dir_all(format!(
-        "/home/gamal/glove_dataset/test_data/dim{dim}_lim{lim}/"
+        "/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/"
     ));
 
-    let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) = load_glove_array(dim, lim, true).unwrap();
+    let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) =
+        load_glove_array(lim, file_name.clone(), false).unwrap();
 
     let test_frac = 0.01;
     let (train_set, test_set, train_idx, test_idx) = split_glove(embeddings, test_frac);
@@ -62,20 +65,23 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    let file_name = format!("/home/gamal/glove_dataset/test_data/dim{dim}_lim{lim}/bf_data.json");
-    let file = File::create(&file_name)?;
+    let data_file_name =
+        format!("/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/bf_data.json");
+    let file = File::create(&data_file_name)?;
     let mut writer = BufWriter::new(file);
     serde_json::to_writer(&mut writer, &bf_data)?;
     writer.flush()?;
 
-    let file_name = format!("/home/gamal/glove_dataset/test_data/dim{dim}_lim{lim}/test_ids.json");
-    let file = File::create(&file_name)?;
+    let data_file_name =
+        format!("/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/test_ids.json");
+    let file = File::create(&data_file_name)?;
     let mut writer = BufWriter::new(file);
     serde_json::to_writer(&mut writer, &test_idx)?;
     writer.flush()?;
 
-    let file_name = format!("/home/gamal/glove_dataset/test_data/dim{dim}_lim{lim}/train_ids.json");
-    let file = File::create(&file_name)?;
+    let data_file_name =
+        format!("/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/train_ids.json");
+    let file = File::create(&data_file_name)?;
     let mut writer = BufWriter::new(file);
     serde_json::to_writer(&mut writer, &train_idx)?;
     writer.flush()?;

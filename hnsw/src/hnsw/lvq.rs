@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use super::dist::Dist;
 use serde::{Deserialize, Serialize};
 
@@ -80,16 +78,11 @@ impl LVQVec {
 
     #[inline(always)]
     pub fn dist2other(&self, other: &Self, id: usize) -> Dist {
-        // println!("1");
-        // let s1 = Instant::now();
         let mut acc = [0.0f32; CHUNK_SIZE];
         let chunks_iter = self.quantized_vec.chunks_exact(CHUNK_SIZE);
         let vector_chunks = other.quantized_vec.chunks_exact(CHUNK_SIZE);
         let self_rem = chunks_iter.remainder();
         let other_rem = vector_chunks.remainder();
-        // println!("s1 {}", s1.elapsed().as_nanos());
-
-        // let s2 = Instant::now();
         for (chunkx, chunky) in chunks_iter.zip(vector_chunks) {
             let acc_iter = chunkx.iter().zip(chunky);
             for (idx, (x, y)) in acc_iter.enumerate() {
@@ -98,19 +91,12 @@ impl LVQVec {
                 acc[idx] += (x_f32 - y_f32).powi(2);
             }
         }
-        // println!("s2 {}", s2.elapsed().as_nanos());
-
-        // let s3 = Instant::now();
         for (x, y) in self_rem.iter().zip(other_rem) {
             let x_f32 = (*x as f32) * self.delta + self.lower;
             let y_f32 = (*y as f32) * other.delta + other.lower;
             acc[0] += (x_f32 - y_f32).powi(2);
         }
-        // println!("s3 {}", s3.elapsed().as_nanos());
-
-        // let s4 = Instant::now();
         let dist = acc.iter().sum::<f32>().sqrt();
-        // println!("s4 {}", s4.elapsed().as_nanos());
         Dist::new(dist, id)
     }
 
