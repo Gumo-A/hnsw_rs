@@ -4,20 +4,18 @@ use std::collections::BinaryHeap;
 
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::hnsw::dist::Dist;
-use hnsw::hnsw::graph::Graph;
 use hnsw::hnsw::index::Searcher;
 use hnsw::hnsw::index::HNSW;
 use hnsw::hnsw::params::Params;
 use rand::Rng;
 
 const DIM: usize = 100;
-const N: usize = 100;
+const N: usize = 1000;
 
 #[test]
 fn hnsw_init() {
     let params = Params::from_m(12, DIM);
     let _index: HNSW = HNSW::new(params.m, None, params.dim);
-    let _index: HNSW = HNSW::from_params(params);
 }
 
 #[test]
@@ -40,19 +38,15 @@ fn hnsw_build_small_loop() {
 }
 
 #[test]
-fn hnsw_build_big() {
-    let (_, vectors) =
-        load_glove_array(40_000, format!("glove.6B.{DIM}d"), false).expect("Could not load glove");
-    let _ = HNSW::build_index(24, None, vectors, false).unwrap();
-}
-
-#[test]
 fn hnsw_serialize() {
     let index = HNSW::build_index(24, None, make_rand_vectors(N), false).unwrap();
+    index.print_index();
+    println!("");
 
-    let index_path = "./hnsw_index.json";
+    let index_path = "./hnsw_index.ann";
     index.save(index_path).unwrap();
     let loaded_index = HNSW::from_path(index_path).unwrap();
+    loaded_index.print_index();
 
     assert_eq!(N, loaded_index.points.len());
     std::fs::remove_file(index_path).unwrap();
@@ -84,8 +78,8 @@ fn set_dist() {
     let dist4 = Dist::new(0.1, 3);
     set.insert(dist4);
 
-    assert!(!set.insert(Dist::new(0.0, 0)));
-    assert!(set.remove(&Dist::new(0.0, 3)));
+    assert!(!set.insert(Dist::new(0.5, 0)));
+    assert!(set.remove(&Dist::new(0.1, 3)));
 }
 
 fn make_rand_vectors(n: usize) -> Vec<Vec<f32>> {

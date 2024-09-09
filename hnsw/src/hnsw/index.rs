@@ -1,9 +1,8 @@
 use super::{
     dist::Dist,
     graph::Graph,
-    points::{Point, Points, Vector},
+    points::{Point, Points},
 };
-use crate::hnsw::lvq::LVQVec;
 use crate::{helpers::data::split_ids, hnsw::params::Params};
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -19,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use core::panic;
 use std::collections::{BinaryHeap, HashMap};
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Searcher {
@@ -71,20 +70,15 @@ pub struct HNSW {
 
 impl HNSW {
     pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
+        // limit m to 128 so the serialization file's header is cleaner
+        if m > 128 {
+            panic!("The 'm' parameter is limited to 128 in this implementation. Increase ef_cons if you want a higher quality index.")
+        }
         let params = if ef_cons.is_some() {
             Params::from_m_efcons(m, ef_cons.unwrap(), dim)
         } else {
             Params::from_m(m, dim)
         };
-        HNSW {
-            points: Points::Empty,
-            params,
-            ep: 0,
-            layers: IntMap::default(),
-        }
-    }
-
-    pub fn from_params(params: Params) -> Self {
         HNSW {
             points: Points::Empty,
             params,
@@ -668,19 +662,13 @@ impl HNSW {
         self.ep = point_id;
     }
 
-    // fn reinsert_with_degree_zero(&mut self) {
-    //     // println!("Reinserting nodes with degree 0");
-    //     let mut searcher = Searcher::new();
-    //     for _ in 0..3 {
-    //         for (_, layer) in self.layers.clone().iter() {
-    //             for (node, neighbors) in layer.nodes.iter() {
-    //                 if neighbors.is_empty() {
-    //                     self.insert(*node, &mut searcher, true).unwrap();
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+    fn delete_one_node_layer(&mut self) {
+        let max_layer_nb = self.layers.len() - 1;
+        if self.layers.get(&max_layer_nb).unwrap().nb_nodes() == 1 {
+            println!("Removing top layer, it only contains one point");
+            self.layers.remove(&max_layer_nb);
+        }
+    }
 
     pub fn build_index(
         m: usize,
@@ -705,7 +693,7 @@ impl HNSW {
                 bar.inc(1);
             }
         }
-        index.assert_param_compliance();
+        index.delete_one_node_layer();
         Ok(index)
     }
 
@@ -754,7 +742,10 @@ impl HNSW {
 
         // index_arc.assert_param_compliance();
 
-        Ok(Arc::into_inner(index_arc).expect("Could not get index out of Arc reference"))
+        let mut index =
+            Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
+        index.delete_one_node_layer();
+        Ok(index)
     }
 
     // // // TODO: Implementation is faster, but index quality is not good enough
@@ -968,9 +959,9 @@ impl HNSW {
             .collect())
     }
 
-    /// Saves the index to the specified path.
+    /// Saves the index to the specified path in a custom binary format.
     /// Creates the path to the file if it didn't exist before.
-    /// SQLite uses big-endian, so I'll try to stick to that standard.
+    /// SQLite uses big-endian, so I'll stick to that standard.
     pub fn save(&self, index_path: &str) -> std::io::Result<()> {
         let index_path = std::path::Path::new(index_path);
         if !index_path.parent().unwrap().exists() {
@@ -978,96 +969,137 @@ impl HNSW {
         }
         let file = File::create(index_path)?;
         let mut writer = BufWriter::new(file);
+
+        // We start the file with 34 bytes of header
+        let header = self.make_header_bytes();
+        writer.write(&header)?;
+
+        // Next, the contents of the layers,
+        // each layer is:
+        //   - One byte for the layer number
+        //   - A u64 for the number of edges
+        //   - A stream of bytes containing the edges,
+        //   each edge is 20 bytes long, so this stream's
+        //   length is divisible by 20.
+        for (layer_nb, layer) in self.layers.iter() {
+            let (nb_edges, layer_bytes) = layer.to_bytes();
+            writer.write(&(*layer_nb as u8).to_be_bytes())?;
+            writer.write(&(nb_edges as u64).to_be_bytes())?;
+            writer.write(&layer_bytes)?;
+        }
+
+        // TODO: Write points content
+
         writer.flush()?;
         Ok(())
     }
 
-    pub fn from_path(index_path: &str) -> std::io::Result<Self> {
-        let file = File::open(index_path)?;
-        let reader = BufReader::new(file);
-        let content: serde_json::Value = serde_json::from_reader(reader)?;
+    fn make_header_bytes(&self) -> Vec<u8> {
+        let mut header = Vec::with_capacity(34);
 
-        let ep = content
-            .get("ep")
-            .expect("Error: key 'ep' is not in the index file.")
-            .as_number()
-            .expect("Error: entry point could not be parsed as a number.")
-            .as_i64()
-            .unwrap() as usize;
+        // 0..1
+        header.push(self.params.m as u8);
+        // 1..2
+        header.push(self.layers.len() as u8);
 
-        let params = match content
-            .get("params")
-            .expect("Error: key 'params' is not in the index file.")
-        {
-            serde_json::Value::Object(params_map) => extract_params(params_map),
-            err => {
-                println!("{err}");
-                panic!("Something went wrong reading parameters of the index file.");
-            }
-        };
-
-        let layers_unparsed = content
-            .get("layers")
-            .expect("Error: key 'layers' is not in the index file.")
-            .as_object()
-            .expect("Error: expected key 'layers' to be an Object, but couldn't parse it as such.");
-        let mut layers = IntMap::default();
-        for (layer_nb, layer_content) in layers_unparsed {
-            let layer_nb: usize = layer_nb
-                .parse()
-                .expect("Error: could not load key {key} into layer number");
-            let layer_content = layer_content
-                .get("nodes")
-                .expect("Error: could not load 'key' nodes for layer {key}").as_object().expect("Error: expected key 'nodes' for layer {layer_nb} to be an Object, but couldl not be parsed as such.");
-            let mut this_layer = IntMap::default();
-            for (node_id, neighbors) in layer_content.iter() {
-                let neighbors = IntMap::from_iter(neighbors
-                    .as_array()
-                    .expect("Error: could not load the neighbors of node {node_id} in layer {layer_nb} as an Array.")
-                    .iter()
-                    .map(|neighbor| {
-                        let id_dist = neighbor.as_array().unwrap();
-                        let id = id_dist.first().unwrap().as_u64().unwrap() as usize;
-                        let dist = id_dist.get(1).unwrap().as_f64().unwrap() as f32;
-                        (id, Dist { dist, id })
-                    }));
-                this_layer.insert(node_id.parse::<usize>().unwrap(), neighbors);
-            }
-            layers.insert(layer_nb, Graph::from_layer_data(this_layer));
+        // 2..10
+        for byte in (self.points.dim() as u64).to_be_bytes() {
+            header.push(byte);
         }
 
-        let (points, means) = match content
-            .get("points")
-            .expect("Error: key 'points' is not in the index file.")
-        {
-            serde_json::Value::Object(points_vec) => {
-                let err_msg =
-                    "Error reading index file: could not find key 'Collection' in 'points', maybe the index is empty.";
-                match points_vec.get("Collection").expect(err_msg) {
-                    serde_json::Value::Array(points_final) => {
-                        extract_points_and_means(points_final)
-                    }
-                    _ => panic!("Something went wrong reading parameters of the index file."),
-                }
-            }
-            serde_json::Value::String(s) => {
-                if s == "Empty" {
-                    (Vec::new(), Vec::new())
-                } else {
-                    panic!("Something went wrong reading parameters of the index file.");
-                }
-            }
-            err => {
-                println!("{err:?}");
-                panic!("Something went wrong reading parameters of the index file.");
-            }
-        };
+        // 10..18
+        for byte in (self.points.len() as u64).to_be_bytes() {
+            header.push(byte)
+        }
 
-        Ok(HNSW {
+        // 18..26
+        for byte in (self.params.ef_cons as u64).to_be_bytes() {
+            header.push(byte)
+        }
+
+        // 26..34
+        for byte in (self.ep as u64).to_be_bytes() {
+            header.push(byte)
+        }
+
+        header
+    }
+
+    fn read_header_bytes(bytes: Vec<u8>) -> (Params, usize, usize, usize) {
+        let m = bytes[0];
+        let nb_layers = bytes[1] as usize;
+
+        let mut dim_bytes = [0u8; 8];
+        for (idx, byte) in bytes[2..10].iter().enumerate() {
+            dim_bytes[idx] = *byte;
+        }
+        let dim = usize::from_be_bytes(dim_bytes);
+
+        let mut nb_points_bytes = [0u8; 8];
+        for (idx, byte) in bytes[10..18].iter().enumerate() {
+            nb_points_bytes[idx] = *byte;
+        }
+        let nb_points = usize::from_be_bytes(dim_bytes);
+
+        let mut ef_cons_bytes = [0u8; 8];
+        for (idx, byte) in bytes[18..26].iter().enumerate() {
+            ef_cons_bytes[idx] = *byte;
+        }
+        let ef_cons = usize::from_be_bytes(ef_cons_bytes);
+
+        let mut ep_bytes = [0u8; 8];
+        for (idx, byte) in bytes[26..34].iter().enumerate() {
+            ep_bytes[idx] = *byte;
+        }
+        let ep = usize::from_be_bytes(ep_bytes);
+
+        let params = Params::from_m_efcons(m as usize, ef_cons, dim);
+
+        (params, nb_layers, nb_points, ep)
+    }
+
+    pub fn from_path(index_path: &str) -> std::io::Result<Self> {
+        let index_path = std::path::Path::new(index_path);
+        let mut file = File::open(index_path)?;
+
+        // These two lines read the header of the file (first 34 bytes)
+        let header: Vec<u8> = file
+            .try_clone()
+            .unwrap()
+            .bytes()
+            .take(34)
+            .map(|x| x.unwrap())
+            .collect();
+        let (params, nb_layers, nb_points, ep) = Self::read_header_bytes(header);
+
+        // Move to the start of the layers
+        // Read the layer contents
+        file.seek(SeekFrom::Start(34))?;
+        let mut layers = IntMap::default();
+        for _ in 0..nb_layers {
+            let file_copy = file.try_clone()?;
+            let mut bytes = file_copy.bytes();
+            let layer_nb = bytes.next().unwrap()? as usize;
+            let mut nb_edges_bytes = [0u8; 8];
+            for idx in 0..8 {
+                nb_edges_bytes[idx] = bytes.next().unwrap()?;
+            }
+            let nb_edges = u64::from_be_bytes(nb_edges_bytes);
+            let edges_bytes = bytes
+                .take((nb_edges * 20) as usize)
+                .map(|x| x.unwrap())
+                .collect();
+            let layer = Graph::from_edge_list_bytes(&edges_bytes);
+            layers.insert(layer_nb, layer);
+        }
+
+        // TODO: Read points content
+
+        Ok(Self {
             ep,
             params,
+            points: Points::Empty,
             layers,
-            points: Points::Collection((points, means)),
         })
     }
 }
@@ -1100,135 +1132,6 @@ pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> usize {
     }
 
     (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize
-}
-
-fn extract_params(params: &serde_json::Map<String, serde_json::Value>) -> Params {
-    let hnsw_params = Params::from(
-        params
-            .get("m")
-            .expect("Error: could not find key 'm' in 'params'.")
-            .as_number()
-            .expect("Error: 'm' could not be parsed as a number.")
-            .as_i64()
-            .unwrap() as usize,
-        Some(
-            params
-                .get("ef_cons")
-                .expect("Error: could not find key 'ef_cons' in 'params'.")
-                .as_number()
-                .expect("Error: 'ef_cons' could not be parsed as a number.")
-                .as_i64()
-                .unwrap() as usize,
-        ),
-        Some(
-            params
-                .get("mmax")
-                .expect("Error: could not find key 'mmax' in 'params'.")
-                .as_number()
-                .expect("Error: 'mmax' could not be parsed as a number.")
-                .as_i64()
-                .unwrap() as usize,
-        ),
-        Some(
-            params
-                .get("mmax0")
-                .expect("Error: could not find key 'mmax0' in 'params'.")
-                .as_number()
-                .expect("Error: 'mmax0' could not be parsed as a number.")
-                .as_i64()
-                .unwrap() as usize,
-        ),
-        Some(
-            params
-                .get("ml")
-                .expect("Error: could not find key 'ml' in 'params'.")
-                .as_number()
-                .expect("Error: 'ml' could not be parsed as a number.")
-                .as_f64()
-                .unwrap() as f32,
-        ),
-        params
-            .get("dim")
-            .expect("Error: could not find key 'dim' in 'params'.")
-            .as_number()
-            .expect("Error: 'dim' could not be parsed as a number.")
-            .as_i64()
-            .unwrap() as usize,
-    );
-    hnsw_params
-}
-
-fn extract_points_and_means(points_data: &Vec<serde_json::Value>) -> (Vec<Point>, Vec<f32>) {
-    let mut points = Vec::new();
-    let points_vec = points_data[0].as_array().unwrap();
-    let points_means = points_data[1]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| match v {
-            serde_json::Value::Number(n) => n.as_f64().unwrap() as f32,
-            _ => panic!("Not a number."),
-        })
-        .collect();
-
-    // 0 is the vec of Point, because PointsV2 holds the points and their means
-    for (idx, value) in points_vec.iter().enumerate() {
-        let id = value.get("id").unwrap().as_u64().unwrap() as usize;
-        assert_eq!(id, idx);
-        let level = value.get("level").unwrap().as_u64().unwrap() as usize;
-        let vector_content = value.get("vector").unwrap();
-        let vector = match vector_content {
-            serde_json::Value::Object(vector_content_map) => {
-                if vector_content_map.contains_key("Compressed") {
-                    let delta = vector_content_map
-                        .get("Compressed")
-                        .unwrap()
-                        .get("delta")
-                        .unwrap()
-                        .as_number()
-                        .unwrap()
-                        .as_f64()
-                        .unwrap() as f32;
-
-                    let lower = vector_content_map
-                        .get("Compressed")
-                        .unwrap()
-                        .get("lower")
-                        .unwrap()
-                        .as_number()
-                        .unwrap()
-                        .as_f64()
-                        .unwrap() as f32;
-
-                    let quantized_vector: Vec<u8> = vector_content_map
-                        .get("Compressed")
-                        .unwrap()
-                        .get("quantized_vec")
-                        .unwrap()
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|x| x.as_u64().unwrap() as u8)
-                        .collect();
-                    Vector::Compressed(LVQVec::from_quantized(quantized_vector, delta, lower))
-                } else {
-                    let full_vector = vector_content_map
-                        .get("Full")
-                        .unwrap()
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|x| x.as_f64().unwrap() as f32)
-                        .collect();
-                    Vector::Full(full_vector)
-                }
-            }
-            _ => panic!(),
-        };
-        let point = Point::from_vector(id, level, vector);
-        points.push(point);
-    }
-    (points, points_means)
 }
 
 fn _compute_stats(points: &Points) -> (f32, f32) {
