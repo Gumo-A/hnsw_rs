@@ -8,7 +8,7 @@ use crate::{helpers::data::split_ids, hnsw::params::Params};
 use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::{IntMap, IntSet};
 
-use std::{cmp::Reverse, collections::BTreeSet, sync::Arc};
+use std::{cmp::Reverse, collections::BTreeSet, sync::Arc, time::Instant};
 
 use rand::rngs::ThreadRng;
 use rand::Rng;
@@ -628,7 +628,7 @@ impl HNSW {
     /// Creates all the layers and stores the points in their levels.
     /// Stores the Point structs in index.points.
     fn store_points(&mut self, vectors: Vec<Vec<f32>>) {
-        let points = Points::from_vecs(vectors, self.params.ml);
+        let points = Points::from_vecs_quant(vectors, self.params.ml);
         // TODO: if this is a bulk update, make sure to use the max between
         // the current max level and the new points' max level.
         let max_layer_nb = points
@@ -973,6 +973,14 @@ impl HNSW {
         // We start the file with 34 bytes of header
         let header = self.make_header_bytes();
         writer.write(&header)?;
+        // let mut nb_points_bytes = [0u8; 8];
+        // for i in 0..8 {
+        //     nb_points_bytes[i] = header[i + 10];
+        // }
+        // println!(
+        //     "While saving, nb_points is {}",
+        //     u64::from_be_bytes(nb_points_bytes)
+        // );
 
         // Next, the contents of the layers,
         // each layer is:
@@ -980,15 +988,50 @@ impl HNSW {
         //   - A u64 for the number of edges
         //   - A stream of bytes containing the edges,
         //   each edge is 20 bytes long, so this stream's
-        //   length is divisible by 20.
+        //   length has to be divisible by 20.
         for (layer_nb, layer) in self.layers.iter() {
             let (nb_edges, layer_bytes) = layer.to_bytes();
             writer.write(&(*layer_nb as u8).to_be_bytes())?;
             writer.write(&(nb_edges as u64).to_be_bytes())?;
+            println!(
+                "Writting layer {layer_nb}, which has {nb_edges} edges ({0} bytes)",
+                nb_edges * 20
+            );
             writer.write(&layer_bytes)?;
         }
 
-        // TODO: Write points content
+        // We then store the means of the stored vectors,
+        // It's just a stream of f32s of length dimensions.
+        let means_bytes: Vec<[u8; 4]> = match &self.points {
+            Points::Empty => {
+                println!("No points in the index.");
+                std::process::exit(1);
+            }
+            Points::Collection(c) => c.1.iter().map(|float| float.to_be_bytes()).collect(),
+        };
+        for float in means_bytes {
+            writer.write(&float)?;
+        }
+
+        // The points follow, they are stored in LVQ quantized format.
+        // We already know the dimension of the vectors, how many there
+        // are and where they start (because they start as soon as the
+        // layers finish). So after the last layer byte, they are stored
+        // as follows:
+        //   - A u64 for its ID
+        //   - A u8 for its level
+        //   - An f32 for the delta value
+        //   - An f32 for the low value
+        //   - A stream of u8, of length equal to the dimension of the vectors
+        // One point will thus take 17 + dimension bytes of storage.
+        for (id, point) in self.points.iterate() {
+            let point_quant = point.vector.get_quantized();
+            writer.write(&id.to_be_bytes())?;
+            writer.write(&(point.level as u8).to_be_bytes())?;
+            writer.write(&point_quant.delta.to_be_bytes())?;
+            writer.write(&point_quant.lower.to_be_bytes())?;
+            writer.write(&point_quant.quantized_vec)?;
+        }
 
         writer.flush()?;
         Ok(())
@@ -1009,8 +1052,9 @@ impl HNSW {
 
         // 10..18
         for byte in (self.points.len() as u64).to_be_bytes() {
-            header.push(byte)
+            header.push(byte);
         }
+        println!("Making header, there are {} points", self.points.len());
 
         // 18..26
         for byte in (self.params.ef_cons as u64).to_be_bytes() {
@@ -1021,6 +1065,8 @@ impl HNSW {
         for byte in (self.ep as u64).to_be_bytes() {
             header.push(byte)
         }
+
+        assert_eq!(header.len(), 34);
 
         header
     }
@@ -1039,7 +1085,7 @@ impl HNSW {
         for (idx, byte) in bytes[10..18].iter().enumerate() {
             nb_points_bytes[idx] = *byte;
         }
-        let nb_points = usize::from_be_bytes(dim_bytes);
+        let nb_points = usize::from_be_bytes(nb_points_bytes);
 
         let mut ef_cons_bytes = [0u8; 8];
         for (idx, byte) in bytes[18..26].iter().enumerate() {
@@ -1062,6 +1108,17 @@ impl HNSW {
         let index_path = std::path::Path::new(index_path);
         let mut file = File::open(index_path)?;
 
+        file.seek(SeekFrom::End(0))?;
+        let bar = ProgressBar::new(file.stream_position()?);
+        bar.set_style(
+            ProgressStyle::with_template(
+                "Loading Index {bar:40.cyan/blue} {bytes}/{total_bytes} {bytes_per_sec}",
+            )
+            .unwrap()
+            .progress_chars("##-"),
+        );
+        file.seek(SeekFrom::Start(0))?;
+
         // These two lines read the header of the file (first 34 bytes)
         let header: Vec<u8> = file
             .try_clone()
@@ -1070,13 +1127,18 @@ impl HNSW {
             .take(34)
             .map(|x| x.unwrap())
             .collect();
+        assert_eq!(header.len(), 34);
         let (params, nb_layers, nb_points, ep) = Self::read_header_bytes(header);
+        bar.inc(34);
+        println!("Read header");
 
         // Move to the start of the layers
         // Read the layer contents
         file.seek(SeekFrom::Start(34))?;
         let mut layers = IntMap::default();
         for _ in 0..nb_layers {
+            let start = Instant::now();
+            println!("Reading a layer");
             let file_copy = file.try_clone()?;
             let mut bytes = file_copy.bytes();
             let layer_nb = bytes.next().unwrap()? as usize;
@@ -1085,20 +1147,64 @@ impl HNSW {
                 nb_edges_bytes[idx] = bytes.next().unwrap()?;
             }
             let nb_edges = u64::from_be_bytes(nb_edges_bytes);
-            let edges_bytes = bytes
-                .take((nb_edges * 20) as usize)
-                .map(|x| x.unwrap())
-                .collect();
-            let layer = Graph::from_edge_list_bytes(&edges_bytes);
+            bar.inc(8);
+            // let edges_bytes = bytes
+            //     .take((nb_edges * 20) as usize)
+            //     .map(|x| x.unwrap())
+            //     .collect();
+            let mut edges_bytes = vec![0u8; nb_edges as usize * 20];
+            file.read_exact(&mut edges_bytes)?;
+            let layer = Graph::from_edge_list_bytes(&edges_bytes, &bar);
             layers.insert(layer_nb, layer);
+            println!(
+                "Read layer {}, elapsed: {}s",
+                layer_nb,
+                start.elapsed().as_secs()
+            );
         }
 
-        // TODO: Read points content
+        println!("Reading vector means");
+        let mut means = Vec::with_capacity(params.dim);
+        for _ in 0..params.dim {
+            let mut float32 = [0u8; 4];
+            file.read_exact(&mut float32)?;
+            means.push(f32::from_be_bytes(float32));
+            bar.inc(4);
+        }
+        println!("Read vector means");
+
+        let points_start_pos = file.stream_position()?;
+        file.seek(SeekFrom::End(0))?;
+        let file_length_bytes = file.stream_position()?;
+
+        if (file_length_bytes - points_start_pos) % (17 + params.dim as u64) != 0 {
+            println!("Error while reading points in index file:");
+            println!("The size of the file does not fit with the expected size.");
+            std::process::exit(1);
+        }
+
+        let start = Instant::now();
+        println!("Reading vectors");
+        file.seek(SeekFrom::Start(points_start_pos))?;
+        let mut vectors = Vec::new();
+        while file.stream_position()? < file_length_bytes {
+            let mut point_bytes = vec![0u8; 17 + params.dim];
+            file.read_exact(&mut point_bytes)?;
+            vectors.push(Point::from_bytes_quant(&point_bytes));
+            bar.inc(17 + params.dim as u64);
+        }
+        println!("Read vectors, elapsed: {}s", start.elapsed().as_secs());
+        assert_eq!(vectors.len(), nb_points);
+
+        // The points should be sorted by ID anyway, so this will
+        // only check the values are sorted, probably.
+        vectors.sort_by_key(|p| p.id);
+        let points = Points::Collection((vectors, means));
 
         Ok(Self {
             ep,
             params,
-            points: Points::Empty,
+            points,
             layers,
         })
     }

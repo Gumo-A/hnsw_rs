@@ -49,14 +49,20 @@ fn main() -> std::io::Result<()> {
 
     let embs = train_set.clone();
     let start = Instant::now();
-    let index = HNSW::build_index_par(m, Some(100), embs, true).unwrap();
+    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
     let end = Instant::now();
+
+    println!("Saving index to current dir...");
+    index.save("./index.ann")?;
+    let index = HNSW::from_path("./index.ann")?;
+
     index.print_index();
     println!(
         "Multi-thread (v3) elapsed time: {}ms",
         start.elapsed().as_millis() - end.elapsed().as_millis()
     );
     estimate_recall(&index, &test_set, &bf_data);
+
     // index.assert_param_compliance();
 
     let train_words: Vec<String> = words

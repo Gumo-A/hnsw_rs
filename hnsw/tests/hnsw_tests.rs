@@ -48,8 +48,9 @@ fn hnsw_serialize() {
     let loaded_index = HNSW::from_path(index_path).unwrap();
     loaded_index.print_index();
 
-    assert_eq!(N, loaded_index.points.len());
     std::fs::remove_file(index_path).unwrap();
+
+    assert_eq!(N, loaded_index.points.len());
 }
 
 #[test]

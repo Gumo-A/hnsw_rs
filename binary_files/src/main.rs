@@ -91,12 +91,41 @@ fn modify(path: &str) -> std::io::Result<()> {
 
     println!("Read two bytes from copy");
 
-    let bytes = file.bytes();
+    let bytes = file.try_clone().unwrap().bytes();
     for i in bytes.take(2) {
         println!("{}", i?);
     }
 
     println!("Read two bytes from org");
+
+    file.rewind()?;
+    println!("Went back to the start");
+
+    file.seek(SeekFrom::End(0))?;
+    let max_pos = file.stream_position()?;
+    println!("I know the file has {} bytes", max_pos);
+    file.rewind()?;
+    while file.stream_position()? < max_pos {
+        let mut buf = [0; 3];
+        file.read_exact(&mut buf)?;
+        println!("{buf:?}");
+    }
+    println!("So I can read its contents like this.");
+
+    file.rewind()?;
+    println!("How about this?");
+    loop {
+        let mut buf = [0; 1];
+        match file.read_exact(&mut buf) {
+            Ok(()) => {}
+            Err(err) => {
+                println!("{err}");
+                break;
+            }
+        }
+        println!("{buf:?}");
+    }
+    println!("I can also do the same thing by matching and handling the error.");
 
     Ok(())
 }

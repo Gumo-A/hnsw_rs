@@ -80,6 +80,39 @@ impl Point {
         Point { id, level, vector }
     }
 
+    pub fn from_bytes_quant(bytes: &Vec<u8>) -> Point {
+        let mut id_bytes = [0u8; 8];
+        for i in 0..8 {
+            id_bytes[i] = bytes[i];
+        }
+        let id = u64::from_be_bytes(id_bytes) as usize;
+
+        let level = bytes[8] as usize;
+
+        let offset = 9;
+
+        let mut delta_bytes = [0u8; 4];
+        let mut lower_bytes = [0u8; 4];
+        for i in 0..4 {
+            delta_bytes[i] = bytes[offset + i];
+        }
+
+        let offset = 13;
+        for i in 0..4 {
+            lower_bytes[i] = bytes[offset + i];
+        }
+
+        let quantized_vec = bytes[17..].to_vec();
+
+        let vector = Vector::Compressed(LVQVec::from_quantized(
+            quantized_vec,
+            f32::from_be_bytes(delta_bytes),
+            f32::from_be_bytes(lower_bytes),
+        ));
+
+        Point { id, level, vector }
+    }
+
     pub fn dist2other(&self, other: &Point) -> Dist {
         self.dist2vec(&other.vector, other.id)
     }
@@ -146,7 +179,7 @@ pub enum Points {
 }
 
 impl Points {
-    pub fn from_vecs(mut vectors: Vec<Vec<f32>>, ml: f32) -> Self {
+    pub fn from_vecs_quant(mut vectors: Vec<Vec<f32>>, ml: f32) -> Self {
         let mut rng = rand::thread_rng();
 
         let mut means = Vec::from_iter((0..vectors[0].len()).map(|_| 0.0));

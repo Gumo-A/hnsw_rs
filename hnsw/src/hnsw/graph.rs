@@ -1,4 +1,5 @@
 use core::panic;
+use indicatif::ProgressBar;
 use nohash_hasher::{IntMap, IntSet};
 use std::{
     collections::HashSet,
@@ -36,7 +37,7 @@ impl Graph {
         Self { nodes }
     }
 
-    pub fn from_edge_list(list: &Vec<(u64, u64, f32)>) -> Self {
+    pub fn from_edge_list(list: &Vec<(u64, u64, f32)>, bar: &ProgressBar) -> Self {
         let mut nodes: IntMap<usize, Arc<Mutex<IntSet<Dist>>>> = IntMap::default();
         for (node_a, node_b, weight) in list.iter() {
             let node_a = *node_a as usize;
@@ -58,11 +59,12 @@ impl Graph {
                 .or_insert(Arc::new(Mutex::new(IntSet::from_iter([Dist::new(
                     *weight, node_a,
                 )]))));
+            bar.inc(20);
         }
         Self { nodes }
     }
 
-    pub fn from_edge_list_bytes(list: &Vec<u8>) -> Self {
+    pub fn from_edge_list_bytes(list: &Vec<u8>, bar: &ProgressBar) -> Self {
         let mut list_parsed = Vec::new();
         assert_eq!(list.len() % 20, 0);
 
@@ -87,7 +89,7 @@ impl Graph {
             ));
             cursor += 20;
         }
-        Self::from_edge_list(&list_parsed)
+        Self::from_edge_list(&list_parsed, bar)
     }
 
     pub fn to_edge_list(&self) -> Vec<(u64, u64, f32)> {
