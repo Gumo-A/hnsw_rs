@@ -107,9 +107,9 @@ pub fn brute_force_nns(
     nb_nns: usize,
     train_set: Arc<Points>,
     test_set: Arc<Points>,
-    ids: Vec<usize>,
+    ids: Vec<u32>,
     verbose: bool,
-) -> HashMap<usize, Vec<usize>> {
+) -> HashMap<u32, Vec<u32>> {
     let bar = if verbose {
         let bar = ProgressBar::new(ids.len() as u64);
         bar.set_style(
@@ -124,10 +124,10 @@ pub fn brute_force_nns(
         ProgressBar::hidden()
     };
 
-    let mut brute_force_results: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut brute_force_results: HashMap<u32, Vec<u32>> = HashMap::new();
     for idx in ids.iter() {
-        let query = test_set.get_point(*idx).unwrap();
-        let nns: Vec<usize> = get_nn_bf(query, &train_set, nb_nns);
+        let query = test_set.get_point(*idx as u32).unwrap();
+        let nns: Vec<u32> = get_nn_bf(query, &train_set, nb_nns);
         assert_eq!(nb_nns, nns.len());
         brute_force_results.insert(*idx, nns);
         bar.inc(1);
@@ -136,15 +136,20 @@ pub fn brute_force_nns(
     brute_force_results
 }
 
-fn get_nn_bf(point: &Point, others: &Arc<Points>, nb_nns: usize) -> Vec<usize> {
+fn get_nn_bf(point: &Point, others: &Arc<Points>, nb_nns: usize) -> Vec<u32> {
     let sorted = sort_by_distance(point, others);
-    sorted.values().copied().take(nb_nns).collect()
+    sorted
+        .values()
+        .copied()
+        .take(nb_nns)
+        .map(|x| x as u32)
+        .collect()
 }
 
 fn sort_by_distance(point: &Point, others: &Arc<Points>) -> BTreeMap<Dist, usize> {
     let result = others.iterate().map(|(idx, p)| {
         let dist = p.dist2other(point);
-        (dist, idx)
+        (dist, idx as usize)
     });
     BTreeMap::from_iter(result)
 }

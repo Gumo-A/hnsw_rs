@@ -5,10 +5,10 @@ use std::io::{BufReader, Result};
 
 use crate::hnsw::points::Point;
 
-pub fn split_ids(ids: Vec<usize>, nb_splits: usize) -> Vec<Vec<usize>> {
+pub fn split_ids(ids: Vec<u32>, nb_splits: u8) -> Vec<Vec<u32>> {
     let mut split_vector = Vec::new();
 
-    let per_split = ids.len() / nb_splits;
+    let per_split = ids.len() / (nb_splits as usize);
 
     let mut buffer = 0;
     for idx in 0..nb_splits {

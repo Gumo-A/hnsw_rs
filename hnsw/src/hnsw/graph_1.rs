@@ -12,49 +12,69 @@ use super::dist::Dist;
 pub struct Graph {
     id_manager: IntMap<u32, usize>,
     deleted_positions: IntSet<usize>,
+    max_degree: u8,
     pub nodes: Vec<Option<Arc<Mutex<IntSet<Dist>>>>>,
 }
 
-impl Default for Graph {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Graph {
-    pub fn new() -> Self {
+    pub fn new(max_degree: u8) -> Self {
         Graph {
             id_manager: IntMap::default(),
+            deleted_positions: IntSet::default(),
             nodes: Vec::new(),
+            max_degree,
         }
     }
 
     pub fn from_edge_list(list: &Vec<(u32, u32, f32)>, bar: &ProgressBar) -> Self {
-        let mut nodes: IntMap<u32, Arc<Mutex<IntSet<Dist>>>> =
-            IntMap::with_capacity_and_hasher(list.len(), BuildNoHashHasher::default());
+        let mut id_manager: IntMap<u32, usize> = IntMap::default();
+        let mut nodes = Vec::new();
+
+        let mut max_degree = 0;
         for (node_a, node_b, weight) in list.iter() {
             let node_a = *node_a;
             let node_b = *node_b;
-            nodes
-                .entry(node_a)
-                .and_modify(|e| {
-                    e.lock().unwrap().insert(Dist::new(*weight, node_b));
-                })
-                .or_insert(Arc::new(Mutex::new(IntSet::from_iter([Dist::new(
-                    *weight, node_b,
-                )]))));
+            if !id_manager.contains_key(&node_a) {
+                id_manager.insert(node_a, nodes.len());
+                nodes.push(Some(Arc::new(Mutex::new(IntSet::default()))));
+            }
+            if !id_manager.contains_key(&node_b) {
+                id_manager.insert(node_b, nodes.len());
+                nodes.push(Some(Arc::new(Mutex::new(IntSet::default()))));
+            }
 
-            nodes
-                .entry(node_b)
-                .and_modify(|e| {
-                    e.lock().unwrap().insert(Dist::new(*weight, node_a));
-                })
-                .or_insert(Arc::new(Mutex::new(IntSet::from_iter([Dist::new(
-                    *weight, node_a,
-                )]))));
+            let a_pos = id_manager.get(&node_a).unwrap();
+            match nodes.get_mut(*a_pos).unwrap() {
+                Some(neighbors) => {
+                    let mut neighs = neighbors.lock().unwrap();
+                    neighs.insert(Dist::new(*weight, node_b));
+                    max_degree = max_degree.max(neighs.len());
+                }
+                None => {
+                    panic!("Failed to build from edge list")
+                }
+            };
+
+            let b_pos = id_manager.get(&node_b).unwrap();
+            match nodes.get_mut(*b_pos).unwrap() {
+                Some(neighbors) => {
+                    let mut neighs = neighbors.lock().unwrap();
+                    neighs.insert(Dist::new(*weight, node_a));
+                    max_degree = max_degree.max(neighs.len());
+                }
+                None => {
+                    panic!("Failed to build from edge list")
+                }
+            };
+
             bar.inc(12);
         }
-        Self { nodes }
+        Self {
+            id_manager,
+            deleted_positions: IntSet::default(),
+            nodes,
+            max_degree: max_degree as u8,
+        }
     }
 
     pub fn from_edge_list_bytes(list: &Vec<u8>, bar: &ProgressBar) -> Self {
@@ -87,27 +107,51 @@ impl Graph {
 
     pub fn to_edge_list(&self) -> Vec<(u32, u32, f32)> {
         let mut list = HashSet::new();
-        for (node, neighbors) in self.nodes.iter() {
+        for (node_id, node_pos) in self.id_manager.iter() {
+            let neighbors = match self.nodes.get(*node_pos) {
+                Some(n) => match n {
+                    Some(nn) => nn,
+                    None => continue,
+                },
+                None => continue,
+            };
             for semi_edge in neighbors.lock().unwrap().iter() {
-                let node_min = node.min(&semi_edge.id);
-                let node_max = node.max(&semi_edge.id);
+                let node_min = node_id.min(&semi_edge.id);
+                let node_max = node_id.max(&semi_edge.id);
                 list.insert((*node_min, *node_max, *semi_edge));
             }
         }
         Vec::from_iter(list.iter().map(|(a, b, dist)| (*a, *b, dist.dist)))
     }
 
-    pub fn to_adjacency_list(&self) -> Vec<(u32, u32, f32)> {
-        let mut list = HashSet::new();
-        for (node, neighbors) in self.nodes.iter() {
-            for semi_edge in neighbors.lock().unwrap().iter() {
-                let node_min = node.min(&semi_edge.id);
-                let node_max = node.max(&semi_edge.id);
-                list.insert((*node_min, *node_max, *semi_edge));
-            }
-        }
-        Vec::from_iter(list.iter().map(|(a, b, dist)| (*a, *b, dist.dist)))
-    }
+    /// The adjacency list is implemented as a tuple that contains:
+    ///   1. A list of neighbors
+    ///   2. An ID manager
+    ///
+    /// A neighbor here is a u32 (the neighbor ID) and an f32 (the neighbor's distance to the node).
+    /// The list of neighbors is actually a list of lists of fixed size equal to the maximum number
+    /// of neighbors in this Graph. This allows for the list of neighbors to be of size max_degree * nb_nodes,
+    /// which facilitates looking for a node's neighbors. If a node does not have max_degree neighbors, its
+    /// corresponding list will still be of length max_degree, only the last entries will contain a placeholder
+    /// value (u32::MAX and f32::MAX, I think). On disk, this list of neighbors will thus take:
+    ///   **(4 + 4) * max_degree * nb_nodes** bytes of space
+    ///
+    /// This list of neighbors is accompanied by the ID manager, which is supposed to be loaded on main memory
+    /// as a HashMap. It consists of u32-u64 pairs, mapping the ID of the node to the position of its neighbors
+    /// in the list of neighbors. Note that this mapping is with respect to the position of the node's list of
+    /// neighbors in the outter list. So the position of a node's first neighbor in the outter list is the value
+    /// returned by the ID manager * max_degree, and then, from that position, the next max_degree neighbors (u32,
+    /// f32 pairs) are that node's neighbors.
+    ///
+    /// So, when this adjacency list is stored in the disk, and we want to find a node's neighbors, we will have
+    /// to do the following:
+    ///   - Load the ID manager into main memory
+    ///   - Get the position of the node from the ID manager (refered here as 'node_pos')
+    ///   - Compute the position of the node's first neighbor in the file:
+    ///     - node_pos * max_degree * 8 (plus a offset, eventually)
+    ///   - Use that to find the first neighbor
+    ///   - Read from that position to the next max_degree * 8 bytes to get all that node's neighbors.
+    pub fn to_adjacency_list(&self) -> (Vec<(u32, f32)>, Vec<(u32, usize)>) {}
 
     pub fn to_edge_list_bytes(&self) -> Vec<Vec<u8>> {
         self.to_edge_list()

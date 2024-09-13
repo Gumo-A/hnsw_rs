@@ -16,18 +16,20 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use core::panic;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+
+const HEADER_SIZE: usize = 19;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Searcher {
     selected: BinaryHeap<Dist>,
     candidates: BinaryHeap<Reverse<Dist>>,
-    visited: IntSet<usize>,
+    visited: IntSet<u32>,
     visited_heuristic: BinaryHeap<Reverse<Dist>>,
-    insertion_results: IntMap<usize, IntMap<usize, BinaryHeap<Dist>>>,
-    prune_results: IntMap<usize, IntMap<usize, BinaryHeap<Dist>>>,
+    insertion_results: IntMap<u8, IntMap<u32, BinaryHeap<Dist>>>,
+    prune_results: IntMap<u8, IntMap<u32, BinaryHeap<Dist>>>,
 }
 
 impl Searcher {
@@ -60,19 +62,20 @@ impl Searcher {
 }
 
 #[derive(Debug, Clone)]
-// #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HNSW {
-    ep: usize,
+    ep: u32,
     pub params: Params,
     pub points: Points,
-    pub layers: IntMap<usize, Graph>,
+    pub layers: IntMap<u8, Graph>,
 }
 
 impl HNSW {
-    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
+    pub fn new(m: u8, ef_cons: Option<u32>, dim: u32) -> Self {
         // limit m to 128 so the serialization file's header is cleaner
         if m > 128 {
-            panic!("The 'm' parameter is limited to 128 in this implementation. Increase ef_cons if you want a higher quality index.")
+            println!("The 'm' parameter is limited to 128 in this implementation.");
+            println!("Increase ef_cons if you want a higher quality index.");
+            std::process::exit(0);
         }
         let params = if ef_cons.is_some() {
             Params::from_m_efcons(m, ef_cons.unwrap(), dim)
@@ -132,12 +135,7 @@ impl HNSW {
         println!("ep: {:?}", self.ep);
     }
 
-    pub fn ann_by_vector(
-        &self,
-        vector: &Vec<f32>,
-        n: usize,
-        ef: usize,
-    ) -> Result<Vec<usize>, String> {
+    pub fn ann_by_vector(&self, vector: &Vec<f32>, n: usize, ef: u32) -> Result<Vec<u32>, String> {
         let mut searcher = Searcher::new();
 
         let point = Point::new_quantized(0, 0, &self.center_vector(vector)?);
@@ -147,7 +145,7 @@ impl HNSW {
             .push(point.dist2other(self.points.get_point(self.ep).unwrap()));
         let nb_layer = self.layers.len();
 
-        for layer_nb in (1..nb_layer).rev() {
+        for layer_nb in (1..nb_layer).rev().map(|x| x as u8) {
             self.search_layer(
                 &mut searcher,
                 self.layers.get(&(layer_nb)).unwrap(),
@@ -163,77 +161,26 @@ impl HNSW {
         Ok(anns.iter().take(n).map(|x| x.id).collect())
     }
 
-    // TODO: multithreaded
-    // pub fn anns_by_vectors(
-    //     index: &Self,
-    //     vectors: &Vec<Vec<f32>>,
-    //     n: usize,
-    //     ef: usize,
-    //     verbose: bool,
-    // ) -> Result<Vec<Vec<usize>>, String> {
-    //     let nb_threads = std::thread::available_parallelism().unwrap().get();
-    //     let per_thread = vectors.len() / nb_threads;
-    //     let index_arc = Arc::new(index);
-    //     let vectors_arc = Arc::new(vectors);
-
-    //     let mut handlers = Vec::new();
-    //     std::thread::scope(|s| {
-    //         let mut buffer = 0;
-    //         for thread_idx in 0..nb_threads {
-    //             let vectors_ref = Arc::clone(&vectors_arc);
-    //             let thread_vector_ids = if thread_idx == (nb_threads - 1) {
-    //                 buffer..vectors_ref.len()
-    //             } else {
-    //                 buffer..(buffer + per_thread)
-    //             };
-    //             let thread_len = thread_vector_ids.clone().count();
-    //             buffer += per_thread;
-    //             let index_ref = Arc::clone(&index_arc);
-    //             handlers.push(
-    //                 s.spawn(move || -> Result<(usize, Vec<Vec<usize>>), String> {
-    //                     let mut thread_results = Vec::with_capacity(thread_len);
-    //                     let bar = get_progress_bar(
-    //                         format!("T{thread_idx}: Finding ANNs with ef{ef}"),
-    //                         thread_len,
-    //                         verbose,
-    //                     );
-    //                     for i in thread_vector_ids {
-    //                         thread_results.push(index_ref.ann_by_vector(
-    //                             vectors_ref.get(i).unwrap(),
-    //                             n,
-    //                             ef,
-    //                         )?);
-    //                         bar.inc(1);
-    //                     }
-    //                     Ok((thread_idx, thread_results))
-    //                 }),
-    //             );
-    //         }
-    //     });
-
-    //     let mut intermediate_results: Vec<(usize, Vec<Vec<usize>>)> =
-    //         Vec::with_capacity(nb_threads);
-    //     for handle in handlers {
-    //         let thread_results = handle.join().unwrap()?;
-    //         intermediate_results.push(thread_results);
-    //     }
-    //     intermediate_results.sort_by_key(|(thread_idx, _)| *thread_idx);
-    //     let results = Vec::from_iter(
-    //         intermediate_results
-    //             .iter()
-    //             .map(|(_, thread_results)| thread_results.iter().cloned())
-    //             .flatten(),
-    //     );
-    //     Ok(results)
-    // }
+    /// Like its on-memory counterpart, but does not load the index
+    /// to main memory. Rather, it reads from a file on disk.
+    pub fn ann_by_vector_disk(
+        index_path: &str,
+        vector: &Vec<f32>,
+        n: usize,
+        ef: u32,
+    ) -> std::io::Result<()> {
+        let index_path = std::path::Path::new(index_path);
+        let file = File::open(index_path)?;
+        Ok(())
+    }
 
     fn step_1(
         &self,
         searcher: &mut Searcher,
         point: &Point,
-        max_layer_nb: usize,
-        level: usize,
-        stop_at_layer: Option<usize>,
+        max_layer_nb: u8,
+        level: u8,
+        stop_at_layer: Option<u8>,
     ) -> Result<(), String> {
         // let mut ep = IntSet::default();
         // ep.insert(self.ep);
@@ -253,10 +200,10 @@ impl HNSW {
         Ok(())
     }
 
-    fn step_2(&self, searcher: &mut Searcher, point: &Point, level: usize) -> Result<(), String> {
-        let bound = (level).min(self.layers.len() - 1);
+    fn step_2(&self, searcher: &mut Searcher, point: &Point, level: u8) -> Result<(), String> {
+        let bound = (level).min((self.layers.len() - 1) as u8);
 
-        for layer_nb in (0..=bound).rev() {
+        for layer_nb in (0..=bound).rev().map(|x| x as u8) {
             let layer = self.layers.get(&layer_nb).unwrap();
 
             self.search_layer(searcher, layer, point, self.params.ef_cons)?;
@@ -296,9 +243,9 @@ impl HNSW {
         for (layer_nb, node_neighbors) in searcher.insertion_results.clone().iter() {
             let layer = self.layers.get(layer_nb).unwrap();
             let limit = if *layer_nb == 0 {
-                self.params.mmax0
+                self.params.mmax0 as usize
             } else {
-                self.params.mmax
+                self.params.mmax as usize
             };
 
             for (_, neighbors) in node_neighbors.iter() {
@@ -327,7 +274,7 @@ impl HNSW {
         searcher: &mut Searcher,
         layer: &Graph,
         point: &Point,
-        m: usize,
+        m: u8,
         extend_cands: bool,
         keep_pruned: bool,
     ) -> Result<(), String> {
@@ -360,7 +307,7 @@ impl HNSW {
         searcher.selected.push(dist_e.0);
         // println!("s2 {}", s2.elapsed().as_nanos());
 
-        while (!searcher.candidates.is_empty()) & (searcher.selected.len() < m) {
+        while (!searcher.candidates.is_empty()) & (searcher.selected.len() < m as usize) {
             // let s3 = Instant::now();
             let dist_e = searcher.candidates.pop().unwrap();
             let e_point = self.points.get_point(dist_e.0.id).unwrap();
@@ -381,7 +328,8 @@ impl HNSW {
 
         // let s6 = Instant::now();
         if keep_pruned {
-            while (!searcher.visited_heuristic.is_empty()) & (searcher.selected.len() < m) {
+            while (!searcher.visited_heuristic.is_empty()) & (searcher.selected.len() < m as usize)
+            {
                 let dist_e = searcher.visited_heuristic.pop().unwrap();
                 searcher.selected.push(dist_e.0);
             }
@@ -411,7 +359,7 @@ impl HNSW {
         Ok(BinaryHeap::from_iter(cands.iter().copied().take(m)))
     }
 
-    pub fn insert(&mut self, point_id: usize, searcher: &mut Searcher) -> Result<bool, String> {
+    pub fn insert(&mut self, point_id: u32, searcher: &mut Searcher) -> Result<bool, String> {
         // let s0 = Instant::now();
         searcher.clear_all();
 
@@ -430,7 +378,7 @@ impl HNSW {
             .push(point.dist2other(self.points.get_point(self.ep).unwrap()));
 
         let level = point.level;
-        let max_layer_nb = self.layers.len() - 1;
+        let max_layer_nb = (self.layers.len() - 1) as u8;
         // println!("s0 {}", s0.elapsed().as_nanos());
 
         // let s1 = Instant::now();
@@ -524,9 +472,9 @@ impl HNSW {
     //     Ok(())
     // }
 
-    pub fn insert_par(index: Arc<Self>, ids: Vec<usize>, bar: ProgressBar) -> Result<(), String> {
+    pub fn insert_par(index: Arc<Self>, ids: Vec<u32>, bar: ProgressBar) -> Result<(), String> {
         let mut searcher = Searcher::new();
-        let max_layer_nb = index.layers.len() - 1;
+        let max_layer_nb = (index.layers.len() - 1) as u8;
 
         for point_id in ids.iter() {
             searcher.clear_searchers();
@@ -562,9 +510,9 @@ impl HNSW {
     fn write_results(
         &mut self,
         searcher: &Searcher,
-        point_id: usize,
-        level: usize,
-        max_layer_nb: usize,
+        point_id: u32,
+        level: u8,
+        max_layer_nb: u8,
     ) -> Result<(), String> {
         for (layer_nb, node_data) in searcher.insertion_results.iter() {
             let layer = self.layers.get(&layer_nb).unwrap();
@@ -655,7 +603,7 @@ impl HNSW {
             .unwrap();
     }
 
-    fn first_insert(&mut self, point_id: usize) {
+    fn first_insert(&mut self, point_id: u32) {
         let mut layer = Graph::new();
         layer.add_node(point_id);
         self.layers.insert(0, layer);
@@ -663,22 +611,21 @@ impl HNSW {
     }
 
     fn delete_one_node_layer(&mut self) {
-        let max_layer_nb = self.layers.len() - 1;
+        let max_layer_nb = (self.layers.len() - 1) as u8;
         if self.layers.get(&max_layer_nb).unwrap().nb_nodes() == 1 {
-            println!("Removing top layer, it only contains one point");
             self.layers.remove(&max_layer_nb);
         }
     }
 
     pub fn build_index(
-        m: usize,
-        ef_cons: Option<usize>,
+        m: u8,
+        ef_cons: Option<u32>,
         vectors: Vec<Vec<f32>>,
         verbose: bool,
     ) -> Result<Self, String> {
         let mut searcher = Searcher::new();
         let dim = match vectors.first() {
-            Some(vector) => vector.len(),
+            Some(vector) => vector.len() as u32,
             None => return Err("Could not read vector dimension.".to_string()),
         };
         let mut index = HNSW::new(m, ef_cons, dim);
@@ -686,7 +633,7 @@ impl HNSW {
 
         let bar = get_progress_bar("Inserting Vectors".to_string(), index.points.len(), verbose);
 
-        let ids: Vec<usize> = index.points.ids().collect();
+        let ids: Vec<u32> = index.points.ids().collect();
         for id in ids.iter() {
             index.insert(*id, &mut searcher)?;
             if !bar.is_hidden() {
@@ -698,22 +645,22 @@ impl HNSW {
     }
 
     pub fn build_index_par(
-        m: usize,
-        ef_cons: Option<usize>,
+        m: u8,
+        ef_cons: Option<u32>,
         vectors: Vec<Vec<f32>>,
         verbose: bool,
     ) -> Result<Self, String> {
-        let nb_threads = std::thread::available_parallelism().unwrap().get();
+        let nb_threads = std::thread::available_parallelism().unwrap().get() as u8;
         let dim = match vectors.first() {
-            Some(vector) => vector.len(),
+            Some(vector) => vector.len() as u32,
             None => return Err("Could not read vector dimension.".to_string()),
         };
         let mut index = HNSW::new(m, ef_cons, dim);
         index.store_points(vectors);
         let index_arc = Arc::new(index);
 
-        for layer_nb in (0..index_arc.layers.len()).rev() {
-            let ids: Vec<usize> = index_arc
+        for layer_nb in (0..index_arc.layers.len()).rev().map(|x| x as u8) {
+            let ids: Vec<u32> = index_arc
                 .points
                 .iterate()
                 .filter(|(_, point)| point.level == layer_nb)
@@ -725,7 +672,7 @@ impl HNSW {
             let mut handlers = Vec::new();
             for thread_idx in 0..nb_threads {
                 let index_copy = Arc::clone(&index_arc);
-                let ids_split: Vec<usize> = points_split.pop().unwrap();
+                let ids_split: Vec<u32> = points_split.pop().unwrap();
                 let bar = get_progress_bar(
                     format!("Layer {layer_nb}:"),
                     ids_split.len(),
@@ -836,7 +783,7 @@ impl HNSW {
 
     fn get_nearest<I>(&self, point: &Point, others: I) -> Dist
     where
-        I: Iterator<Item = usize>,
+        I: Iterator<Item = u32>,
     {
         others
             .map(|idx| point.dist2other(self.points.get_point(idx).unwrap()))
@@ -849,7 +796,7 @@ impl HNSW {
         searcher: &mut Searcher,
         layer: &Graph,
         point: &Point,
-        ef: usize,
+        ef: u32,
     ) -> Result<(), String> {
         searcher
             .candidates
@@ -882,11 +829,11 @@ impl HNSW {
             );
             for n2q_dist in q2cand_neighbors_dists {
                 let f2q_dist = searcher.selected.peek().unwrap();
-                if (n2q_dist < *f2q_dist) | (searcher.selected.len() < ef) {
+                if (n2q_dist < *f2q_dist) | (searcher.selected.len() < ef as usize) {
                     searcher.selected.push(n2q_dist);
                     searcher.candidates.push(Reverse(n2q_dist));
 
-                    if searcher.selected.len() > ef {
+                    if searcher.selected.len() > ef as usize {
                         searcher.selected.pop();
                     }
                 }
@@ -962,7 +909,13 @@ impl HNSW {
     /// Saves the index to the specified path in a custom binary format.
     /// Creates the path to the file if it didn't exist before.
     /// SQLite uses big-endian, so I'll stick to that standard.
-    pub fn save(&self, index_path: &str) -> std::io::Result<()> {
+    ///
+    /// The argument 'storage_type' should be either a 0 or a 1:
+    ///   - 0 means the layers will be stored using edge lists. These are more
+    ///   space-efficient, but don't allow for querying the graph without contructing it.
+    ///   - 1 means the layers will be stored using adjacency lists, which allow for querying
+    ///   operations directly on the file, but take much more space.
+    pub fn save(&self, index_path: &str, storage_type: u8) -> std::io::Result<()> {
         let index_path = std::path::Path::new(index_path);
         if !index_path.parent().unwrap().exists() {
             std::fs::create_dir_all(index_path.parent().unwrap())?;
@@ -970,64 +923,43 @@ impl HNSW {
         let file = File::create(index_path)?;
         let mut writer = BufWriter::new(file);
 
-        // We start the file with 34 bytes of header
+        // We start the file with the header, 19 bytes
         let header = self.make_header_bytes();
         writer.write(&header)?;
-        // let mut nb_points_bytes = [0u8; 8];
-        // for i in 0..8 {
-        //     nb_points_bytes[i] = header[i + 10];
-        // }
-        // println!(
-        //     "While saving, nb_points is {}",
-        //     u64::from_be_bytes(nb_points_bytes)
-        // );
 
-        // Next, the contents of the layers,
-        // each layer is:
-        //   - One byte for the layer number
-        //   - A u64 for the number of edges
-        //   - A stream of bytes containing the edges,
-        //   each edge is 20 bytes long, so this stream's
-        //   length has to be divisible by 20.
-        for (layer_nb, layer) in self.layers.iter() {
-            let (nb_edges, layer_bytes) = layer.to_bytes();
-            writer.write(&(*layer_nb as u8).to_be_bytes())?;
-            writer.write(&(nb_edges as u64).to_be_bytes())?;
-            println!(
-                "Writting layer {layer_nb}, which has {nb_edges} edges ({0} bytes)",
-                nb_edges * 20
-            );
-            writer.write(&layer_bytes)?;
-        }
-
-        // We then store the means of the stored vectors,
-        // It's just a stream of f32s of length dimensions.
-        let means_bytes: Vec<[u8; 4]> = match &self.points {
-            Points::Empty => {
-                println!("No points in the index.");
-                std::process::exit(1);
-            }
-            Points::Collection(c) => c.1.iter().map(|float| float.to_be_bytes()).collect(),
-        };
-        for float in means_bytes {
-            writer.write(&float)?;
-        }
+        // Next, the contents of the layers.
+        self.write_layers_to_file(&mut writer, storage_type)?;
 
         // The points follow, they are stored in LVQ quantized format.
         // We already know the dimension of the vectors, how many there
         // are and where they start (because they start as soon as the
         // layers finish). So after the last layer byte, they are stored
         // as follows:
-        //   - A u64 for its ID
+
+        // We store the means of the indexed vectors,
+        // It's just a stream of f32s of length dimensions.
+        let means_bytes: Vec<[u8; 4]> = match &self.points {
+            Points::Empty => {
+                println!("No points in the index.");
+                std::process::exit(1);
+            }
+            Points::Collection(c) => c.1.iter().map(|mean| mean.to_be_bytes()).collect(),
+        };
+        for mean_bytes in means_bytes {
+            writer.write(&mean_bytes)?;
+        }
+
+        // Next are the points themselves. Each is:
+        //   - A u32 for its ID
         //   - A u8 for its level
         //   - An f32 for the delta value
         //   - An f32 for the low value
         //   - A stream of u8, of length equal to the dimension of the vectors
-        // One point will thus take 17 + dimension bytes of storage.
+        // One point will thus take 13 + dimension bytes of storage.
         for (id, point) in self.points.iterate() {
             let point_quant = point.vector.get_quantized();
             writer.write(&id.to_be_bytes())?;
-            writer.write(&(point.level as u8).to_be_bytes())?;
+            writer.write(&(point.level).to_be_bytes())?;
             writer.write(&point_quant.delta.to_be_bytes())?;
             writer.write(&point_quant.lower.to_be_bytes())?;
             writer.write(&point_quant.quantized_vec)?;
@@ -1037,69 +969,118 @@ impl HNSW {
         Ok(())
     }
 
+    /// If 'storage_type' == 0, each layer is:
+    ///   - One byte for the layer number
+    ///   - A u64 for the number of edges
+    ///   - A stream of bytes containing the edges,
+    ///   each edge is 12 bytes long, so this stream's
+    ///   length has to be divisible by 12.
+    ///
+    /// If 'storage_type' == 1, each layer is:
+    ///   - One byte for the layer number
+    ///   - One byte for the neighborhood size
+    ///   - A u32 for the number of nodes
+    ///   - A stream of bytes with length divisible by neighborhood size,
+    ///   representing that node's neighbors
+    fn write_layers_to_file(
+        &self,
+        writer: &mut BufWriter<File>,
+        storage_type: u8,
+    ) -> std::io::Result<()> {
+        if storage_type == 0 {
+            return self.store_layers_el(writer);
+        } else {
+            return self.store_layers_al(writer);
+        }
+    }
+
+    fn store_layers_el(&self, writer: &mut BufWriter<File>) -> std::io::Result<()> {
+        for (layer_nb, layer) in self.layers.iter() {
+            let (nb_edges, layer_bytes) = layer.to_bytes_el();
+            writer.write(&(*layer_nb as u8).to_be_bytes())?;
+            writer.write(&(nb_edges).to_be_bytes())?;
+            writer.write(&layer_bytes)?;
+        }
+        Ok(())
+    }
+
+    fn store_layers_al(&self, writer: &mut BufWriter<File>) -> std::io::Result<()> {
+        for (layer_nb, layer) in self.layers.iter() {
+            let (nb_edges, layer_bytes) = layer.to_bytes_el();
+            writer.write(&(*layer_nb as u8).to_be_bytes())?;
+            writer.write(&(nb_edges).to_be_bytes())?;
+            writer.write(&layer_bytes)?;
+        }
+        Ok(())
+    }
+
     fn make_header_bytes(&self) -> Vec<u8> {
-        let mut header = Vec::with_capacity(34);
+        let mut header = Vec::with_capacity(HEADER_SIZE);
 
         // 0..1
         header.push(self.params.m as u8);
         // 1..2
         header.push(self.layers.len() as u8);
 
-        // 2..10
-        for byte in (self.points.dim() as u64).to_be_bytes() {
+        // 2..6
+        for byte in (self.points.dim() as u32).to_be_bytes() {
             header.push(byte);
         }
 
-        // 10..18
-        for byte in (self.points.len() as u64).to_be_bytes() {
+        // 6..10
+        for byte in (self.points.len() as u32).to_be_bytes() {
             header.push(byte);
         }
-        println!("Making header, there are {} points", self.points.len());
 
-        // 18..26
-        for byte in (self.params.ef_cons as u64).to_be_bytes() {
+        // 10..14
+        for byte in (self.params.ef_cons as u32).to_be_bytes() {
             header.push(byte)
         }
 
-        // 26..34
-        for byte in (self.ep as u64).to_be_bytes() {
+        // 14..18
+        for byte in (self.ep as u32).to_be_bytes() {
             header.push(byte)
         }
 
-        assert_eq!(header.len(), 34);
+        // Either 0 or 1, indicating if the file is for storage (0, edge list, smaller)
+        // or for querying (1, adjacency list, bigger).
+        // 18..19
+        header.push(0);
+
+        assert_eq!(header.len(), HEADER_SIZE);
 
         header
     }
 
-    fn read_header_bytes(bytes: Vec<u8>) -> (Params, usize, usize, usize) {
+    fn read_header_bytes(bytes: Vec<u8>) -> (Params, u8, u32, u32) {
         let m = bytes[0];
-        let nb_layers = bytes[1] as usize;
+        let nb_layers = bytes[1];
 
-        let mut dim_bytes = [0u8; 8];
-        for (idx, byte) in bytes[2..10].iter().enumerate() {
+        let mut dim_bytes = [0u8; 4];
+        for (idx, byte) in bytes[2..6].iter().enumerate() {
             dim_bytes[idx] = *byte;
         }
-        let dim = usize::from_be_bytes(dim_bytes);
+        let dim = u32::from_be_bytes(dim_bytes);
 
-        let mut nb_points_bytes = [0u8; 8];
-        for (idx, byte) in bytes[10..18].iter().enumerate() {
+        let mut nb_points_bytes = [0u8; 4];
+        for (idx, byte) in bytes[6..10].iter().enumerate() {
             nb_points_bytes[idx] = *byte;
         }
-        let nb_points = usize::from_be_bytes(nb_points_bytes);
+        let nb_points = u32::from_be_bytes(nb_points_bytes);
 
-        let mut ef_cons_bytes = [0u8; 8];
-        for (idx, byte) in bytes[18..26].iter().enumerate() {
+        let mut ef_cons_bytes = [0u8; 4];
+        for (idx, byte) in bytes[10..14].iter().enumerate() {
             ef_cons_bytes[idx] = *byte;
         }
-        let ef_cons = usize::from_be_bytes(ef_cons_bytes);
+        let ef_cons = u32::from_be_bytes(ef_cons_bytes);
 
-        let mut ep_bytes = [0u8; 8];
-        for (idx, byte) in bytes[26..34].iter().enumerate() {
+        let mut ep_bytes = [0u8; 4];
+        for (idx, byte) in bytes[14..18].iter().enumerate() {
             ep_bytes[idx] = *byte;
         }
-        let ep = usize::from_be_bytes(ep_bytes);
+        let ep = u32::from_be_bytes(ep_bytes);
 
-        let params = Params::from_m_efcons(m as usize, ef_cons, dim);
+        let params = Params::from_m_efcons(m, ef_cons, dim);
 
         (params, nb_layers, nb_points, ep)
     }
@@ -1124,77 +1105,62 @@ impl HNSW {
             .try_clone()
             .unwrap()
             .bytes()
-            .take(34)
+            .take(HEADER_SIZE)
             .map(|x| x.unwrap())
             .collect();
-        assert_eq!(header.len(), 34);
+        assert_eq!(header.len(), HEADER_SIZE);
         let (params, nb_layers, nb_points, ep) = Self::read_header_bytes(header);
-        bar.inc(34);
-        println!("Read header");
+        bar.inc(HEADER_SIZE as u64);
 
         // Move to the start of the layers
         // Read the layer contents
-        file.seek(SeekFrom::Start(34))?;
+        file.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
         let mut layers = IntMap::default();
         for _ in 0..nb_layers {
-            let start = Instant::now();
-            println!("Reading a layer");
             let file_copy = file.try_clone()?;
             let mut bytes = file_copy.bytes();
-            let layer_nb = bytes.next().unwrap()? as usize;
+            let layer_nb = bytes.next().unwrap()?;
             let mut nb_edges_bytes = [0u8; 8];
             for idx in 0..8 {
                 nb_edges_bytes[idx] = bytes.next().unwrap()?;
             }
             let nb_edges = u64::from_be_bytes(nb_edges_bytes);
-            bar.inc(8);
-            // let edges_bytes = bytes
-            //     .take((nb_edges * 20) as usize)
-            //     .map(|x| x.unwrap())
-            //     .collect();
-            let mut edges_bytes = vec![0u8; nb_edges as usize * 20];
+
+            bar.inc(9);
+            let mut edges_bytes = vec![0u8; nb_edges as usize * 12];
             file.read_exact(&mut edges_bytes)?;
+
             let layer = Graph::from_edge_list_bytes(&edges_bytes, &bar);
             layers.insert(layer_nb, layer);
-            println!(
-                "Read layer {}, elapsed: {}s",
-                layer_nb,
-                start.elapsed().as_secs()
-            );
         }
 
-        println!("Reading vector means");
-        let mut means = Vec::with_capacity(params.dim);
+        let mut means = Vec::with_capacity(params.dim as usize);
+        let mut float32 = [0u8; 4];
         for _ in 0..params.dim {
-            let mut float32 = [0u8; 4];
             file.read_exact(&mut float32)?;
             means.push(f32::from_be_bytes(float32));
-            bar.inc(4);
         }
-        println!("Read vector means");
+        bar.inc(4 * params.dim as u64);
 
         let points_start_pos = file.stream_position()?;
         file.seek(SeekFrom::End(0))?;
         let file_length_bytes = file.stream_position()?;
 
-        if (file_length_bytes - points_start_pos) % (17 + params.dim as u64) != 0 {
+        if (file_length_bytes - points_start_pos) % (13 + params.dim as u64) != 0 {
             println!("Error while reading points in index file:");
             println!("The size of the file does not fit with the expected size.");
             std::process::exit(1);
         }
 
-        let start = Instant::now();
-        println!("Reading vectors");
         file.seek(SeekFrom::Start(points_start_pos))?;
         let mut vectors = Vec::new();
+        let mut point_bytes = vec![0u8; 13 + params.dim as usize];
         while file.stream_position()? < file_length_bytes {
-            let mut point_bytes = vec![0u8; 17 + params.dim];
             file.read_exact(&mut point_bytes)?;
             vectors.push(Point::from_bytes_quant(&point_bytes));
-            bar.inc(17 + params.dim as u64);
+            bar.inc(13 + params.dim as u64);
         }
-        println!("Read vectors, elapsed: {}s", start.elapsed().as_secs());
-        assert_eq!(vectors.len(), nb_points);
+        assert_eq!(vectors.len() as u32, nb_points);
 
         // The points should be sorted by ID anyway, so this will
         // only check the values are sorted, probably.
@@ -1239,68 +1205,3 @@ pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> usize {
 
     (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize
 }
-
-fn _compute_stats(points: &Points) -> (f32, f32) {
-    let mut dists: HashMap<(usize, usize), f32> = HashMap::new();
-    for (id, point) in points.iterate() {
-        for (idx, pointx) in points.iterate() {
-            if id == idx {
-                continue;
-            }
-            dists
-                .entry((id.min(idx), id.max(idx)))
-                .or_insert(point.dist2vec(&pointx.vector, idx).dist);
-        }
-    }
-
-    _write_stats(&dists).unwrap();
-
-    let mut mean = 0.0;
-    let mut std = 0.0;
-    for (_, dist) in dists.iter() {
-        mean += dist;
-    }
-    mean /= dists.len() as f32;
-
-    for (_, dist) in dists.iter() {
-        std += (dist - mean).powi(2);
-    }
-    std /= dists.len() as f32;
-
-    (mean, std.sqrt())
-}
-
-fn _write_stats(dists: &HashMap<(usize, usize), f32>) -> std::io::Result<()> {
-    std::fs::remove_file("./dist_stats.json")?;
-    let file = File::create("./dist_stats.json")?;
-    let mut writer = BufWriter::new(file);
-    let dists = Vec::from_iter(dists.values());
-    serde_json::to_writer_pretty(&mut writer, &dists)?;
-    writer.flush()?;
-    Ok(())
-}
-
-// fn split_ids(ids: Vec<usize>, nb_splits: usize) -> Vec<Vec<usize>> {
-//     let mut split_vector = Vec::new();
-
-//     let per_split = ids.len() / nb_splits;
-
-//     let mut buffer = 0;
-//     for idx in 0..nb_splits {
-//         if idx == nb_splits - 1 {
-//             split_vector.push(ids[buffer..].to_vec());
-//         } else {
-//             split_vector.push(ids[buffer..(buffer + per_split)].to_vec());
-//             buffer += per_split;
-//         }
-//     }
-
-//     let mut sum_lens = 0;
-//     for i in split_vector.iter() {
-//         sum_lens += i.len();
-//     }
-
-//     assert!(sum_lens == ids.len(), "sum: {sum_lens}");
-
-//     split_vector
-// }

@@ -54,13 +54,13 @@ impl Vector {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
-    pub id: usize,
-    pub level: usize,
+    pub id: u32,
+    pub level: u8,
     pub vector: Vector,
 }
 
 impl Point {
-    pub fn new_full(id: usize, level: usize, vector: Vec<f32>) -> Point {
+    pub fn new_full(id: u32, level: u8, vector: Vec<f32>) -> Point {
         Point {
             id,
             level,
@@ -68,7 +68,7 @@ impl Point {
         }
     }
 
-    pub fn new_quantized(id: usize, level: usize, vector: &Vec<f32>) -> Point {
+    pub fn new_quantized(id: u32, level: u8, vector: &Vec<f32>) -> Point {
         Point {
             id,
             level,
@@ -76,20 +76,20 @@ impl Point {
         }
     }
 
-    pub fn from_vector(id: usize, level: usize, vector: Vector) -> Point {
+    pub fn from_vector(id: u32, level: u8, vector: Vector) -> Point {
         Point { id, level, vector }
     }
 
     pub fn from_bytes_quant(bytes: &Vec<u8>) -> Point {
-        let mut id_bytes = [0u8; 8];
-        for i in 0..8 {
+        let mut id_bytes = [0u8; 4];
+        for i in 0..4 {
             id_bytes[i] = bytes[i];
         }
-        let id = u64::from_be_bytes(id_bytes) as usize;
+        let id = u32::from_be_bytes(id_bytes) as u32;
 
-        let level = bytes[8] as usize;
+        let level = bytes[4];
 
-        let offset = 9;
+        let offset = 5;
 
         let mut delta_bytes = [0u8; 4];
         let mut lower_bytes = [0u8; 4];
@@ -97,12 +97,12 @@ impl Point {
             delta_bytes[i] = bytes[offset + i];
         }
 
-        let offset = 13;
+        let offset = 9;
         for i in 0..4 {
             lower_bytes[i] = bytes[offset + i];
         }
 
-        let quantized_vec = bytes[17..].to_vec();
+        let quantized_vec = bytes[13..].to_vec();
 
         let vector = Vector::Compressed(LVQVec::from_quantized(
             quantized_vec,
@@ -117,7 +117,7 @@ impl Point {
         self.dist2vec(&other.vector, other.id)
     }
 
-    pub fn dist2vec(&self, other_vec: &Vector, id: usize) -> Dist {
+    pub fn dist2vec(&self, other_vec: &Vector, id: u32) -> Dist {
         let dist = match &self.vector {
             Vector::Compressed(compressed_self) => match other_vec {
                 Vector::Compressed(compressed_other) => {
@@ -198,12 +198,10 @@ impl Points {
                 .for_each(|(idx, x)| *x -= means[idx])
         });
 
-        let collection = Vec::from_iter(
-            vectors
-                .iter()
-                .enumerate()
-                .map(|(id, v)| Point::new_quantized(id, get_new_node_layer(ml, &mut rng), v)),
-        );
+        let collection =
+            Vec::from_iter(vectors.iter().enumerate().map(|(id, v)| {
+                Point::new_quantized(id as u32, get_new_node_layer(ml, &mut rng), v)
+            }));
 
         Self::Collection((collection, means))
     }
@@ -227,12 +225,9 @@ impl Points {
                 .for_each(|(idx, x)| *x -= means[idx])
         });
 
-        let collection = Vec::from_iter(
-            vectors
-                .iter()
-                .enumerate()
-                .map(|(id, v)| Point::new_full(id, get_new_node_layer(ml, &mut rng), v.clone())),
-        );
+        let collection = Vec::from_iter(vectors.iter().enumerate().map(|(id, v)| {
+            Point::new_full(id as u32, get_new_node_layer(ml, &mut rng), v.clone())
+        }));
 
         Self::Collection((collection, means))
     }
@@ -256,7 +251,7 @@ impl Points {
         };
         let mut is_ok = true;
         for (idx, point) in points.0.iter().enumerate() {
-            if !(idx == point.id) {
+            if !(idx == (point.id as usize)) {
                 is_ok = false;
                 break;
             }
@@ -265,13 +260,13 @@ impl Points {
             false
         } else {
             for (idx, point) in points.0.iter_mut().enumerate() {
-                point.id = idx;
+                point.id = idx as u32;
             }
             true
         }
     }
 
-    pub fn ids(&self) -> impl Iterator<Item = usize> + '_ {
+    pub fn ids(&self) -> impl Iterator<Item = u32> + '_ {
         match self {
             Self::Empty => {
                 panic!("Tried to get ids, but there are no stored vectors in the index.");
@@ -281,7 +276,7 @@ impl Points {
     }
 
     /// Iterator over (ID, Level) pairs of stored Point structs.
-    pub fn ids_levels(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+    pub fn ids_levels(&self) -> impl Iterator<Item = (u32, u8)> + '_ {
         match self {
             Self::Empty => {
                 panic!("Tried to get ids, but there are no stored vectors in the index.");
@@ -299,7 +294,7 @@ impl Points {
                 ));
             }
             Self::Collection(points) => {
-                points.0.insert(point.id, point);
+                points.0.insert(point.id as usize, point);
             }
         };
     }
@@ -311,47 +306,47 @@ impl Points {
         }
     }
 
-    pub fn remove(&mut self, index: usize) -> Option<Point> {
+    pub fn remove(&mut self, index: u32) -> Option<Point> {
         match self {
             Self::Empty => None,
-            Self::Collection(points) => Some(points.0.remove(index)),
+            Self::Collection(points) => Some(points.0.remove(index as usize)),
         }
     }
 
-    pub fn contains(&self, index: &usize) -> bool {
+    pub fn contains(&self, index: &u32) -> bool {
         match self {
             Self::Empty => false,
-            Self::Collection(points) => points.0.get(*index).is_some(),
+            Self::Collection(points) => points.0.get(*index as usize).is_some(),
         }
     }
 
-    pub fn get_point(&self, index: usize) -> Option<&Point> {
+    pub fn get_point(&self, index: u32) -> Option<&Point> {
         match self {
             Self::Empty => None,
-            Self::Collection(points) => points.0.get(index),
+            Self::Collection(points) => points.0.get(index as usize),
         }
     }
 
-    pub fn get_points(&self, indices: &IntSet<usize>) -> Vec<&Point> {
+    pub fn get_points(&self, indices: &IntSet<u32>) -> Vec<&Point> {
         let points = match self {
             Self::Empty => {
                 panic!("Tried to get points, but there are no stored vectors in the index.");
             }
             Self::Collection(points) => indices
                 .iter()
-                .map(|idx| points.0.get(*idx).unwrap())
+                .map(|idx| points.0.get(*idx as usize).unwrap())
                 .collect(),
         };
         points
     }
-    pub fn get_point_mut(&mut self, index: usize) -> &mut Point {
+    pub fn get_point_mut(&mut self, index: u32) -> &mut Point {
         let point: &mut Point = match self {
             Self::Empty => {
                 panic!(
                     "Tried to get point with index {index}, but there are no stored vectors in the index."
                 );
             }
-            Self::Collection(points) => points.0.get_mut(index).unwrap(),
+            Self::Collection(points) => points.0.get_mut(index as usize).unwrap(),
         };
 
         point
@@ -382,7 +377,7 @@ impl Points {
         }
     }
 
-    pub fn iterate(&self) -> impl Iterator<Item = (usize, &Point)> + '_ {
+    pub fn iterate(&self) -> impl Iterator<Item = (u32, &Point)> + '_ {
         match self {
             Self::Empty => {
                 panic!("Tried to iterate over empty collection of Points.");
@@ -390,7 +385,7 @@ impl Points {
             Self::Collection(points) => points.0.iter().map(|p| (p.id, p)),
         }
     }
-    pub fn iterate_mut(&mut self) -> impl Iterator<Item = (usize, &mut Point)> + '_ {
+    pub fn iterate_mut(&mut self) -> impl Iterator<Item = (u32, &mut Point)> + '_ {
         match self {
             Self::Empty => {
                 panic!("Tried to iterate over empty collection of Points.");
@@ -419,7 +414,7 @@ impl Points {
     }
 }
 
-pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> usize {
+pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> u8 {
     let mut rand_nb = 0.0;
     loop {
         if (rand_nb == 0.0) | (rand_nb == 1.0) {
@@ -429,5 +424,5 @@ pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> usize {
         }
     }
 
-    (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize
+    (-rand_nb.log(std::f32::consts::E) * ml).floor() as u8
 }

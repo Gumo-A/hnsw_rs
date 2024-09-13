@@ -1,6 +1,6 @@
 use core::panic;
 use indicatif::ProgressBar;
-use nohash_hasher::{IntMap, IntSet};
+use nohash_hasher::{BuildNoHashHasher, IntMap, IntSet};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
@@ -10,7 +10,7 @@ use super::dist::Dist;
 
 #[derive(Debug, Clone)]
 pub struct Graph {
-    pub nodes: IntMap<usize, Arc<Mutex<IntSet<Dist>>>>,
+    pub nodes: IntMap<u32, Arc<Mutex<IntSet<Dist>>>>,
 }
 
 impl Default for Graph {
@@ -26,7 +26,7 @@ impl Graph {
         }
     }
 
-    pub fn from_layer_data(data: IntMap<usize, IntMap<usize, Dist>>) -> Graph {
+    pub fn from_layer_data(data: IntMap<u32, IntMap<u32, Dist>>) -> Graph {
         let mut nodes = IntMap::default();
         for (node_id, neighbors) in data.iter() {
             nodes.insert(
@@ -37,11 +37,12 @@ impl Graph {
         Self { nodes }
     }
 
-    pub fn from_edge_list(list: &Vec<(u64, u64, f32)>, bar: &ProgressBar) -> Self {
-        let mut nodes: IntMap<usize, Arc<Mutex<IntSet<Dist>>>> = IntMap::default();
+    pub fn from_edge_list(list: &Vec<(u32, u32, f32)>, bar: &ProgressBar) -> Self {
+        let mut nodes: IntMap<u32, Arc<Mutex<IntSet<Dist>>>> =
+            IntMap::with_capacity_and_hasher(list.len(), BuildNoHashHasher::default());
         for (node_a, node_b, weight) in list.iter() {
-            let node_a = *node_a as usize;
-            let node_b = *node_b as usize;
+            let node_a = *node_a;
+            let node_b = *node_b;
             nodes
                 .entry(node_a)
                 .and_modify(|e| {
@@ -59,40 +60,40 @@ impl Graph {
                 .or_insert(Arc::new(Mutex::new(IntSet::from_iter([Dist::new(
                     *weight, node_a,
                 )]))));
-            bar.inc(20);
+            bar.inc(12);
         }
         Self { nodes }
     }
 
     pub fn from_edge_list_bytes(list: &Vec<u8>, bar: &ProgressBar) -> Self {
         let mut list_parsed = Vec::new();
-        assert_eq!(list.len() % 20, 0);
+        assert_eq!(list.len() % 12, 0);
 
         let mut cursor = 0;
-        for _ in 0..(list.len() / 20) {
-            let mut node_a_bytes: [u8; 8] = [0; 8];
-            let mut node_b_bytes: [u8; 8] = [0; 8];
+        for _ in 0..(list.len() / 12) {
+            let mut node_a_bytes: [u8; 4] = [0; 4];
+            let mut node_b_bytes: [u8; 4] = [0; 4];
             let mut weight_bytes: [u8; 4] = [0; 4];
-            for (idx, byte) in list[cursor..(cursor + 8)].iter().enumerate() {
+            for (idx, byte) in list[cursor..(cursor + 4)].iter().enumerate() {
                 node_a_bytes[idx] = *byte;
             }
-            for (idx, byte) in list[(cursor + 8)..(cursor + 16)].iter().enumerate() {
+            for (idx, byte) in list[(cursor + 4)..(cursor + 8)].iter().enumerate() {
                 node_b_bytes[idx] = *byte;
             }
-            for (idx, byte) in list[(cursor + 16)..(cursor + 20)].iter().enumerate() {
+            for (idx, byte) in list[(cursor + 8)..(cursor + 12)].iter().enumerate() {
                 weight_bytes[idx] = *byte;
             }
             list_parsed.push((
-                u64::from_be_bytes(node_a_bytes),
-                u64::from_be_bytes(node_b_bytes),
+                u32::from_be_bytes(node_a_bytes),
+                u32::from_be_bytes(node_b_bytes),
                 f32::from_be_bytes(weight_bytes),
             ));
-            cursor += 20;
+            cursor += 12;
         }
         Self::from_edge_list(&list_parsed, bar)
     }
 
-    pub fn to_edge_list(&self) -> Vec<(u64, u64, f32)> {
+    pub fn to_edge_list(&self) -> Vec<(u32, u32, f32)> {
         let mut list = HashSet::new();
         for (node, neighbors) in self.nodes.iter() {
             for semi_edge in neighbors.lock().unwrap().iter() {
@@ -101,10 +102,19 @@ impl Graph {
                 list.insert((*node_min, *node_max, *semi_edge));
             }
         }
-        Vec::from_iter(
-            list.iter()
-                .map(|(a, b, dist)| (*a as u64, *b as u64, dist.dist)),
-        )
+        Vec::from_iter(list.iter().map(|(a, b, dist)| (*a, *b, dist.dist)))
+    }
+
+    pub fn to_adjacency_list(&self) -> Vec<(u32, u32, f32)> {
+        let mut list = HashSet::new();
+        for (node, neighbors) in self.nodes.iter() {
+            for semi_edge in neighbors.lock().unwrap().iter() {
+                let node_min = node.min(&semi_edge.id);
+                let node_max = node.max(&semi_edge.id);
+                list.insert((*node_min, *node_max, *semi_edge));
+            }
+        }
+        Vec::from_iter(list.iter().map(|(a, b, dist)| (*a, *b, dist.dist)))
     }
 
     pub fn to_edge_list_bytes(&self) -> Vec<Vec<u8>> {
@@ -112,19 +122,34 @@ impl Graph {
             .iter()
             .map(|(a, b, weight)| {
                 let (a, b, weight) = (a.to_be_bytes(), b.to_be_bytes(), weight.to_be_bytes());
-                let mut edge = Vec::with_capacity(20);
+                let mut edge = Vec::with_capacity(12);
                 edge.extend_from_slice(&a);
                 edge.extend_from_slice(&b);
                 edge.extend_from_slice(&weight);
-                assert_eq!(edge.len(), 20);
+                assert_eq!(edge.len(), 12);
                 edge
             })
             .collect()
     }
 
-    pub fn to_bytes(&self) -> (usize, Vec<u8>) {
+    pub fn to_adjacency_list_bytes(&self) -> Vec<Vec<u8>> {
+        self.to_adjaceny_list()
+            .iter()
+            .map(|(a, b, weight)| {
+                let (a, b, weight) = (a.to_be_bytes(), b.to_be_bytes(), weight.to_be_bytes());
+                let mut edge = Vec::with_capacity(12);
+                edge.extend_from_slice(&a);
+                edge.extend_from_slice(&b);
+                edge.extend_from_slice(&weight);
+                assert_eq!(edge.len(), 12);
+                edge
+            })
+            .collect()
+    }
+
+    pub fn to_bytes_el(&self) -> (u64, Vec<u8>) {
         let edges = self.to_edge_list_bytes();
-        let nb_edges = edges.len();
+        let nb_edges = edges.len() as u64;
         let edges_stream = edges
             .iter()
             .map(|edge| edge.iter().copied())
@@ -133,13 +158,23 @@ impl Graph {
         (nb_edges, edges_stream)
     }
 
-    pub fn add_node(&mut self, point_id: usize) {
+    pub fn to_bytes_al(&self) -> (u32, Vec<u8>) {
+        let nodes = self.to_adjacency_list_bytes();
+        let edges_stream = nodes
+            .iter()
+            .map(|node| node.iter().copied())
+            .flatten()
+            .collect();
+        (self.nb_nodes() as u32, edges_stream)
+    }
+
+    pub fn add_node(&mut self, point_id: u32) {
         self.nodes
             .entry(point_id)
             .or_insert(Arc::new(Mutex::new(IntSet::default())));
     }
 
-    pub fn add_edge(&self, node_a: usize, node_b: usize, dist: Dist) -> Result<(), String> {
+    pub fn add_edge(&self, node_a: u32, node_b: u32, dist: Dist) -> Result<(), String> {
         // This if statatements garantee the unwraps() below won't fail.
         if node_a == node_b {
             return Ok(());
@@ -178,7 +213,7 @@ impl Graph {
     /// Removes an edge from the Graph.
     /// Since the add_edge method won't allow for self-connecting nodes, we don't check that here.
     /// Returns whether the edge was removed.
-    pub fn remove_edge(&self, node_a: usize, dist: Dist) -> Result<bool, String> {
+    pub fn remove_edge(&self, node_a: u32, dist: Dist) -> Result<bool, String> {
         if !self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&dist.id) {
             return Err(format!(
                 "Error removing edge, one of the nodes don't exist in the graph."
@@ -208,7 +243,7 @@ impl Graph {
         Ok(a_rem & b_rem)
     }
 
-    pub fn remove_edge_ignore_degree(&mut self, node_a: usize, dist: Dist) -> Result<bool, String> {
+    pub fn remove_edge_ignore_degree(&mut self, node_a: u32, dist: Dist) -> Result<bool, String> {
         if !self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&dist.id) {
             return Err(format!(
                 "Error removing edge, one of the nodes don't exist in the graph."
@@ -232,7 +267,7 @@ impl Graph {
         Ok(a_rem & b_rem)
     }
 
-    pub fn neighbors(&self, node_id: usize) -> Result<IntSet<Dist>, String> {
+    pub fn neighbors(&self, node_id: u32) -> Result<IntSet<Dist>, String> {
         match self.nodes.get(&node_id) {
             Some(neighbors) => Ok(neighbors.lock().unwrap().clone()),
             None => Err(format!(
@@ -241,11 +276,7 @@ impl Graph {
         }
     }
 
-    pub fn replace_or_add_neighbors<I>(
-        &self,
-        node_id: usize,
-        new_neighbors: I,
-    ) -> Result<(), String>
+    pub fn replace_or_add_neighbors<I>(&self, node_id: u32, new_neighbors: I) -> Result<(), String>
     where
         I: Iterator<Item = Dist>,
     {
@@ -272,7 +303,7 @@ impl Graph {
         Ok(())
     }
 
-    pub fn remove_node(&mut self, node_id: usize) -> Result<(), String> {
+    pub fn remove_node(&mut self, node_id: u32) -> Result<(), String> {
         // let neighbors = self.neighbors(node_id)?.clone();
         // for neigh in neighbors {
         //     self.remove_edge_ignore_degree(node_id, neigh)?;
@@ -289,7 +320,7 @@ impl Graph {
         Ok(())
     }
 
-    pub fn remove_edges_with_node(&mut self, node_id: usize) {
+    pub fn remove_edges_with_node(&mut self, node_id: u32) {
         for dist in self.remove_neighbors(node_id) {
             self.nodes
                 .get_mut(&dist.id)
@@ -300,7 +331,7 @@ impl Graph {
         }
     }
 
-    fn remove_neighbors(&mut self, node_id: usize) -> Vec<Dist> {
+    fn remove_neighbors(&mut self, node_id: u32) -> Vec<Dist> {
         match self.nodes.get_mut(&node_id) {
             Some(neighbors) => neighbors.lock().unwrap().drain().collect(),
             None => {
@@ -309,7 +340,7 @@ impl Graph {
         }
     }
 
-    pub fn degree(&self, node_id: usize) -> Result<usize, String> {
+    pub fn degree(&self, node_id: u32) -> Result<usize, String> {
         match self.nodes.get(&node_id) {
             Some(neighbors) => Ok(neighbors.lock().unwrap().len()),
             None => Err(format!(
@@ -322,7 +353,7 @@ impl Graph {
         self.nodes.len()
     }
 
-    pub fn contains(&self, node_id: &usize) -> bool {
+    pub fn contains(&self, node_id: &u32) -> bool {
         self.nodes.contains_key(node_id)
     }
 }

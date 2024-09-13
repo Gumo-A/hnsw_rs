@@ -57,7 +57,7 @@ impl LVQVec {
     }
 
     // Have to read this: https://www.reidatcheson.com/hpc/architecture/performance/rust/c++/2019/10/19/measure-cache.html
-    pub fn dist2vec(&self, vector: &Vec<f32>, id: usize) -> Dist {
+    pub fn dist2vec(&self, vector: &Vec<f32>, id: u32) -> Dist {
         let mut acc = [0.0f32; CHUNK_SIZE];
         let vector_chunks = vector.chunks_exact(CHUNK_SIZE);
         let chunks_iter = self.quantized_vec.chunks_exact(CHUNK_SIZE);
@@ -77,7 +77,7 @@ impl LVQVec {
     }
 
     #[inline(always)]
-    pub fn dist2other(&self, other: &Self, id: usize) -> Dist {
+    pub fn dist2other(&self, other: &Self, id: u32) -> Dist {
         let mut acc = [0.0f32; CHUNK_SIZE];
         let chunks_iter = self.quantized_vec.chunks_exact(CHUNK_SIZE);
         let vector_chunks = other.quantized_vec.chunks_exact(CHUNK_SIZE);
@@ -103,7 +103,7 @@ impl LVQVec {
     #[inline(always)]
     pub fn dist2many<'a, I>(&'a self, others: I) -> impl Iterator<Item = Dist> + 'a
     where
-        I: Iterator<Item = (&'a Self, usize)> + 'a,
+        I: Iterator<Item = (&'a Self, u32)> + 'a,
     {
         let self_full = self.reconstruct();
         others.map(move |(other, id)| {

@@ -5,11 +5,11 @@ use std::hash::{Hash, Hasher};
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct Dist {
     pub dist: f32,
-    pub id: usize,
+    pub id: u32,
 }
 
 impl Dist {
-    pub fn new(dist: f32, id: usize) -> Self {
+    pub fn new(dist: f32, id: u32) -> Self {
         Dist { dist, id }
     }
 }

@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use hnsw::helpers::args::parse_args_eval;
+use hnsw::helpers::args::{parse_args_eval, parse_args_eval_ef_cons};
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::{load_glove_array, load_sift_array};
 use hnsw::hnsw::index::HNSW;
@@ -26,7 +26,7 @@ fn main() -> std::io::Result<()> {
     let (words, embeddings) = load_glove_array(lim, file_name.clone(), true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
 
-    let (bf_data, train_ids, test_ids) = match load_bf_data(lim, file_name) {
+    let (bf_data, train_ids, test_ids) = match load_bf_data(lim, file_name.clone()) {
         Ok(data) => data,
         Err(err) => {
             println!("Error loading bf data: {err}");
@@ -47,107 +47,116 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let embs = train_set.clone();
-    let start = Instant::now();
-    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
-    let end = Instant::now();
+    let efs = Vec::from_iter((10..=200).step_by(10));
 
-    println!("Saving index to current dir...");
-    index.save("./index.ann")?;
-    let index = HNSW::from_path("./index.ann")?;
+    for ef_cons in efs {
+        let embs = train_set.clone();
+        let start = Instant::now();
+        let index = HNSW::build_index_par(m, Some(ef_cons), embs, true).unwrap();
+        println!(
+            "ef_cons {ef_cons} elapsed {} ms",
+            start.elapsed().as_millis()
+        );
 
-    index.print_index();
-    println!(
-        "Multi-thread (v3) elapsed time: {}ms",
-        start.elapsed().as_millis() - end.elapsed().as_millis()
-    );
-    estimate_recall(&index, &test_set, &bf_data);
+        // index.print_index();
+        // println!(
+        //     "Multi-thread (v3) elapsed time: {}ms",
+        //     start.elapsed().as_millis() - end.elapsed().as_millis()
+        // );
+
+        let index_path = format!("./ef_cons_impact/{file_name}_m{m}_efcons{ef_cons}.ann");
+
+        // println!("Saving index to current dir...");
+        index.save(index_path.as_str())?;
+        // let index = HNSW::from_path(&index_path)?;
+        estimate_recall(&index, &test_set, &bf_data);
+    }
 
     // index.assert_param_compliance();
 
-    let train_words: Vec<String> = words
-        .iter()
-        .enumerate()
-        .filter(|(id, _)| train_ids.contains(id))
-        .map(|(_, w)| w.clone())
-        .collect();
-    let test_words: Vec<String> = words
-        .iter()
-        .enumerate()
-        .filter(|(id, _)| test_ids.contains(id))
-        .map(|(_, w)| w.clone())
-        .collect();
+    // let train_words: Vec<String> = words
+    //     .iter()
+    //     .enumerate()
+    //     .filter(|(id, _)| train_ids.contains(id))
+    //     .map(|(_, w)| w.clone())
+    //     .collect();
+    // let test_words: Vec<String> = words
+    //     .iter()
+    //     .enumerate()
+    //     .filter(|(id, _)| test_ids.contains(id))
+    //     .map(|(_, w)| w.clone())
+    //     .collect();
 
-    let ef = 1000;
-    for (i, idx) in bf_data.keys().enumerate() {
-        if i > 3 {
-            break;
-        }
-        let point = test_set.get(*idx).unwrap();
-        let anns = index.ann_by_vector(point, 10, ef).unwrap();
-        let anns_words: Vec<String> = anns
-            .iter()
-            .map(|x| train_words[*x as usize].clone())
-            .collect();
-        println!("ANNs of {} (ef={ef})", test_words[*idx]);
-        println!("{:?}", anns_words);
+    // let ef = 1000;
+    // for (i, idx) in bf_data.keys().enumerate() {
+    //     if i > 3 {
+    //         break;
+    //     }
+    //     let point = test_set.get(*idx).unwrap();
+    //     let anns = index.ann_by_vector(point, 10, ef).unwrap();
+    //     let anns_words: Vec<String> = anns
+    //         .iter()
+    //         .map(|x| train_words[*x as usize].clone())
+    //         .collect();
+    //     println!("ANNs of {} (ef={ef})", test_words[*idx]);
+    //     println!("{:?}", anns_words);
 
-        let true_nns: Vec<String> = bf_data
-            .get(&idx)
-            .unwrap()
-            .iter()
-            .map(|x| train_words[*x].clone())
-            .take(10)
-            .collect();
-        println!("True NN of {}", test_words[*idx]);
-        println!("{:?}", true_nns);
-    }
-    {
-        use text_io::read;
+    //     let true_nns: Vec<String> = bf_data
+    //         .get(&idx)
+    //         .unwrap()
+    //         .iter()
+    //         .map(|x| train_words[*x].clone())
+    //         .take(10)
+    //         .collect();
+    //     println!("True NN of {}", test_words[*idx]);
+    //     println!("{:?}", true_nns);
+    // }
+    // {
+    //     use text_io::read;
 
-        let ef = 1000;
-        loop {
-            let words_map: HashMap<String, usize> = HashMap::from_iter(
-                train_words
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, w)| (w.clone(), idx)),
-            );
-            println!("Look for NNs of a word ('_quit' to exit):");
-            let query: String = read!();
+    //     let ef = 1000;
+    //     loop {
+    //         let words_map: HashMap<String, usize> = HashMap::from_iter(
+    //             train_words
+    //                 .iter()
+    //                 .enumerate()
+    //                 .map(|(idx, w)| (w.clone(), idx)),
+    //         );
+    //         println!("Look for NNs of a word ('_quit' to exit):");
+    //         let query: String = read!();
 
-            if query == "_quit".to_string() {
-                break;
-            }
+    //         if query == "_quit".to_string() {
+    //             break;
+    //         }
 
-            if !words_map.contains_key(&query) {
-                println!("'{query}' is not in the index, try another word.");
-                continue;
-            }
+    //         if !words_map.contains_key(&query) {
+    //             println!("'{query}' is not in the index, try another word.");
+    //             continue;
+    //         }
 
-            let word_idx = words_map.get(&query).unwrap();
-            let vector = index
-                .points
-                .get_point(*word_idx)
-                .unwrap()
-                .get_full_precision();
+    //         let word_idx = words_map.get(&query).unwrap();
+    //         let vector = index
+    //             .points
+    //             .get_point(*word_idx as u32)
+    //             .unwrap()
+    //             .get_full_precision();
 
-            let anns = index.ann_by_vector(&vector, 10, ef).unwrap();
-            let anns_words: Vec<String> = anns
-                .iter()
-                .map(|x| train_words[*x as usize].clone())
-                .collect();
-            println!("ANNs of {query} (ef={ef})");
-            println!("{:?}", anns_words);
-        }
-    }
+    //         let anns = index.ann_by_vector(&vector, 10, ef).unwrap();
+    //         let anns_words: Vec<String> = anns
+    //             .iter()
+    //             .map(|x| train_words[*x as usize].clone())
+    //             .collect();
+    //         println!("ANNs of {query} (ef={ef})");
+    //         println!("{:?}", anns_words);
+    //     }
+    // }
     Ok(())
 }
 
 fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
-    for ef in (80..=100).step_by(10) {
-        println!("Finding ANNs ef={ef}");
+    for ef in (10..=10000).step_by(10) {
         let bar = ProgressBar::new(test_set.len() as u64);
+        bar.set_message(format!("Finding ANNs ef={ef}"));
         bar.set_style(
             ProgressStyle::with_template("{msg} {bar:60} {per_sec}")
                 .unwrap()
@@ -161,7 +170,7 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
             let true_nns: &Vec<usize> = bf_data.get(&idx).unwrap();
             let mut hits = 0;
             for true_nn in true_nns.iter().take(10) {
-                if anns.contains(true_nn) {
+                if anns.contains(&(*true_nn as u32)) {
                     hits += 1;
                 }
             }
@@ -176,6 +185,13 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
             avg_recall += recall;
         }
         avg_recall /= recall_10.len() as f32;
-        println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
+        if query_time > 1.0 {
+            println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
+            break;
+        }
+        if avg_recall >= 0.9 {
+            println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
+            break;
+        }
     }
 }

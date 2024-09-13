@@ -9,7 +9,7 @@ use hnsw::hnsw::index::HNSW;
 use hnsw::hnsw::params::Params;
 use rand::Rng;
 
-const DIM: usize = 100;
+const DIM: u32 = 100;
 const N: usize = 1000;
 
 #[test]

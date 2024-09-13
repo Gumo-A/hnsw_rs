@@ -42,8 +42,8 @@ fn main() -> std::io::Result<()> {
     let train_arc = Arc::new(train_set);
     let test_arc = Arc::new(test_set);
 
-    let nb_threads = std::thread::available_parallelism().unwrap().get();
-    let test_ids: Vec<usize> = test_arc.ids().collect();
+    let nb_threads = std::thread::available_parallelism().unwrap().get() as u8;
+    let test_ids: Vec<u32> = test_arc.ids().collect();
     let mut indices_split = split_ids(test_ids, nb_threads);
     let mut handles = Vec::new();
     for i in 0..nb_threads {
