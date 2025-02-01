@@ -151,7 +151,7 @@ impl Graph {
     ///     - node_pos * max_degree * 8 (plus a offset, eventually)
     ///   - Use that to find the first neighbor
     ///   - Read from that position to the next max_degree * 8 bytes to get all that node's neighbors.
-    pub fn to_adjacency_list(&self) -> (Vec<(u32, f32)>, Vec<(u32, usize)>) {}
+    // pub fn to_adjacency_list(&self) -> (Vec<(u32, f32)>, Vec<(u32, usize)>) {}
 
     pub fn to_edge_list_bytes(&self) -> Vec<Vec<u8>> {
         self.to_edge_list()
@@ -168,20 +168,20 @@ impl Graph {
             .collect()
     }
 
-    pub fn to_adjacency_list_bytes(&self) -> Vec<Vec<u8>> {
-        self.to_adjaceny_list()
-            .iter()
-            .map(|(a, b, weight)| {
-                let (a, b, weight) = (a.to_be_bytes(), b.to_be_bytes(), weight.to_be_bytes());
-                let mut edge = Vec::with_capacity(12);
-                edge.extend_from_slice(&a);
-                edge.extend_from_slice(&b);
-                edge.extend_from_slice(&weight);
-                assert_eq!(edge.len(), 12);
-                edge
-            })
-            .collect()
-    }
+    // pub fn to_adjacency_list_bytes(&self) -> Vec<Vec<u8>> {
+    //     self.to_adjaceny_list()
+    //         .iter()
+    //         .map(|(a, b, weight)| {
+    //             let (a, b, weight) = (a.to_be_bytes(), b.to_be_bytes(), weight.to_be_bytes());
+    //             let mut edge = Vec::with_capacity(12);
+    //             edge.extend_from_slice(&a);
+    //             edge.extend_from_slice(&b);
+    //             edge.extend_from_slice(&weight);
+    //             assert_eq!(edge.len(), 12);
+    //             edge
+    //         })
+    //         .collect()
+    // }
 
     pub fn to_bytes_el(&self) -> (u64, Vec<u8>) {
         let edges = self.to_edge_list_bytes();
@@ -194,15 +194,15 @@ impl Graph {
         (nb_edges, edges_stream)
     }
 
-    pub fn to_bytes_al(&self) -> (u32, Vec<u8>) {
-        let nodes = self.to_adjacency_list_bytes();
-        let edges_stream = nodes
-            .iter()
-            .map(|node| node.iter().copied())
-            .flatten()
-            .collect();
-        (self.nb_nodes() as u32, edges_stream)
-    }
+    // pub fn to_bytes_al(&self) -> (u32, Vec<u8>) {
+    //     let nodes = self.to_adjacency_list_bytes();
+    //     let edges_stream = nodes
+    //         .iter()
+    //         .map(|node| node.iter().copied())
+    //         .flatten()
+    //         .collect();
+    //     (self.nb_nodes() as u32, edges_stream)
+    // }
 
     pub fn add_node(&mut self, point_id: u32) {
         if self.id_manager.contains_key(&point_id) {

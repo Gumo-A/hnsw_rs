@@ -13,16 +13,16 @@ use std::{cmp::Reverse, collections::BTreeSet, sync::Arc, time::Instant};
 use rand::rngs::ThreadRng;
 use rand::Rng;
 
-use serde::{Deserialize, Serialize};
-
 use core::panic;
 use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 
+use log::{debug, error, info, trace, warn};
+
 const HEADER_SIZE: usize = 19;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct Searcher {
     selected: BinaryHeap<Dist>,
     candidates: BinaryHeap<Reverse<Dist>>,
@@ -91,8 +91,10 @@ impl HNSW {
     }
 
     pub fn assert_param_compliance(&self) {
+        info!("Asserting the index complies with its parameters");
         let mut is_ok = true;
         for (layer_nb, layer) in self.layers.iter() {
+            info!("Checking layer {layer_nb}");
             let max_degree = if *layer_nb > 0 {
                 self.params.mmax
             } else {
@@ -103,8 +105,8 @@ impl HNSW {
                 // because I am too lazy to change the current methods.
                 if neighbors.lock().unwrap().len() > ((max_degree as f32) * 1.1).ceil() as usize {
                     is_ok = false;
-                    println!(
-                        "layer {layer_nb}, {node} degree = {0}, limit = {1}",
+                    warn!(
+                        "In layer {layer_nb}, node {node} has degree {0} but limit is {1}",
                         neighbors.lock().unwrap().len(),
                         max_degree
                     );
@@ -112,12 +114,12 @@ impl HNSW {
 
                 if (neighbors.lock().unwrap().is_empty()) & (layer.nb_nodes() > 1) {
                     is_ok = false;
-                    println!("layer {layer_nb}, {node} degree = 0",);
+                    warn!("In layer {layer_nb}, node {node} has degree 0");
                 }
             }
         }
         if is_ok {
-            println!("Index complies with params.")
+            info!("Index complies with its parameters")
         }
     }
 
@@ -182,10 +184,6 @@ impl HNSW {
         level: u8,
         stop_at_layer: Option<u8>,
     ) -> Result<(), String> {
-        // let mut ep = IntSet::default();
-        // ep.insert(self.ep);
-
-        // let mut step_1_results: BinaryHeap<Dist> = BinaryHeap::from([point.dist2other(self.points.get_point(self.ep).unwrap())]);
         let target_layer = stop_at_layer.unwrap_or(0);
         for layer_nb in (level + 1..=max_layer_nb).rev() {
             let layer = match self.layers.get(&layer_nb) {
@@ -256,8 +254,11 @@ impl HNSW {
 
                 for dist in to_prune {
                     // searcher.clear_searchers();
-                    let nearest =
-                        HNSW::select_simple(layer.neighbors(dist.id)?.iter().copied(), limit)?;
+                    let nearest = self.select_simple(
+                        dist.id,
+                        layer.neighbors(dist.id)?.iter().copied(),
+                        limit,
+                    )?;
                     let entry = searcher
                         .prune_results
                         .entry(*layer_nb)
@@ -294,9 +295,9 @@ impl HNSW {
                 .copied()
                 .collect::<Vec<Reverse<Dist>>>()
             {
-                for neighbor_dist in layer.neighbors(dist.0.id)? {
+                for neighbor in layer.neighbors(dist.0.id)? {
                     searcher.candidates.push(Reverse(
-                        point.dist2other(self.points.get_point(neighbor_dist.id).unwrap()),
+                        point.dist2other(self.points.get_point(neighbor).unwrap()),
                     ));
                 }
             }
@@ -341,11 +342,13 @@ impl HNSW {
 
     fn select_simple<I>(
         // searcher: &mut Searcher,
-        candidate_dists: I,
+        &self,
+        node: u32,
+        candidates: I,
         m: usize,
     ) -> Result<BinaryHeap<Dist>, String>
     where
-        I: Iterator<Item = Dist>,
+        I: Iterator<Item = u32>,
     {
         // searcher.candidates.clear();
         // searcher.selected.clear();
@@ -355,7 +358,13 @@ impl HNSW {
         //     let dist_e = searcher.candidates.pop().unwrap();
         //     searcher.selected.push(dist_e.0);
         // }
-        let cands = BTreeSet::from_iter(candidate_dists);
+        let c = candidates.map(|id| {
+            self.points
+                .get_point(node)
+                .unwrap()
+                .dist2others(self.points.get_points(candidates).iter().map(|x| *x))
+        });
+        let cands = BTreeSet::from_iter(c);
         Ok(BinaryHeap::from_iter(cands.iter().copied().take(m)))
     }
 
@@ -363,15 +372,12 @@ impl HNSW {
         // let s0 = Instant::now();
         searcher.clear_all();
 
+        self.insert_point_in_layers(point_id);
+
         let point = match self.points.get_point(point_id) {
             Some(p) => p,
             None => return Err(format!("{point_id} not in points given to the index.")),
         };
-
-        if self.layers.is_empty() {
-            self.first_insert(point_id);
-            return Ok(true);
-        }
 
         searcher
             .selected
@@ -480,17 +486,16 @@ impl HNSW {
             searcher.clear_searchers();
 
             let point = index.points.get_point(*point_id).unwrap();
-            let level = point.level;
             searcher
                 .selected
                 .push(point.dist2other(index.points.get_point(index.ep).unwrap()));
 
-            match index.step_1(&mut searcher, point, max_layer_nb, level, None) {
+            match index.step_1(&mut searcher, point, max_layer_nb, point.level, None) {
                 Ok(()) => (),
                 Err(msg) => return Err(format!("Error in step 1: {msg}")),
             };
 
-            match index.step_2(&mut searcher, point, level) {
+            match index.step_2(&mut searcher, point, point.level) {
                 Ok(()) => (),
                 Err(msg) => return Err(format!("Error in step 2: {msg}")),
             };
@@ -517,7 +522,7 @@ impl HNSW {
         for (layer_nb, node_data) in searcher.insertion_results.iter() {
             let layer = self.layers.get(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
-                layer.replace_or_add_neighbors(*node, neighbors.iter().copied())?;
+                layer.replace_or_add_neighbors(*node, neighbors.iter().map(|d| d.id))?;
             }
         }
 
@@ -532,17 +537,11 @@ impl HNSW {
         Ok(())
     }
 
-    fn write_results_v2(
-        &self,
-        searcher: &Searcher,
-        // point_id: usize,
-        // level: usize,
-        // max_layer_nb: usize,
-    ) -> Result<(), String> {
+    fn write_results_v2(&self, searcher: &Searcher) -> Result<(), String> {
         for (layer_nb, node_data) in searcher.insertion_results.iter() {
             let layer = self.layers.get(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
-                layer.replace_or_add_neighbors(*node, neighbors.iter().copied())?;
+                layer.replace_or_add_neighbors(*node, neighbors.iter().map(|d| d.id))?;
             }
         }
         Ok(())
@@ -553,7 +552,7 @@ impl HNSW {
             let layer = self.layers.get_mut(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
                 layer.add_node(*node);
-                layer.replace_or_add_neighbors(*node, neighbors.iter().copied())?;
+                layer.replace_or_add_neighbors(*node, neighbors.iter().map(|d| d.id))?;
             }
         }
 
@@ -564,7 +563,7 @@ impl HNSW {
         for (layer_nb, node_data) in searcher.prune_results.iter() {
             let layer = self.layers.get(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
-                layer.replace_or_add_neighbors(*node, neighbors.iter().copied())?;
+                layer.replace_or_add_neighbors(*node, neighbors.iter().map(|d| d.id))?;
             }
         }
 
@@ -576,7 +575,10 @@ impl HNSW {
     /// Creates all the layers and stores the points in their levels.
     /// Stores the Point structs in index.points.
     fn store_points(&mut self, vectors: Vec<Vec<f32>>) {
+        trace!("Storing new vectors");
         let points = Points::from_vecs_quant(vectors, self.params.ml);
+        trace!("Transformed f32 Vecs to quantized Points and gave them levels");
+
         // TODO: if this is a bulk update, make sure to use the max between
         // the current max level and the new points' max level.
         let max_layer_nb = points
@@ -584,15 +586,20 @@ impl HNSW {
             .map(|(_, point)| point.level)
             .max()
             .unwrap();
+        trace!("The highest level in the new points is {max_layer_nb}");
         for layer_nb in 0..=max_layer_nb {
             self.layers.entry(layer_nb).or_insert(Graph::new());
+            info!("Added layer {layer_nb} to the index")
         }
         for (point_id, point) in points.iterate() {
             for l in 0..=point.level {
                 self.layers.get_mut(&l).unwrap().add_node(point_id);
             }
         }
+        trace!("The new points were added to their respective graphs, but no edges were added");
         self.points.extend_or_fill(points);
+        info!("Added {} points to the index store", self.points.len());
+
         self.ep = *self
             .layers
             .get(&max_layer_nb)
@@ -601,6 +608,7 @@ impl HNSW {
             .keys()
             .next()
             .unwrap();
+        trace!("The Entry Point of the index is now {}", self.ep);
     }
 
     fn first_insert(&mut self, point_id: u32) {
@@ -614,6 +622,7 @@ impl HNSW {
         let max_layer_nb = (self.layers.len() - 1) as u8;
         if self.layers.get(&max_layer_nb).unwrap().nb_nodes() == 1 {
             self.layers.remove(&max_layer_nb);
+            warn!("The index contained a graph with only one point, so it was deleted");
         }
     }
 
@@ -623,14 +632,21 @@ impl HNSW {
         vectors: Vec<Vec<f32>>,
         verbose: bool,
     ) -> Result<Self, String> {
+        trace!("Building index in a single thread");
+
         let mut searcher = Searcher::new();
         let dim = match vectors.first() {
             Some(vector) => vector.len() as u32,
             None => return Err("Could not read vector dimension.".to_string()),
         };
+        trace!("The dimension of the vectors is {dim}");
+
         let mut index = HNSW::new(m, ef_cons, dim);
+        trace!("Initialized the index");
+
         index.store_points(vectors);
 
+        info!("Inserting edges to the index");
         let bar = get_progress_bar("Inserting Vectors".to_string(), index.points.len(), verbose);
 
         let ids: Vec<u32> = index.points.ids().collect();
@@ -640,6 +656,7 @@ impl HNSW {
                 bar.inc(1);
             }
         }
+        trace!("The index was built successfully");
         index.delete_one_node_layer();
         Ok(index)
     }
@@ -651,24 +668,43 @@ impl HNSW {
         verbose: bool,
     ) -> Result<Self, String> {
         let nb_threads = std::thread::available_parallelism().unwrap().get() as u8;
+        trace!("Building index with {nb_threads} threads");
+
         let dim = match vectors.first() {
             Some(vector) => vector.len() as u32,
             None => return Err("Could not read vector dimension.".to_string()),
         };
+        trace!("The dimension of the vectors is {dim}");
+
         let mut index = HNSW::new(m, ef_cons, dim);
+        trace!("Initialized the index");
+
         index.store_points(vectors);
         let index_arc = Arc::new(index);
 
+        trace!("Adding edges to layers");
         for layer_nb in (0..index_arc.layers.len()).rev().map(|x| x as u8) {
+            info!("Adding edges to points in layer {layer_nb} and below");
             let ids: Vec<u32> = index_arc
                 .points
                 .iterate()
                 .filter(|(_, point)| point.level == layer_nb)
                 .map(|(id, _)| id)
                 .collect();
+            info!("{} points have level = {layer_nb}", ids.len());
 
             let mut points_split = split_ids(ids, nb_threads);
+            trace!("Split point IDs into {} Vecs", points_split.len());
+            trace!(
+                "The smallest split contains {} IDs",
+                points_split.iter().map(|x| x.len()).min().unwrap()
+            );
+            trace!(
+                "The biggest split contains {} IDs",
+                points_split.iter().map(|x| x.len()).max().unwrap()
+            );
 
+            trace!("Spawning {nb_threads} threads");
             let mut handlers = Vec::new();
             for thread_idx in 0..nb_threads {
                 let index_copy = Arc::clone(&index_arc);
@@ -685,101 +721,17 @@ impl HNSW {
             for handle in handlers {
                 handle.join().unwrap();
             }
+            info!("Finished edge additions for levels {layer_nb} and below");
         }
+        trace!("Finished index construction");
 
-        // index_arc.assert_param_compliance();
+        index_arc.assert_param_compliance();
 
         let mut index =
             Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
         index.delete_one_node_layer();
         Ok(index)
     }
-
-    // // // TODO: Implementation is faster, but index quality is not good enough
-    // pub fn build_index_par_v2(
-    //     m: usize,
-    //     ef_cons: Option<usize>,
-    //     vectors: Vec<Vec<f32>>,
-    //     verbose: bool,
-    // ) -> Result<Self, String> {
-    //     let nb_threads = std::thread::available_parallelism().unwrap().get();
-
-    //     let dim = match vectors.first() {
-    //         Some(vector) => vector.len(),
-    //         None => return Err("Could not read vector dimension.".to_string()),
-    //     };
-
-    //     let mut index = HNSW::new(m, ef_cons, dim);
-    //     index.store_points(vectors);
-
-    //     index.first_insert(0);
-    //     index = HNSW::insert_non_zero(index, verbose)?;
-
-    //     let (index, eps_ids_map) = HNSW::find_layer_eps(index, 0, verbose)?;
-    //     let ids_eps = IntMap::from_iter(
-    //         eps_ids_map
-    //             .iter()
-    //             .map(|(ep, ids)| ids.iter().map(|id| (*id, *ep)))
-    //             .flatten(),
-    //     );
-    //     let all_eps = IntSet::from_iter(eps_ids_map.keys().copied());
-
-    //     let (mut points_split, split_eps) = index.partition_points(eps_ids_map, nb_threads, 1);
-
-    //     let ids_eps_arc = Arc::new(ids_eps);
-    //     let index_arc = Arc::new(index);
-    //     let multibar = Arc::new(indicatif::MultiProgress::new());
-
-    //     let mut handlers = Vec::new();
-    //     for thread_idx in 0..nb_threads {
-    //         let index_clone = index_arc.clone();
-    //         let ids_eps_clone = ids_eps_arc.clone();
-    //         let ids: Vec<usize> = points_split
-    //             .remove(&thread_idx)
-    //             .unwrap()
-    //             .iter()
-    //             .copied()
-    //             .collect();
-    //         let bar = multibar.insert(
-    //             thread_idx,
-    //             get_progress_bar(format!("Thread {}:", thread_idx), ids.len(), verbose),
-    //         );
-    //         handlers.push(std::thread::spawn(
-    //             move || -> (usize, Result<Graph, String>) {
-    //                 (
-    //                     thread_idx,
-    //                     Self::insert_par_v2(index_clone, ids, ids_eps_clone, bar),
-    //                 )
-    //             },
-    //         ));
-    //     }
-    //     let mut thread_results = IntMap::default();
-    //     for handle in handlers {
-    //         let (thread_idx, result) = handle.join().unwrap();
-    //         thread_results.insert(thread_idx, result?);
-    //     }
-    //     let mut index =
-    //         Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
-
-    //     let mut merged = IntSet::default();
-    //     for (idx, (thread_idx, layer0)) in thread_results.iter_mut().enumerate() {
-    //         if idx == 0 {
-    //             *index.layers.get_mut(&0).unwrap() = layer0.clone();
-    //             merged.insert(*thread_idx);
-    //             continue;
-    //         }
-    //         index.join_thread_result(
-    //             layer0,
-    //             *thread_idx,
-    //             &all_eps,
-    //             split_eps.get(thread_idx).unwrap(),
-    //             verbose,
-    //         )?;
-    //         merged.insert(*thread_idx);
-    //     }
-
-    //     Ok(index)
-    // }
 
     fn get_nearest<I>(&self, point: &Point, others: I) -> Dist
     where
@@ -808,9 +760,11 @@ impl HNSW {
         while !searcher.candidates.is_empty() {
             let cand_dist = searcher.candidates.pop().unwrap();
             let furthest2q_dist = searcher.selected.peek().unwrap();
+
             if cand_dist.0 > *furthest2q_dist {
                 break;
             }
+
             let cand_neighbors = match layer.neighbors(cand_dist.0.id) {
                 Ok(neighs) => neighs,
                 Err(msg) => return Err(format!("Error in search_layer: {msg}")),
@@ -821,8 +775,8 @@ impl HNSW {
             let q2cand_neighbors_dists = point.dist2others(
                 cand_neighbors
                     .iter()
-                    .filter(|dist| searcher.visited.insert(dist.id))
-                    .map(|dist| match self.points.get_point(dist.id) {
+                    .filter(|n| searcher.visited.insert(**n))
+                    .map(|n| match self.points.get_point(*n) {
                         Some(p) => p,
                         None => panic!("nope!"),
                     }),
@@ -1109,14 +1063,17 @@ impl HNSW {
             .map(|x| x.unwrap())
             .collect();
         assert_eq!(header.len(), HEADER_SIZE);
+        println!("reading header");
         let (params, nb_layers, nb_points, ep) = Self::read_header_bytes(header);
         bar.inc(HEADER_SIZE as u64);
+        println!("read header");
 
         // Move to the start of the layers
         // Read the layer contents
         file.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
         let mut layers = IntMap::default();
-        for _ in 0..nb_layers {
+        for i in 0..nb_layers {
+            println!("reading layer {i}");
             let file_copy = file.try_clone()?;
             let mut bytes = file_copy.bytes();
             let layer_nb = bytes.next().unwrap()?;
@@ -1132,8 +1089,10 @@ impl HNSW {
 
             let layer = Graph::from_edge_list_bytes(&edges_bytes, &bar);
             layers.insert(layer_nb, layer);
+            println!("read layer {i}");
         }
 
+        println!("reading means");
         let mut means = Vec::with_capacity(params.dim as usize);
         let mut float32 = [0u8; 4];
         for _ in 0..params.dim {
@@ -1141,7 +1100,9 @@ impl HNSW {
             means.push(f32::from_be_bytes(float32));
         }
         bar.inc(4 * params.dim as u64);
+        println!("read means");
 
+        println!("reading points");
         let points_start_pos = file.stream_position()?;
         file.seek(SeekFrom::End(0))?;
         let file_length_bytes = file.stream_position()?;
@@ -1166,6 +1127,7 @@ impl HNSW {
         // only check the values are sorted, probably.
         vectors.sort_by_key(|p| p.id);
         let points = Points::Collection((vectors, means));
+        println!("read points");
 
         Ok(Self {
             ep,
@@ -1173,6 +1135,19 @@ impl HNSW {
             points,
             layers,
         })
+    }
+
+    fn insert_point_in_layers(&mut self, point_id: u32) -> () {
+        let point_level = self.points.get_point(point_id).unwrap().level;
+        if point_level > (self.layers.len() as u8 - 1) {
+            self.layers.insert(point_level, Graph::new());
+        }
+        for idx in 0..=point_level {
+            self.layers
+                .get_mut(&(idx as u8))
+                .unwrap()
+                .add_node(point_id);
+        }
     }
 }
 

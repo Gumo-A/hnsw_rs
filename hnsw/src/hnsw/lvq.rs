@@ -105,6 +105,9 @@ impl LVQVec {
     where
         I: Iterator<Item = (&'a Self, u32)> + 'a,
     {
+        // Construct self only once for all distance computations
+        // We can move this value to the closure below,
+        // because the reconstruction doesn't hold references.
         let self_full = self.reconstruct();
         others.map(move |(other, id)| {
             let mut acc = [0.0f32; CHUNK_SIZE];

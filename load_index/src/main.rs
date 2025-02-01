@@ -11,7 +11,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 fn main() -> std::io::Result<()> {
     let file_name = format!("glove.6B.100d");
 
-    let (bf_data, train_ids, test_ids) = match load_bf_data(0, file_name.clone()) {
+    let (bf_data, _, test_ids) = match load_bf_data(0, file_name.clone()) {
         Ok(data) => data,
         Err(err) => {
             println!("Error loading bf data: {err}");
@@ -19,14 +19,8 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let (words, embeddings) = load_glove_array(0, file_name.clone(), true).unwrap();
+    let (_, embeddings) = load_glove_array(0, file_name.clone(), true).unwrap();
 
-    let train_set: Vec<Vec<f32>> = embeddings
-        .iter()
-        .enumerate()
-        .filter(|(id, _)| train_ids.contains(id))
-        .map(|(_, v)| v.clone())
-        .collect();
     let test_set: Vec<Vec<f32>> = embeddings
         .iter()
         .enumerate()
@@ -55,6 +49,11 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
         for (idx, query) in test_set.iter().enumerate() {
             let anns = index.ann_by_vector(query, 10, ef).unwrap();
             let true_nns: &Vec<usize> = bf_data.get(&idx).unwrap();
+            println!("ANNs {:?}", anns);
+            println!(
+                "True NNs {:?}",
+                true_nns.iter().take(10).collect::<Vec<&usize>>()
+            );
             let mut hits = 0;
             for true_nn in true_nns.iter().take(10) {
                 if anns.contains(&(*true_nn as u32)) {

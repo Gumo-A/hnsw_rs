@@ -424,5 +424,9 @@ pub fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> u8 {
         }
     }
 
+    // TODO
+    // casting to u8 should only be done if we are
+    // confident the value will fall in the range,
+    // which depends entirely on ml
     (-rand_nb.log(std::f32::consts::E) * ml).floor() as u8
 }

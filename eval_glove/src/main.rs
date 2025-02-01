@@ -7,9 +7,11 @@ use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::{load_glove_array, load_sift_array};
 use hnsw::hnsw::index::HNSW;
 
+use env_logger;
 use indicatif::{ProgressBar, ProgressStyle};
 
 fn main() -> std::io::Result<()> {
+    env_logger::init();
     let (dim, lim, m) = match parse_args_eval() {
         Ok(args) => args,
         Err(err) => {
@@ -47,30 +49,26 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let efs = Vec::from_iter((10..=200).step_by(10));
+    // let ef_cons = 500;
+    let embs = train_set.clone();
+    let start = Instant::now();
+    // let index = HNSW::build_index_par(m, None, embs, true).unwrap();
+    let index = HNSW::build_index_par(m, None, embs, true).unwrap();
+    println!("Elapsed {} ms", start.elapsed().as_millis());
 
-    for ef_cons in efs {
-        let embs = train_set.clone();
-        let start = Instant::now();
-        let index = HNSW::build_index_par(m, Some(ef_cons), embs, true).unwrap();
-        println!(
-            "ef_cons {ef_cons} elapsed {} ms",
-            start.elapsed().as_millis()
-        );
+    // index.print_index();
+    // println!(
+    //     "Multi-thread (v3) elapsed time: {}ms",
+    //     start.elapsed().as_millis() - end.elapsed().as_millis()
+    // );
 
-        // index.print_index();
-        // println!(
-        //     "Multi-thread (v3) elapsed time: {}ms",
-        //     start.elapsed().as_millis() - end.elapsed().as_millis()
-        // );
+    // let index_path = format!("./ef_cons_impact/{file_name}_m{m}_efcons{ef_cons}.ann");
+    let index_path = format!("./index.ann");
 
-        let index_path = format!("./ef_cons_impact/{file_name}_m{m}_efcons{ef_cons}.ann");
-
-        // println!("Saving index to current dir...");
-        index.save(index_path.as_str())?;
-        // let index = HNSW::from_path(&index_path)?;
-        estimate_recall(&index, &test_set, &bf_data);
-    }
+    println!("Saving index to current dir...");
+    index.save(index_path.as_str(), 0)?;
+    // let index = HNSW::from_path(&index_path)?;
+    estimate_recall(&index, &test_set, &bf_data);
 
     // index.assert_param_compliance();
 
@@ -154,7 +152,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
-    for ef in (10..=10000).step_by(10) {
+    for ef in (10..=100).step_by(10) {
         let bar = ProgressBar::new(test_set.len() as u64);
         bar.set_message(format!("Finding ANNs ef={ef}"));
         bar.set_style(
@@ -189,9 +187,10 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
             println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
             break;
         }
-        if avg_recall >= 0.9 {
+        if avg_recall >= 0.98 {
             println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
             break;
         }
+        println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
     }
 }
