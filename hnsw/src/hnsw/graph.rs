@@ -105,18 +105,6 @@ impl Graph {
         Vec::from_iter(list.iter().map(|(a, b, dist)| (*a, *b, dist.dist)))
     }
 
-    pub fn to_adjacency_list(&self) -> Vec<(u32, u32, f32)> {
-        let mut list = HashSet::new();
-        for (node, neighbors) in self.nodes.iter() {
-            for semi_edge in neighbors.lock().unwrap().iter() {
-                let node_min = node.min(&semi_edge.id);
-                let node_max = node.max(&semi_edge.id);
-                list.insert((*node_min, *node_max, *semi_edge));
-            }
-        }
-        Vec::from_iter(list.iter().map(|(a, b, dist)| (*a, *b, dist.dist)))
-    }
-
     pub fn to_edge_list_bytes(&self) -> Vec<Vec<u8>> {
         self.to_edge_list()
             .iter()
@@ -132,8 +120,20 @@ impl Graph {
             .collect()
     }
 
+    pub fn to_adjacency_list(&self) -> Vec<(u32, u32, f32)> {
+        let mut list = HashSet::new();
+        for (node, neighbors) in self.nodes.iter() {
+            for semi_edge in neighbors.lock().unwrap().iter() {
+                let node_min = node.min(&semi_edge.id);
+                let node_max = node.max(&semi_edge.id);
+                list.insert((*node_min, *node_max, *semi_edge));
+            }
+        }
+        Vec::from_iter(list.iter().map(|(a, b, dist)| (*a, *b, dist.dist)))
+    }
+
     pub fn to_adjacency_list_bytes(&self) -> Vec<Vec<u8>> {
-        self.to_adjaceny_list()
+        self.to_adjacency_list()
             .iter()
             .map(|(a, b, weight)| {
                 let (a, b, weight) = (a.to_be_bytes(), b.to_be_bytes(), weight.to_be_bytes());

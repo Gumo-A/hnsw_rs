@@ -47,7 +47,7 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let efs = Vec::from_iter((10..=200).step_by(10));
+    let efs = Vec::from_iter((100..=200).step_by(100));
 
     for ef_cons in efs {
         let embs = train_set.clone();
@@ -67,7 +67,7 @@ fn main() -> std::io::Result<()> {
         let index_path = format!("./ef_cons_impact/{file_name}_m{m}_efcons{ef_cons}.ann");
 
         // println!("Saving index to current dir...");
-        index.save(index_path.as_str())?;
+        index.save(index_path.as_str(), 0)?;
         // let index = HNSW::from_path(&index_path)?;
         estimate_recall(&index, &test_set, &bf_data);
     }
@@ -154,7 +154,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
-    for ef in (10..=10000).step_by(10) {
+    for ef in (10..=100).step_by(20) {
         let bar = ProgressBar::new(test_set.len() as u64);
         bar.set_message(format!("Finding ANNs ef={ef}"));
         bar.set_style(
@@ -185,13 +185,6 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
             avg_recall += recall;
         }
         avg_recall /= recall_10.len() as f32;
-        if query_time > 1.0 {
-            println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
-            break;
-        }
-        if avg_recall >= 0.9 {
-            println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
-            break;
-        }
+        println!("ef={ef} Recall@10 {avg_recall}, Query Time: {query_time} ms");
     }
 }
