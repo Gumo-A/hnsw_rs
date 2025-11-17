@@ -3,7 +3,7 @@ extern crate hnsw;
 use std::collections::BinaryHeap;
 
 use hnsw::helpers::glove::load_glove_array;
-use hnsw::hnsw::dist::Dist;
+use hnsw::hnsw::dist::Node;
 use hnsw::hnsw::index::Searcher;
 use hnsw::hnsw::index::HNSW;
 use hnsw::hnsw::params::Params;
@@ -55,10 +55,10 @@ fn hnsw_serialize() {
 
 #[test]
 fn dist_binaryheap() {
-    let dist1 = Dist::new(0.5, 0);
-    let dist2 = Dist::new(0.2, 1);
-    let dist3 = Dist::new(0.7, 2);
-    let dist4 = Dist::new(0.1, 3);
+    let dist1 = Node::new_with_dist(0.5, 0);
+    let dist2 = Node::new_with_dist(0.2, 1);
+    let dist3 = Node::new_with_dist(0.7, 2);
+    let dist4 = Node::new_with_dist(0.1, 3);
     let mut bh = BinaryHeap::from([dist1, dist2, dist3, dist4]);
 
     assert_eq!(bh.pop().unwrap().dist, 0.7);
@@ -70,17 +70,17 @@ fn dist_binaryheap() {
 #[test]
 fn set_dist() {
     let mut set = nohash_hasher::IntSet::default();
-    let dist1 = Dist::new(0.5, 0);
+    let dist1 = Node::new_with_dist(0.5, 0);
     set.insert(dist1);
-    let dist2 = Dist::new(0.2, 1);
+    let dist2 = Node::new_with_dist(0.2, 1);
     set.insert(dist2);
-    let dist3 = Dist::new(0.7, 2);
+    let dist3 = Node::new_with_dist(0.7, 2);
     set.insert(dist3);
-    let dist4 = Dist::new(0.1, 3);
+    let dist4 = Node::new_with_dist(0.1, 3);
     set.insert(dist4);
 
-    assert!(!set.insert(Dist::new(0.5, 0)));
-    assert!(set.remove(&Dist::new(0.1, 3)));
+    assert!(!set.insert(Node::new_with_dist(0.5, 0)));
+    assert!(set.remove(&Node::new_with_dist(0.1, 3)));
 }
 
 fn make_rand_vectors(n: usize) -> Vec<Vec<f32>> {

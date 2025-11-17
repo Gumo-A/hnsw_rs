@@ -5,8 +5,10 @@ use std::time::Instant;
 use hnsw::helpers::args::{parse_args_eval, parse_args_eval_ef_cons};
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::{load_glove_array, load_sift_array};
-use hnsw::hnsw::index::HNSW;
+use hnsw::hnsw::index::{build_index_par, HNSW};
 
+use hnsw::hnsw::params::get_default_ml;
+use hnsw::hnsw::points::{Point, PointTrait, Points, VecTrait};
 use indicatif::{ProgressBar, ProgressStyle};
 
 fn main() -> std::io::Result<()> {
@@ -21,7 +23,7 @@ fn main() -> std::io::Result<()> {
     };
 
     // let file_name = format!("glove.twitter.27B.{dim}d");
-    let file_name = format!("glove.6B.{dim}d");
+    let file_name = format!("glove.840B.{dim}d");
 
     let (words, embeddings) = load_glove_array(lim, file_name.clone(), true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
@@ -47,12 +49,12 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let efs = Vec::from_iter((100..=200).step_by(100));
+    let efs = vec![500];
 
     for ef_cons in efs {
-        let embs = train_set.clone();
+        let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
         let start = Instant::now();
-        let index = HNSW::build_index_par(m, Some(ef_cons), embs, true).unwrap();
+        let index = build_index_par(m, Some(ef_cons), embs, true).unwrap();
         println!(
             "ef_cons {ef_cons} elapsed {} ms",
             start.elapsed().as_millis()
@@ -64,11 +66,6 @@ fn main() -> std::io::Result<()> {
         //     start.elapsed().as_millis() - end.elapsed().as_millis()
         // );
 
-        let index_path = format!("./ef_cons_impact/{file_name}_m{m}_efcons{ef_cons}.ann");
-
-        // println!("Saving index to current dir...");
-        index.save(index_path.as_str(), 0)?;
-        // let index = HNSW::from_path(&index_path)?;
         estimate_recall(&index, &test_set, &bf_data);
     }
 
@@ -153,7 +150,11 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
+fn estimate_recall<T: VecTrait>(
+    index: &HNSW<T>,
+    test_set: &Vec<Vec<f32>>,
+    bf_data: &HashMap<usize, Vec<usize>>,
+) {
     for ef in (10..=100).step_by(20) {
         let bar = ProgressBar::new(test_set.len() as u64);
         bar.set_message(format!("Finding ANNs ef={ef}"));
@@ -166,7 +167,9 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
         let mut recall_10 = Vec::new();
         let start = Instant::now();
         for (idx, query) in test_set.iter().enumerate() {
-            let anns = index.ann_by_vector(query, 10, ef).unwrap();
+            let anns = index
+                .ann_by_vector(&Point::new(query.clone()), 10, ef)
+                .unwrap();
             let true_nns: &Vec<usize> = bf_data.get(&idx).unwrap();
             let mut hits = 0;
             for true_nn in true_nns.iter().take(10) {

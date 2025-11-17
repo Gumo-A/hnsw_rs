@@ -1,9 +1,14 @@
-use crate::hnsw::dist::Dist;
-use crate::hnsw::points::{Point, Points};
+use crate::hnsw::{
+    dist::Node,
+    points::{point::Point, point_collection::Points},
+    vectors::VecTrait,
+};
+use core::panic;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
+use std::str::FromStr;
 use std::sync::Arc;
 
 pub fn load_glove_array(
@@ -46,13 +51,29 @@ pub fn load_glove_array(
             break;
         }
         let line = line_result?;
-        let mut parts = line.split_whitespace();
+        let mut parts = line.split(' ');
 
-        let word = parts.next().expect("Empty line");
+        let mut word = String::from_str(parts.next().expect("Empty line")).unwrap();
+        let mut values = Vec::new();
+        for i in parts {
+            let parse_attempt = i.parse::<f32>();
+            match parse_attempt {
+                Ok(v) => values.push(v),
+                Err(_) => word.push_str(i),
+            }
+        }
 
-        let values: Vec<f32> = parts
-            .map(|s| s.parse::<f32>().expect("Could not parse float"))
-            .collect();
+        if embeddings.len() > 1 {
+            if embeddings[0].len() != values.len() {
+                panic!(
+                    "Line {0}: vector is not the same size as others. Len: {1}, Word {2}",
+                    idx + 1,
+                    values.len(),
+                    word
+                );
+            }
+        }
+
         embeddings.push(values);
         words.push(word.to_string());
     }
@@ -103,7 +124,7 @@ pub fn load_sift_array(lim: usize, verbose: bool) -> Result<Vec<Vec<f32>>> {
     Ok(embeddings)
 }
 
-pub fn brute_force_nns(
+pub fn brute_force_nns<T: VecTrait>(
     nb_nns: usize,
     train_set: Arc<Points>,
     test_set: Arc<Points>,
@@ -126,7 +147,7 @@ pub fn brute_force_nns(
 
     let mut brute_force_results: HashMap<u32, Vec<u32>> = HashMap::new();
     for idx in ids.iter() {
-        let query = test_set.get_point(*idx as u32).unwrap();
+        let query = test_set.get_point(*idx as u32);
         let nns: Vec<u32> = get_nn_bf(query, &train_set, nb_nns);
         assert_eq!(nb_nns, nns.len());
         brute_force_results.insert(*idx, nns);
@@ -136,7 +157,7 @@ pub fn brute_force_nns(
     brute_force_results
 }
 
-fn get_nn_bf(point: &Point, others: &Arc<Points>, nb_nns: usize) -> Vec<u32> {
+fn get_nn_bf<T: VecTrait>(point: &Point, others: &Arc<Points>, nb_nns: usize) -> Vec<u32> {
     let sorted = sort_by_distance(point, others);
     sorted
         .values()
@@ -146,10 +167,9 @@ fn get_nn_bf(point: &Point, others: &Arc<Points>, nb_nns: usize) -> Vec<u32> {
         .collect()
 }
 
-fn sort_by_distance(point: &Point, others: &Arc<Points>) -> BTreeMap<Dist, usize> {
-    let result = others.iterate().map(|(idx, p)| {
-        let dist = p.dist2other(point);
-        (dist, idx as usize)
-    });
+fn sort_by_distance(point: &Point, others: &Arc<Points>) -> BTreeMap<Node, usize> {
+    let result = others
+        .iter_points()
+        .map(|p| (p.distance(point), p.id as usize));
     BTreeMap::from_iter(result)
 }

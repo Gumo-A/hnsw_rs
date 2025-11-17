@@ -9,7 +9,7 @@ use rand::seq::IteratorRandom;
 use hnsw::helpers::args::parse_args_bf;
 use hnsw::helpers::data::split_ids;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
-use hnsw::hnsw::points::Points;
+use hnsw::hnsw::points::{Points, Storage};
 
 const NB_NNS: usize = 100;
 
@@ -24,7 +24,8 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let file_name = format!("glove.6B.{dim}d");
+    // let file_name = format!("glove.6B.{dim}d");
+    let file_name = format!("glove.840B.{dim}d");
 
     let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/"
@@ -33,11 +34,11 @@ fn main() -> std::io::Result<()> {
     let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) =
         load_glove_array(lim, file_name.clone(), false).unwrap();
 
-    let test_frac = 0.01;
+    let test_frac = 0.001;
     let (train_set, test_set, train_idx, test_idx) = split_glove(embeddings, test_frac);
 
-    let train_set = Points::from_vecs_full(train_set, 0.0);
-    let test_set = Points::from_vecs_full(test_set, 0.0);
+    let train_set = Points::new_full(train_set, 0.0);
+    let test_set = Points::new_full(test_set, 0.0);
 
     let train_arc = Arc::new(train_set);
     let test_arc = Arc::new(test_set);

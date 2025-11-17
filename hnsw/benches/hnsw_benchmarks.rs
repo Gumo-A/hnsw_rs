@@ -25,7 +25,7 @@ fn insert_at_10000_m12(c: &mut Criterion) {
             b.iter_batched(
                 || (index.clone(), vector.clone(), Searcher::new()),
                 move |(mut i, vect, mut searcher): (HNSW, Vec<f32>, Searcher)| {
-                    i.points.insert(Point::new_quantized(10_000, 0, &vect));
+                    i.points.insert(Point::new_quant(10_000, 0, &vect));
                     i.insert(10_000, &mut searcher).unwrap();
                 },
                 criterion::BatchSize::LargeInput,
@@ -82,16 +82,16 @@ fn dist_computation_quantized_various_sizes(c: &mut Criterion) {
     for dim in DIMS.iter() {
         let mut rng = rand::thread_rng();
         let vector1 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point1 = Point::new_quantized(0, 0, &vector1);
+        let point1 = Point::new_quant(0, 0, &vector1);
 
         let vector2 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point2 = Point::new_quantized(0, 0, &vector2);
+        let point2 = Point::new_quant(0, 0, &vector2);
 
         group.bench_with_input(
             BenchmarkId::from_parameter(dim),
             &(&point1, &point2),
             |b, i| {
-                b.iter(|| i.0.dist2other(i.1));
+                b.iter(|| i.0.distance(i.1));
             },
         );
     }
@@ -116,7 +116,7 @@ fn dist_computation_full_various_sizes(c: &mut Criterion) {
             BenchmarkId::from_parameter(dim),
             &(&point1, &point2),
             |b, i| {
-                b.iter(|| i.0.dist2other(i.1));
+                b.iter(|| i.0.distance(i.1));
             },
         );
     }

@@ -1,49 +1,67 @@
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub struct Dist {
-    pub dist: f32,
+#[derive(Clone, Copy, Debug)]
+pub struct Node {
+    pub dist: Option<f32>,
     pub id: u32,
 }
 
-impl Dist {
-    pub fn new(dist: f32, id: u32) -> Self {
-        Dist { dist, id }
+impl Node {
+    pub fn new(id: u32) -> Self {
+        Node { dist: None, id }
+    }
+
+    pub fn new_with_dist(dist: f32, id: u32) -> Self {
+        Node {
+            dist: Some(dist),
+            id,
+        }
     }
 }
 
-impl Hash for Dist {
+impl Hash for Node {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-impl nohash_hasher::IsEnabled for Dist {}
+impl nohash_hasher::IsEnabled for Node {}
 
-impl Ord for Dist {
-    fn cmp(&self, other: &Dist) -> Ordering {
+impl Ord for Node {
+    fn cmp(&self, other: &Node) -> Ordering {
         self.dist.partial_cmp(&other.dist).unwrap()
     }
 }
 
-impl PartialOrd for Dist {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+impl PartialOrd for Node {
+    fn partial_cmp(&self, other: &Node) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl PartialEq for Dist {
-    fn eq(&self, other: &Dist) -> bool {
+impl PartialEq for Node {
+    fn eq(&self, other: &Node) -> bool {
         self.dist == other.dist
     }
 }
 
-impl Eq for Dist {}
+impl Eq for Node {}
 
-impl std::fmt::Display for Dist {
+mod tests {
+    use crate::hnsw::dist::Node;
+
+    #[test]
+    fn create_node() {
+        let _ = Node::new(0);
+    }
+}
+
+impl std::fmt::Display for Node {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.dist)
+        match self.dist {
+            Some(d) => write!(f, "{}", d),
+            None => write!(f, "{}", "None"),
+        }
     }
 }

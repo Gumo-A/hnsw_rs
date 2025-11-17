@@ -1,6 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct Params {
     pub m: u8,
     pub mmax: u8,
@@ -10,13 +8,17 @@ pub struct Params {
     pub dim: u32,
 }
 
+pub fn get_default_ml(m: u8) -> f32 {
+    1.0 / (m as f32).ln()
+}
+
 impl Params {
     pub fn from_m(m: u8, dim: u32) -> Params {
         Params {
             m,
             mmax: m,
             mmax0: (m * 2) as u8,
-            ml: 1.0 / (m as f32).ln(),
+            ml: get_default_ml(m),
             ef_cons: (m as u32) * 2,
             dim,
         }

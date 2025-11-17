@@ -2,7 +2,7 @@ extern crate hnsw;
 
 use std::sync::{Arc, Mutex};
 
-use hnsw::hnsw::{dist::Dist, graph::Graph};
+use hnsw::hnsw::{dist::Node, graph::Graph};
 use indicatif::ProgressBar;
 use nohash_hasher::{IntMap, IntSet};
 use rand::Rng;
@@ -40,7 +40,7 @@ fn make_rand_graph(n: usize, degree: usize) -> Graph {
                 .add_edge(
                     node as u32,
                     neighbor,
-                    Dist::new(rng.gen::<f32>(), neighbor as u32),
+                    Node::new_with_dist(rng.gen::<f32>(), neighbor as u32),
                 )
                 .unwrap();
         }
