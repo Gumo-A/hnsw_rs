@@ -1,15 +1,14 @@
-use crate::hnsw::{
-    dist::Node,
-    points::{point::Point, point_collection::Points},
-    vectors::VecTrait,
-};
 use core::panic;
+use graph::nodes::Node;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::collections::{BTreeMap, HashMap};
+use points::{point::Point, point_collection::Points};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
 use std::str::FromStr;
 use std::sync::Arc;
+use vectors::FullVec;
+use vectors::VecTrait;
 
 pub fn load_glove_array(
     lim: usize,
@@ -124,10 +123,10 @@ pub fn load_sift_array(lim: usize, verbose: bool) -> Result<Vec<Vec<f32>>> {
     Ok(embeddings)
 }
 
-pub fn brute_force_nns<T: VecTrait>(
+pub fn brute_force_nns(
     nb_nns: usize,
-    train_set: Arc<Points>,
-    test_set: Arc<Points>,
+    train_set: Arc<Points<FullVec>>,
+    test_set: Arc<Points<FullVec>>,
     ids: Vec<u32>,
     verbose: bool,
 ) -> HashMap<u32, Vec<u32>> {
@@ -147,7 +146,9 @@ pub fn brute_force_nns<T: VecTrait>(
 
     let mut brute_force_results: HashMap<u32, Vec<u32>> = HashMap::new();
     for idx in ids.iter() {
-        let query = test_set.get_point(*idx as u32);
+        let query = test_set
+            .get_point(*idx as u32)
+            .expect("Point ID not found in collection.");
         let nns: Vec<u32> = get_nn_bf(query, &train_set, nb_nns);
         assert_eq!(nb_nns, nns.len());
         brute_force_results.insert(*idx, nns);
@@ -157,19 +158,16 @@ pub fn brute_force_nns<T: VecTrait>(
     brute_force_results
 }
 
-fn get_nn_bf<T: VecTrait>(point: &Point, others: &Arc<Points>, nb_nns: usize) -> Vec<u32> {
+fn get_nn_bf(point: &Point<FullVec>, others: &Arc<Points<FullVec>>, nb_nns: usize) -> Vec<u32> {
     let sorted = sort_by_distance(point, others);
-    sorted
-        .values()
-        .copied()
-        .take(nb_nns)
-        .map(|x| x as u32)
-        .collect()
+    sorted.iter().take(nb_nns).map(|x| x.id).collect()
 }
 
-fn sort_by_distance(point: &Point, others: &Arc<Points>) -> BTreeMap<Node, usize> {
+fn sort_by_distance(point: &Point<FullVec>, others: &Arc<Points<FullVec>>) -> Vec<Node> {
     let result = others
         .iter_points()
-        .map(|p| (p.distance(point), p.id as usize));
-    BTreeMap::from_iter(result)
+        .map(|p| Node::new_with_dist(p.distance(point), p.id));
+    let mut nodes = Vec::from_iter(result);
+    nodes.sort();
+    nodes
 }

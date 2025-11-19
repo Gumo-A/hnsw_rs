@@ -1,17 +1,10 @@
-use super::{dist::Node, graph::Graph};
-use crate::{
-    helpers::data::split_ids,
-    hnsw::{
-        params::Params,
-        points::{
-            point::Point,
-            point_collection::{Points, Storage},
-        },
-    },
-};
+use crate::{helpers::data::split_ids, hnsw::params::Params};
+use graph::{graph::Graph, nodes::Node};
+use points::{point::Point, point_collection::Points};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use nohash_hasher::{IntMap, IntSet};
+use vectors::VecTrait;
 
 use std::{cmp::Reverse, collections::BTreeSet, sync::Arc};
 
@@ -66,14 +59,14 @@ impl Searcher {
 }
 
 #[derive(Debug, Clone)]
-pub struct HNSW {
+pub struct HNSW<T: VecTrait> {
     ep: u32,
     pub params: Params,
-    pub points: Points,
+    pub points: Points<T>,
     pub layers: IntMap<u8, Graph>,
 }
 
-impl HNSW {
+impl<T: VecTrait> HNSW<T> {
     pub fn new(m: u8, ef_cons: Option<u32>, dim: u32) -> Self {
         let params = if ef_cons.is_some() {
             Params::from_m_efcons(m, ef_cons.unwrap(), dim)
@@ -126,17 +119,21 @@ impl HNSW {
         println!("ml = {}", self.params.ml);
         println!("ef_cons = {}", self.params.ef_cons);
         println!("Nb. layers = {}", self.layers.len());
-        println!("Nb. of nodes = {}", self.points.len());
+        println!("Nb. of points = {}", self.points.len());
         for (idx, layer) in self.layers.iter() {
             println!("NB. nodes in layer {idx}: {}", layer.nb_nodes());
         }
         println!("ep: {:?}", self.ep);
     }
 
-    pub fn ann_by_vector(&self, point: &Point, n: usize, ef: u32) -> Result<Vec<u32>, String> {
+    pub fn ann_by_vector(&self, point: &Point<T>, n: usize, ef: u32) -> Result<Vec<u32>, String> {
         let mut searcher = Searcher::new();
         searcher.selected.push(Node::new_with_dist(
-            point.distance(self.points.get_point(self.ep)),
+            point.distance(
+                self.points
+                    .get_point(self.ep)
+                    .expect("Point ID not found in collection."),
+            ),
             self.ep,
         ));
         let nb_layer = self.layers.len();
@@ -160,7 +157,7 @@ impl HNSW {
     fn step_1(
         &self,
         searcher: &mut Searcher,
-        point: &Point,
+        point: &Point<T>,
         max_layer_nb: u8,
         level: u8,
         stop_at_layer: Option<u8>,
@@ -183,7 +180,7 @@ impl HNSW {
         Ok(())
     }
 
-    fn step_2(&self, searcher: &mut Searcher, point: &Point, level: u8) -> Result<(), String> {
+    fn step_2(&self, searcher: &mut Searcher, point: &Point<T>, level: u8) -> Result<(), String> {
         let bound = (level).min((self.layers.len() - 1) as u8);
 
         for layer_nb in (0..=bound).rev().map(|x| x as u8) {
@@ -255,7 +252,7 @@ impl HNSW {
         &self,
         searcher: &mut Searcher,
         layer: &Graph,
-        point: &Point,
+        point: &Point<T>,
         m: u8,
         extend_cands: bool,
         keep_pruned: bool,
@@ -278,7 +275,11 @@ impl HNSW {
             {
                 for neighbor_dist in layer.neighbors(dist.0.id)? {
                     searcher.candidates.push(Reverse(Node::new_with_dist(
-                        point.distance(self.points.get_point(neighbor_dist.id)),
+                        point.distance(
+                            self.points
+                                .get_point(neighbor_dist.id)
+                                .expect("Point ID not found in collection."),
+                        ),
                         neighbor_dist.id,
                     )));
                 }
@@ -293,7 +294,10 @@ impl HNSW {
         while (!searcher.candidates.is_empty()) & (searcher.selected.len() < m as usize) {
             // let s3 = Instant::now();
             let dist_e = searcher.candidates.pop().unwrap();
-            let e_point = self.points.get_point(dist_e.0.id);
+            let e_point = self
+                .points
+                .get_point(dist_e.0.id)
+                .expect("Point ID not found in collection.");
             // println!("s3 {}", s3.elapsed().as_nanos());
 
             // let s4 = Instant::now();
@@ -326,7 +330,10 @@ impl HNSW {
         // let s0 = Instant::now();
         searcher.clear_all();
 
-        let point = self.points.get_point(point_id);
+        let point = self
+            .points
+            .get_point(point_id)
+            .expect("Point ID not found in collection.");
 
         if self.layers.is_empty() {
             self.first_insert(point_id);
@@ -334,7 +341,11 @@ impl HNSW {
         }
 
         searcher.selected.push(Node::new_with_dist(
-            point.distance(self.points.get_point(self.ep)),
+            point.distance(
+                self.points
+                    .get_point(self.ep)
+                    .expect("Point ID not found in collection."),
+            ),
             self.ep,
         ));
 
@@ -440,10 +451,18 @@ impl HNSW {
         for point_id in ids.iter() {
             searcher.clear_searchers();
 
-            let point = index.points.get_point(*point_id);
+            let point = index
+                .points
+                .get_point(*point_id)
+                .expect("Point ID not found in collection.");
             let level = point.level;
             searcher.selected.push(Node::new_with_dist(
-                point.distance(index.points.get_point(index.ep)),
+                point.distance(
+                    index
+                        .points
+                        .get_point(index.ep)
+                        .expect("Point ID not found in collection."),
+                ),
                 index.ep,
             ));
 
@@ -538,7 +557,7 @@ impl HNSW {
     ///
     /// This is only the storing part, no indexing can
     /// be done on these points after this operation,
-    fn store_points(&mut self, points: Points) {
+    fn store_points(&mut self, points: Points<T>) {
         let max_layer_nb = points.iter_points().map(|point| point.level).max().unwrap();
         for layer_nb in 0..=max_layer_nb {
             self.layers.entry(layer_nb).or_insert(Graph::new());
@@ -572,34 +591,6 @@ impl HNSW {
         if self.layers.get(&max_layer_nb).unwrap().nb_nodes() == 1 {
             self.layers.remove(&max_layer_nb);
         }
-    }
-
-    pub fn build_index(
-        m: u8,
-        ef_cons: Option<u32>,
-        points: Points,
-        verbose: bool,
-    ) -> Result<Self, String> {
-        let mut searcher = Searcher::new();
-        let dim = match points.dim() {
-            None => panic!("No points in the collection"),
-            Some(d) => d,
-        };
-
-        let mut index = HNSW::new(m, ef_cons, dim as u32);
-        index.store_points(points);
-
-        let bar = get_progress_bar("Inserting Vectors".to_string(), index.points.len(), verbose);
-
-        let ids: Vec<u32> = index.points.ids().collect();
-        for id in ids.iter() {
-            index.insert(*id, &mut searcher)?;
-            if !bar.is_hidden() {
-                bar.inc(1);
-            }
-        }
-        index.delete_one_node_layer();
-        Ok(index)
     }
 
     // // // TODO: Implementation is faster, but index quality is not good enough
@@ -688,12 +679,21 @@ impl HNSW {
     //     Ok(index)
     // }
 
-    fn get_nearest<I>(&self, point: &Point, others: I) -> Node
+    fn get_nearest<I>(&self, point: &Point<T>, others: I) -> Node
     where
         I: Iterator<Item = u32>,
     {
         others
-            .map(|idx| Node::new_with_dist(point.distance(self.points.get_point(idx)), idx))
+            .map(|idx| {
+                Node::new_with_dist(
+                    point.distance(
+                        self.points
+                            .get_point(idx)
+                            .expect("Point ID not found in collection."),
+                    ),
+                    idx,
+                )
+            })
             .min()
             .unwrap()
     }
@@ -702,7 +702,7 @@ impl HNSW {
         &self,
         searcher: &mut Searcher,
         layer: &Graph,
-        point: &Point,
+        point: &Point<T>,
         ef: u32,
     ) -> Result<(), String> {
         searcher
@@ -729,7 +729,11 @@ impl HNSW {
                 cand_neighbors
                     .iter()
                     .filter(|dist| searcher.visited.insert(dist.id))
-                    .map(|dist| self.points.get_point(dist.id)),
+                    .map(|dist| {
+                        self.points
+                            .get_point(dist.id)
+                            .expect("Point ID not found in collection.")
+                    }),
             );
             for n2q_dist in q2cand_neighbors_dists {
                 let f2q_dist = searcher.selected.peek().unwrap();
@@ -817,12 +821,12 @@ fn get_progress_bar(message: String, remaining: usize, verbose: bool) -> Progres
     bar
 }
 
-pub fn build_index_par(
+pub fn build_index_par<T: VecTrait + std::marker::Send + std::marker::Sync + 'static>(
     m: u8,
     ef_cons: Option<u32>,
-    points: Points,
+    points: Points<T>,
     verbose: bool,
-) -> Result<HNSW, String> {
+) -> Result<HNSW<T>, String> {
     let nb_threads = std::thread::available_parallelism().unwrap().get() as u8;
     let dim = match points.dim() {
         None => panic!("No points in the collection"),
@@ -864,6 +868,34 @@ pub fn build_index_par(
     // index_arc.assert_param_compliance();
 
     let mut index = Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
+    index.delete_one_node_layer();
+    Ok(index)
+}
+
+pub fn build_index<T: VecTrait>(
+    m: u8,
+    ef_cons: Option<u32>,
+    points: Points<T>,
+    verbose: bool,
+) -> Result<HNSW<T>, String> {
+    let mut searcher = Searcher::new();
+    let dim = match points.dim() {
+        None => panic!("No points in the collection"),
+        Some(d) => d,
+    };
+
+    let mut index = HNSW::new(m, ef_cons, dim as u32);
+    index.store_points(points);
+
+    let bar = get_progress_bar("Inserting Vectors".to_string(), index.points.len(), verbose);
+
+    let ids: Vec<u32> = index.points.ids().collect();
+    for id in ids.iter() {
+        index.insert(*id, &mut searcher)?;
+        if !bar.is_hidden() {
+            bar.inc(1);
+        }
+    }
     index.delete_one_node_layer();
     Ok(index)
 }

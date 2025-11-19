@@ -2,7 +2,7 @@ use core::panic;
 use nohash_hasher::{IntMap, IntSet};
 use std::sync::{Arc, Mutex};
 
-use super::dist::Node;
+use crate::nodes::Node;
 
 #[derive(Debug, Clone)]
 pub struct Graph {
@@ -20,6 +20,17 @@ impl Graph {
         Graph {
             nodes: IntMap::default(),
         }
+    }
+
+    pub fn from_layer_data(data: IntMap<u32, IntMap<u32, Node>>) -> Graph {
+        let mut nodes = IntMap::default();
+        for (node_id, neighbors) in data.iter() {
+            nodes.insert(
+                *node_id,
+                Arc::new(Mutex::new(IntSet::from_iter(neighbors.values().copied()))),
+            );
+        }
+        Self { nodes }
     }
 
     pub fn add_node(&mut self, point_id: u32) {
@@ -92,7 +103,7 @@ impl Graph {
                 .unwrap()
                 .lock()
                 .unwrap()
-                .remove(&Node::new(node_a))
+                .remove(&&Node::new_with_dist(dist.dist.unwrap(), node_a))
         };
         Ok(a_rem & b_rem)
     }
@@ -117,7 +128,7 @@ impl Graph {
             .unwrap()
             .lock()
             .unwrap()
-            .remove(&Node::new(node_a));
+            .remove(&Node::new_with_dist(dist.dist.unwrap(), node_a));
         Ok(a_rem & b_rem)
     }
 
@@ -168,7 +179,7 @@ impl Graph {
                 .unwrap()
                 .lock()
                 .unwrap()
-                .remove(&Node::new(node_id));
+                .remove(&Node::new_with_dist(dist.dist.unwrap(), node_id));
         }
         self.nodes.remove(&node_id);
         Ok(())
@@ -189,7 +200,9 @@ impl Graph {
         match self.nodes.get_mut(&node_id) {
             Some(neighbors) => neighbors.lock().unwrap().drain().collect(),
             None => {
-                panic!("Could not get the neighbors of {node_id}. The graph does not contain this node");
+                panic!(
+                    "Could not get the neighbors of {node_id}. The graph does not contain this node"
+                );
             }
         }
     }

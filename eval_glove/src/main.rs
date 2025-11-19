@@ -5,11 +5,12 @@ use std::time::Instant;
 use hnsw::helpers::args::{parse_args_eval, parse_args_eval_ef_cons};
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::{load_glove_array, load_sift_array};
-use hnsw::hnsw::index::{build_index_par, HNSW};
+use hnsw::hnsw::index::{build_index, build_index_par, HNSW};
 
 use hnsw::hnsw::params::get_default_ml;
-use hnsw::hnsw::points::{Point, PointTrait, Points, VecTrait};
 use indicatif::{ProgressBar, ProgressStyle};
+use points::{point::Point, point_collection::Points};
+use vectors::LVQVec;
 
 fn main() -> std::io::Result<()> {
     let (dim, lim, m) = match parse_args_eval() {
@@ -49,11 +50,12 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let efs = vec![500];
+    let efs = vec![100];
 
     for ef_cons in efs {
         let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
         let start = Instant::now();
+        // let index = build_index(m, Some(ef_cons), embs.clone(), true).unwrap();
         let index = build_index_par(m, Some(ef_cons), embs, true).unwrap();
         println!(
             "ef_cons {ef_cons} elapsed {} ms",
@@ -150,8 +152,8 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn estimate_recall<T: VecTrait>(
-    index: &HNSW<T>,
+fn estimate_recall(
+    index: &HNSW<LVQVec>,
     test_set: &Vec<Vec<f32>>,
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
@@ -168,7 +170,7 @@ fn estimate_recall<T: VecTrait>(
         let start = Instant::now();
         for (idx, query) in test_set.iter().enumerate() {
             let anns = index
-                .ann_by_vector(&Point::new(query.clone()), 10, ef)
+                .ann_by_vector(&Point::new_quant(0, 0, &query.clone()), 10, ef)
                 .unwrap();
             let true_nns: &Vec<usize> = bf_data.get(&idx).unwrap();
             let mut hits = 0;

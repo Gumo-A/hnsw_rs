@@ -9,7 +9,7 @@ use rand::seq::IteratorRandom;
 use hnsw::helpers::args::parse_args_bf;
 use hnsw::helpers::data::split_ids;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
-use hnsw::hnsw::points::{Points, Storage};
+use points::point_collection::Points;
 
 const NB_NNS: usize = 100;
 
@@ -32,7 +32,7 @@ fn main() -> std::io::Result<()> {
     ));
 
     let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) =
-        load_glove_array(lim, file_name.clone(), false).unwrap();
+        load_glove_array(lim, file_name.clone(), true).unwrap();
 
     let test_frac = 0.001;
     let (train_set, test_set, train_idx, test_idx) = split_glove(embeddings, test_frac);
@@ -96,6 +96,7 @@ fn split_glove(
 ) -> (Vec<Vec<f32>>, Vec<Vec<f32>>, HashSet<usize>, HashSet<usize>) {
     assert!((test_frac > 0.0) & (test_frac < 1.0));
     let test_size = ((embs.len() as f32) * test_frac).round() as usize;
+    println!("We will find neighbors for {test_size} vectors by brute-force");
 
     let ids: HashSet<usize> = (0..embs.len()).collect();
     let mut rng = &mut rand::thread_rng();
@@ -107,14 +108,8 @@ fn split_glove(
     );
     let train_ids: HashSet<usize> = ids.difference(&test_ids).cloned().collect();
 
-    let train = (0..embs.len())
-        .filter(|id| train_ids.contains(id))
-        .map(|id| embs[id].clone())
-        .collect();
-    let test = (0..embs.len())
-        .filter(|id| test_ids.contains(id))
-        .map(|id| embs[id].clone())
-        .collect();
+    let train = train_ids.iter().map(|id| embs[*id].clone()).collect();
+    let test = test_ids.iter().map(|id| embs[*id].clone()).collect();
 
     (train, test, train_ids, test_ids)
 }

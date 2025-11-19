@@ -40,6 +40,7 @@ version = "0.1.0"
 dependencies = [
  "hnsw",
  "indicatif",
+ "points",
  "rand",
  "serde_json",
 ]
@@ -186,8 +187,10 @@ version = "0.1.0"
 dependencies = [
  "hnsw",
  "indicatif",
+ "points",
  "rand",
  "text_io",
+ "vectors",
 ]
 
 [[package]]
@@ -199,6 +202,13 @@ dependencies = [
  "cfg-if",
  "libc",
  "wasi",
+]
+
+[[package]]
+name = "graph"
+version = "0.1.0"
+dependencies = [
+ "nohash-hasher",
 ]
 
 [[package]]
@@ -221,13 +231,16 @@ name = "hnsw"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "graph",
  "indicatif",
  "nohash-hasher",
  "num",
+ "points",
  "rand",
  "regex",
  "serde",
  "serde_json",
+ "vectors",
 ]
 
 [[package]]
@@ -423,6 +436,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81b30686a7d9c3e010b84284bdd26a29f2138574f52f5eb6f794fc0ad924e705"
 dependencies = [
  "plotters-backend",
+]
+
+[[package]]
+name = "points"
+version = "0.1.0"
+dependencies = [
+ "graph",
+ "rand",
+ "vectors",
 ]
 
 [[package]]
@@ -637,6 +659,13 @@ name = "unicode-width"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e51733f11c9c4f72aa0c160008246859e340b00807569a0da0e7a1079b27ba85"
+
+[[package]]
+name = "vectors"
+version = "0.1.0"
+dependencies = [
+ "rand",
+]
 
 [[package]]
 name = "walkdir"

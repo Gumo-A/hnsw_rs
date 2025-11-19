@@ -48,20 +48,4 @@ impl PartialEq for Node {
 
 impl Eq for Node {}
 
-mod tests {
-    use crate::hnsw::dist::Node;
-
-    #[test]
-    fn create_node() {
-        let _ = Node::new(0);
-    }
-}
-
-impl std::fmt::Display for Node {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self.dist {
-            Some(d) => write!(f, "{}", d),
-            None => write!(f, "{}", "None"),
-        }
-    }
-}
+mod tests {}

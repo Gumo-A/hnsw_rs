@@ -17,6 +17,9 @@ rustflags = ["-C", "target-cpu=native"]
 bench = false
 
 [dependencies]
+graph = {path = "../graph"}
+vectors = {path = "../vectors"}
+points = {path = "../points"}
 indicatif = "0.17.8"
 nohash-hasher = "0.2.0"
 rand = "0.8.5"
