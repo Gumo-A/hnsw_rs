@@ -1,4 +1,5 @@
 use crate::VecTrait;
+const CHUNK_SIZE: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct FullVec {

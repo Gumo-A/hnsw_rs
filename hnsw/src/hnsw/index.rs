@@ -62,12 +62,13 @@ impl Searcher {
 pub struct HNSW<T: VecTrait> {
     ep: u32,
     pub params: Params,
-    pub points: Points<T>,
     pub layers: IntMap<u8, Graph>,
+    points: Points<T>,
+    verbose: bool,
 }
 
 impl<T: VecTrait> HNSW<T> {
-    pub fn new(m: u8, ef_cons: Option<u32>, dim: u32) -> Self {
+    pub fn new(m: u8, ef_cons: Option<u32>, dim: u32, verbose: bool) -> Self {
         let params = if ef_cons.is_some() {
             Params::from_m_efcons(m, ef_cons.unwrap(), dim)
         } else {
@@ -78,7 +79,12 @@ impl<T: VecTrait> HNSW<T> {
             ep: 0,
             points: Points::new(),
             layers: IntMap::default(),
+            verbose,
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.points.len()
     }
 
     pub fn assert_param_compliance(&self) {
@@ -326,7 +332,13 @@ impl<T: VecTrait> HNSW<T> {
         Ok(())
     }
 
-    pub fn insert(&mut self, point_id: u32, searcher: &mut Searcher) -> Result<bool, String> {
+    pub fn insert_point(&mut self, point: Point<T>) -> Result<bool, String> {
+        let point_id = point.id;
+        self.points.push(point);
+        self.insert(point_id, &mut Searcher::new())
+    }
+
+    fn insert(&mut self, point_id: u32, searcher: &mut Searcher) -> Result<bool, String> {
         // let s0 = Instant::now();
         searcher.clear_all();
 
@@ -369,6 +381,27 @@ impl<T: VecTrait> HNSW<T> {
 
         self.write_results_prune(searcher)?;
 
+        Ok(true)
+    }
+
+    pub fn insert_bulk(&mut self, points: Points<T>) -> Result<bool, String> {
+        let mut searcher = Searcher::new();
+
+        self.store_points(points);
+
+        let bar = get_progress_bar(
+            "Inserting Vectors".to_string(),
+            self.points.len(),
+            self.verbose,
+        );
+
+        let ids: Vec<u32> = self.points.ids().collect();
+        for id in ids.iter() {
+            self.insert(*id, &mut searcher)?;
+            if !bar.is_hidden() {
+                bar.inc(1);
+            }
+        }
         Ok(true)
     }
 
@@ -683,17 +716,8 @@ impl<T: VecTrait> HNSW<T> {
     where
         I: Iterator<Item = u32>,
     {
-        others
-            .map(|idx| {
-                Node::new_with_dist(
-                    point.distance(
-                        self.points
-                            .get_point(idx)
-                            .expect("Point ID not found in collection."),
-                    ),
-                    idx,
-                )
-            })
+        point
+            .dist2many(others.map(|idx| self.points.get_point(idx).unwrap()))
             .min()
             .unwrap()
     }
@@ -718,7 +742,7 @@ impl<T: VecTrait> HNSW<T> {
             if cand_dist.0 > *furthest2q_dist {
                 break;
             }
-            let cand_neighbors = match layer.neighbors(cand_dist.0.id) {
+            let cand_neighbors = match layer.neighbors_vec(cand_dist.0.id) {
                 Ok(neighs) => neighs,
                 Err(msg) => return Err(format!("Error in search_layer: {msg}")),
             };
@@ -728,10 +752,10 @@ impl<T: VecTrait> HNSW<T> {
             let q2cand_neighbors_dists = point.dist2many(
                 cand_neighbors
                     .iter()
-                    .filter(|dist| searcher.visited.insert(dist.id))
-                    .map(|dist| {
+                    .filter(|node| searcher.visited.insert(node.id))
+                    .map(|node| {
                         self.points
-                            .get_point(dist.id)
+                            .get_point(node.id)
                             .expect("Point ID not found in collection.")
                     }),
             );
@@ -833,7 +857,7 @@ pub fn build_index_par<T: VecTrait + std::marker::Send + std::marker::Sync + 'st
         Some(d) => d,
     };
 
-    let mut index = HNSW::new(m, ef_cons, dim as u32);
+    let mut index = HNSW::new(m, ef_cons, dim as u32, verbose);
     index.store_points(points);
     let index_arc = Arc::new(index);
 
@@ -878,24 +902,12 @@ pub fn build_index<T: VecTrait>(
     points: Points<T>,
     verbose: bool,
 ) -> Result<HNSW<T>, String> {
-    let mut searcher = Searcher::new();
     let dim = match points.dim() {
         None => panic!("No points in the collection"),
-        Some(d) => d,
+        Some(d) => d as u32,
     };
-
-    let mut index = HNSW::new(m, ef_cons, dim as u32);
-    index.store_points(points);
-
-    let bar = get_progress_bar("Inserting Vectors".to_string(), index.points.len(), verbose);
-
-    let ids: Vec<u32> = index.points.ids().collect();
-    for id in ids.iter() {
-        index.insert(*id, &mut searcher)?;
-        if !bar.is_hidden() {
-            bar.inc(1);
-        }
-    }
+    let mut index = HNSW::new(m, ef_cons, dim, verbose);
+    index.insert_bulk(points)?;
     index.delete_one_node_layer();
     Ok(index)
 }

@@ -5,6 +5,7 @@ use vectors::{FullVec, LVQVec, VecTrait};
 pub struct Point<T: VecTrait> {
     pub id: u32,
     pub level: u8,
+    removed: bool,
     vector: T,
 }
 
@@ -30,6 +31,18 @@ impl<T: VecTrait> Point<T> {
     {
         others.map(|other| Node::new_with_dist(self.vector.distance(&other.vector), other.id))
     }
+
+    /// Marks the point as removed,
+    /// returns true if the toggle was made,
+    /// false if the point was already marked.
+    pub fn set_removed(&mut self) -> bool {
+        if self.removed {
+            false
+        } else {
+            self.removed = true;
+            true
+        }
+    }
 }
 
 impl Point<LVQVec> {
@@ -37,8 +50,13 @@ impl Point<LVQVec> {
         Point {
             id,
             level,
+            removed: false,
             vector: LVQVec::new(vector),
         }
+    }
+
+    pub fn distance(&self, other: &Point<LVQVec>) -> f32 {
+        self.vector.dist2other(&other.vector)
     }
 }
 
@@ -47,6 +65,7 @@ impl Point<FullVec> {
         Point {
             id,
             level,
+            removed: false,
             vector: FullVec::new(vector),
         }
     }
@@ -57,5 +76,9 @@ impl Point<FullVec> {
 
     pub fn get_low_vector(&self) -> &Vec<f32> {
         &self.vector.vals
+    }
+
+    pub fn quantized(&self) -> Point<LVQVec> {
+        Point::new_quant(self.id, self.level, self.get_low_vector())
     }
 }

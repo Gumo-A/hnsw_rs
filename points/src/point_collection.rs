@@ -136,16 +136,22 @@ impl<T: VecTrait> Points<T> {
         self.collection.len() < index
     }
 
-    fn push(&mut self, mut point: Point<T>) {
+    pub fn push(&mut self, mut point: Point<T>) {
         point.id = self.len() as u32;
         self.collection.push(point);
     }
 
-    fn remove(&mut self, index: u32) -> Option<Point<T>> {
+    /// Removes a Point from the collection,
+    /// returning true if it was removed,
+    /// or false if it was already.
+    pub fn remove(&mut self, index: u32) -> bool {
         if index >= self.len() as u32 {
-            None
+            false
         } else {
-            Some(self.collection.remove(index as usize))
+            self.collection
+                .get_mut(index as usize)
+                .unwrap()
+                .set_removed()
         }
     }
 

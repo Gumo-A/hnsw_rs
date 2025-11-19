@@ -141,6 +141,20 @@ impl Graph {
         }
     }
 
+    pub fn neighbors_vec(&self, node_id: u32) -> Result<Vec<Node>, String> {
+        let neighbors = match self.nodes.get(&node_id) {
+            Some(neighbors) => neighbors,
+            None => {
+                return Err(format!(
+                    "Error getting neighbors of {node_id} (function 'neighbors'), it is not in the graph."
+                ));
+            }
+        };
+
+        let neighbors = neighbors.lock().unwrap().iter().cloned().collect();
+        Ok(neighbors)
+    }
+
     pub fn replace_or_add_neighbors<I>(&self, node_id: u32, new_neighbors: I) -> Result<(), String>
     where
         I: Iterator<Item = Node>,
