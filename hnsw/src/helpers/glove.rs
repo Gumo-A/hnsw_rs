@@ -1,14 +1,14 @@
 use core::panic;
-use graph::nodes::Node;
+use graph::nodes::Dist;
 use indicatif::{ProgressBar, ProgressStyle};
 use points::{point::Point, point_collection::Points};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
+use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
-use vectors::FullVec;
-use vectors::VecTrait;
+use vectors::{FullVec, VecTrait};
 
 pub fn load_glove_array(
     lim: usize,
@@ -163,11 +163,14 @@ fn get_nn_bf(point: &Point<FullVec>, others: &Arc<Points<FullVec>>, nb_nns: usiz
     sorted.iter().take(nb_nns).map(|x| x.id).collect()
 }
 
-fn sort_by_distance(point: &Point<FullVec>, others: &Arc<Points<FullVec>>) -> Vec<Node> {
-    let result = others
-        .iter_points()
-        .map(|p| Node::new_with_dist(p.distance(point), p.id));
-    let mut nodes = Vec::from_iter(result);
-    nodes.sort();
-    nodes
+fn sort_by_distance(point: &Point<FullVec>, others: &Arc<Points<FullVec>>) -> Vec<Dist> {
+    let points: Vec<&Point<FullVec>> = others.iter_points().collect();
+    let result = point.dist2many(points.iter().map(|p| *p));
+    let mut dists = Vec::from_iter(
+        result
+            .zip(points.iter())
+            .map(|(dist, p)| Dist::new(p.id, dist)),
+    );
+    dists.sort();
+    dists
 }

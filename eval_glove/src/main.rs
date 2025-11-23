@@ -5,12 +5,12 @@ use std::time::Instant;
 use hnsw::helpers::args::{parse_args_eval, parse_args_eval_ef_cons};
 use hnsw::helpers::data::load_bf_data;
 use hnsw::helpers::glove::{load_glove_array, load_sift_array};
-use hnsw::hnsw::index::{build_index, build_index_par, HNSW};
 
-use hnsw::hnsw::params::get_default_ml;
+use hnsw::params::get_default_ml;
+use hnsw::template::HNSW;
 use indicatif::{ProgressBar, ProgressStyle};
 use points::{point::Point, point_collection::Points};
-use vectors::LVQVec;
+use vectors::{FullVec, LVQVec};
 
 fn main() -> std::io::Result<()> {
     let (dim, lim, m) = match parse_args_eval() {
@@ -23,8 +23,8 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    // let file_name = format!("glove.twitter.27B.{dim}d");
-    let file_name = format!("glove.840B.{dim}d");
+    let file_name = format!("glove.6B.{dim}d");
+    // let file_name = format!("glove.840B.{dim}d");
 
     let (words, embeddings) = load_glove_array(lim, file_name.clone(), true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
@@ -50,26 +50,27 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let efs = vec![100];
+    let ef_cons = 500;
 
-    for ef_cons in efs {
-        let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
-        let start = Instant::now();
-        // let index = build_index(m, Some(ef_cons), embs.clone(), true).unwrap();
-        let index = build_index_par(m, Some(ef_cons), embs, true).unwrap();
-        println!(
-            "ef_cons {ef_cons} elapsed {} ms",
-            start.elapsed().as_millis()
-        );
+    let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
+    let start = Instant::now();
+    let mut store = HNSW::new(m, Some(ef_cons), embs.dim().unwrap() as u32, true);
+    store.insert_bulk(embs).unwrap();
+    store.print_index();
+    // let index = build_index(m, Some(ef_cons), embs.clone(), true).unwrap();
+    // let index = build_index_par(m, Some(ef_cons), embs, true).unwrap();
+    println!(
+        "ef_cons {ef_cons} elapsed {} ms",
+        start.elapsed().as_millis()
+    );
 
-        // index.print_index();
-        // println!(
-        //     "Multi-thread (v3) elapsed time: {}ms",
-        //     start.elapsed().as_millis() - end.elapsed().as_millis()
-        // );
+    // index.print_index();
+    // println!(
+    //     "Multi-thread (v3) elapsed time: {}ms",
+    //     start.elapsed().as_millis() - end.elapsed().as_millis()
+    // );
 
-        estimate_recall(&index, &test_set, &bf_data);
-    }
+    // estimate_recall(&store, &test_set, &bf_data);
 
     // index.assert_param_compliance();
 
@@ -88,11 +89,13 @@ fn main() -> std::io::Result<()> {
 
     // let ef = 1000;
     // for (i, idx) in bf_data.keys().enumerate() {
-    //     if i > 3 {
+    //     if i > 5 {
     //         break;
     //     }
-    //     let point = test_set.get(*idx).unwrap();
-    //     let anns = index.ann_by_vector(point, 10, ef).unwrap();
+    //     let vector = test_set.get(*idx).unwrap();
+    //     let anns = store
+    //         .ann_by_vector(&Point::new_quant(0, 0, &vector.clone()), 10, ef)
+    //         .unwrap();
     //     let anns_words: Vec<String> = anns
     //         .iter()
     //         .map(|x| train_words[*x as usize].clone())
@@ -157,7 +160,8 @@ fn estimate_recall(
     test_set: &Vec<Vec<f32>>,
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
-    for ef in (10..=100).step_by(20) {
+    let n = 10;
+    for ef in (10..100).step_by(20) {
         let bar = ProgressBar::new(test_set.len() as u64);
         bar.set_message(format!("Finding ANNs ef={ef}"));
         bar.set_style(
@@ -169,17 +173,20 @@ fn estimate_recall(
         let mut recall_10 = Vec::new();
         let start = Instant::now();
         for (idx, query) in test_set.iter().enumerate() {
-            let anns = index
-                .ann_by_vector(&Point::new_quant(0, 0, &query.clone()), 10, ef)
-                .unwrap();
+            let anns: Vec<usize> = index
+                .ann_by_vector(&Point::new_quant(0, 0, &query.clone()), n, ef)
+                .unwrap()
+                .iter()
+                .map(|x| *x as usize)
+                .collect();
             let true_nns: &Vec<usize> = bf_data.get(&idx).unwrap();
             let mut hits = 0;
-            for true_nn in true_nns.iter().take(10) {
-                if anns.contains(&(*true_nn as u32)) {
+            for true_nn in true_nns.iter().take(n) {
+                if anns.contains(true_nn) {
                     hits += 1;
                 }
             }
-            recall_10.push((hits as f32) / 10.0);
+            recall_10.push((hits as f32) / (n as f32));
             bar.inc(1);
         }
         let mut query_time = (start.elapsed().as_nanos() as f32) / (test_set.len() as f32);

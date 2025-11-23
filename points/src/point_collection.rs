@@ -159,11 +159,35 @@ impl<T: VecTrait> Points<T> {
         self.collection.get(index as usize)
     }
 
+    pub fn distance(&self, a_idx: u32, b_idx: u32) -> Option<f32> {
+        let point_a = self.get_point(a_idx);
+        let point_b = self.get_point(b_idx);
+        match (point_a, point_b) {
+            (Some(a), Some(b)) => Some(a.dist2other(b)),
+            _ => None,
+        }
+    }
+
+    pub fn distance2point(&self, point: &Point<T>, idx: u32) -> Option<f32> {
+        let other = self.get_point(idx);
+        match other {
+            Some(b) => Some(point.dist2other(b)),
+            _ => None,
+        }
+    }
+
     pub fn get_points(&self, indices: &Vec<u32>) -> Vec<&Point<T>> {
         indices
             .iter()
             .map(|idx| self.collection.get(*idx as usize).unwrap())
             .collect()
+    }
+
+    pub fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point<T>>
+    where
+        I: Iterator<Item = u32>,
+    {
+        indices.map(|idx| self.collection.get(idx as usize).unwrap())
     }
 
     fn get_point_mut(&mut self, index: u32) -> Option<&mut Point<T>> {
@@ -193,7 +217,7 @@ impl<'a, T: VecTrait> Points<T> {
     pub fn iter_points<'b: 'a>(&'b self) -> impl Iterator<Item = &'a Point<T>> {
         self.collection.iter()
     }
-    pub fn iter_points_mut<'b: 'a>(&'b mut self) -> impl Iterator<Item = &mut Point<T>> {
+    pub fn iter_points_mut<'b: 'a>(&mut self) -> impl Iterator<Item = &mut Point<T>> {
         self.collection.iter_mut()
     }
 }

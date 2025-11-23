@@ -60,8 +60,30 @@ impl LVQVec {
         }
         acc.iter().sum::<f32>().sqrt()
     }
+}
 
-    pub fn dist2other(&self, other: &Self) -> f32 {
+impl VecTrait for LVQVec {
+    fn distance(&self, other: &impl VecTrait) -> f32 {
+        let other = other.get_vals();
+        let mut acc = [0.0f32; CHUNK_SIZE];
+        let vector_chunks = other.chunks_exact(CHUNK_SIZE);
+        let chunks_iter = self.quantized_vec.chunks_exact(CHUNK_SIZE);
+        let self_rem = chunks_iter.remainder();
+        let other_rem = vector_chunks.remainder();
+
+        for (chunkx, chunky) in chunks_iter.zip(vector_chunks) {
+            let acc_iter = chunkx.iter().zip(chunky);
+            for (idx, (x, y)) in acc_iter.enumerate() {
+                acc[idx] += (((*x as f32) * self.delta + self.lower) - y).powi(2);
+            }
+        }
+        for (x, y) in self_rem.iter().zip(other_rem) {
+            acc[0] += (((*x as f32) * self.delta + self.lower) - y).powi(2);
+        }
+        acc.iter().sum::<f32>().sqrt()
+    }
+
+    fn dist2other(&self, other: &Self) -> f32 {
         let mut acc = [0.0f32; CHUNK_SIZE];
         let chunks_iter = self.quantized_vec.chunks_exact(CHUNK_SIZE);
         let vector_chunks = other.quantized_vec.chunks_exact(CHUNK_SIZE);
@@ -84,16 +106,6 @@ impl LVQVec {
         dist
     }
 
-    pub fn dist2many<'a, I>(&'a self, others: I) -> impl Iterator<Item = f32> + 'a
-    where
-        I: Iterator<Item = &'a Self> + 'a,
-    {
-        let self_full = self.get_vals();
-        others.map(move |other| other.dist2vec(&self_full))
-    }
-}
-
-impl VecTrait for LVQVec {
     fn iter_vals(&self) -> impl Iterator<Item = f32> {
         self.quantized_vec
             .iter()
@@ -134,20 +146,4 @@ impl VecTrait for LVQVec {
 }
 
 #[cfg(test)]
-mod tests {
-
-    use rand::Rng;
-    use std::time::Instant;
-
-    use super::LVQVec;
-    use crate::{FullVec, VecTrait};
-
-    fn gen_rand_vecs(dim: usize, n: usize) -> Vec<LVQVec> {
-        let mut rng = rand::thread_rng();
-        let mut vecs = vec![];
-        for _ in 0..n {
-            vecs.push(LVQVec::new(&(0..dim).map(|_| rng.r#gen::<f32>()).collect()))
-        }
-        vecs
-    }
-}
+mod tests {}

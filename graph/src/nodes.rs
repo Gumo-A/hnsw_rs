@@ -1,51 +1,34 @@
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
+pub type Node = u32;
 
 #[derive(Clone, Copy, Debug)]
-pub struct Node {
-    pub dist: Option<f32>,
-    pub id: u32,
+pub struct Dist {
+    pub id: Node,
+    pub dist: f32,
 }
 
-impl Node {
-    pub fn new(id: u32) -> Self {
-        Node { dist: None, id }
-    }
-
-    pub fn new_with_dist(dist: f32, id: u32) -> Self {
-        Node {
-            dist: Some(dist),
-            id,
-        }
+impl Dist {
+    pub fn new(id: Node, dist: f32) -> Self {
+        Dist { id, dist }
     }
 }
 
-impl Hash for Node {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
-}
-
-impl nohash_hasher::IsEnabled for Node {}
-
-impl Ord for Node {
-    fn cmp(&self, other: &Node) -> Ordering {
-        self.dist.partial_cmp(&other.dist).unwrap()
-    }
-}
-
-impl PartialOrd for Node {
-    fn partial_cmp(&self, other: &Node) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for Node {
-    fn eq(&self, other: &Node) -> bool {
+impl PartialEq for Dist {
+    fn eq(&self, other: &Dist) -> bool {
         self.dist == other.dist
     }
 }
 
-impl Eq for Node {}
+impl Eq for Dist {}
 
-mod tests {}
+impl PartialOrd for Dist {
+    fn partial_cmp(&self, other: &Dist) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+use std::cmp::Ordering;
+impl Ord for Dist {
+    fn cmp(&self, other: &Dist) -> Ordering {
+        self.dist.partial_cmp(&other.dist).unwrap()
+    }
+}

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use hnsw::helpers::data::split_ids;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
 use points::point_collection::Points;
 
-const NB_NNS: usize = 100;
+const NB_NNS: usize = 10;
 
 fn main() -> std::io::Result<()> {
     let (dim, lim) = match parse_args_bf() {
@@ -24,8 +24,8 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    // let file_name = format!("glove.6B.{dim}d");
-    let file_name = format!("glove.840B.{dim}d");
+    let file_name = format!("glove.6B.{dim}d");
+    // let file_name = format!("glove.840B.{dim}d");
 
     let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/"
@@ -34,7 +34,7 @@ fn main() -> std::io::Result<()> {
     let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) =
         load_glove_array(lim, file_name.clone(), true).unwrap();
 
-    let test_frac = 0.001;
+    let test_frac = 0.01;
     let (train_set, test_set, train_idx, test_idx) = split_glove(embeddings, test_frac);
 
     let train_set = Points::new_full(train_set, 0.0);
@@ -93,20 +93,27 @@ fn main() -> std::io::Result<()> {
 fn split_glove(
     embs: Vec<Vec<f32>>,
     test_frac: f32,
-) -> (Vec<Vec<f32>>, Vec<Vec<f32>>, HashSet<usize>, HashSet<usize>) {
+) -> (
+    Vec<Vec<f32>>,
+    Vec<Vec<f32>>,
+    BTreeSet<usize>,
+    BTreeSet<usize>,
+) {
     assert!((test_frac > 0.0) & (test_frac < 1.0));
     let test_size = ((embs.len() as f32) * test_frac).round() as usize;
     println!("We will find neighbors for {test_size} vectors by brute-force");
 
-    let ids: HashSet<usize> = (0..embs.len()).collect();
+    let ids: BTreeSet<usize> = (0..embs.len()).collect();
     let mut rng = &mut rand::thread_rng();
-    let test_ids = HashSet::from_iter(
+    let test_ids = BTreeSet::from_iter(
         ids.iter()
             .choose_multiple(&mut rng, test_size)
             .iter()
             .map(|id| **id),
     );
-    let train_ids: HashSet<usize> = ids.difference(&test_ids).cloned().collect();
+    let train_ids: BTreeSet<usize> = ids.difference(&test_ids).cloned().collect();
+
+    assert_eq!(train_ids.len() + test_ids.len(), embs.len());
 
     let train = train_ids.iter().map(|id| embs[*id].clone()).collect();
     let test = test_ids.iter().map(|id| embs[*id].clone()).collect();

@@ -15,6 +15,22 @@ impl ByteVec {
 }
 
 impl VecTrait for ByteVec {
+    fn distance(&self, other: &impl VecTrait) -> f32 {
+        self.iter_vals()
+            .zip(other.iter_vals())
+            .fold(0.0, |acc, e| acc + (e.0 - e.1).powi(2))
+            .sqrt()
+    }
+    fn dist2other(&self, other: &Self) -> f32 {
+        self.distance(other)
+    }
+    fn dist2many<'a, I>(&'a self, others: I) -> impl Iterator<Item = f32> + 'a
+    where
+        I: Iterator<Item = &'a Self> + 'a,
+    {
+        others.map(move |other| self.distance(other))
+    }
+
     fn iter_vals(&self) -> impl Iterator<Item = f32> {
         self.vals.iter().map(|x| *x as f32)
     }

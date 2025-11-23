@@ -1,4 +1,3 @@
-use graph::nodes::Node;
 use vectors::{FullVec, LVQVec, VecTrait};
 
 #[derive(Debug, Clone)]
@@ -9,7 +8,27 @@ pub struct Point<T: VecTrait> {
     vector: T,
 }
 
+impl<T: VecTrait> Point<T> {
+    /// Marks the point as removed,
+    /// returns true if the toggle was made,
+    /// false if the point was already marked.
+    pub fn set_removed(&mut self) -> bool {
+        if self.removed {
+            false
+        } else {
+            self.removed = true;
+            true
+        }
+    }
+}
+
 impl<T: VecTrait> VecTrait for Point<T> {
+    fn distance(&self, other: &impl VecTrait) -> f32 {
+        self.vector.distance(other)
+    }
+    fn dist2other(&self, other: &Self) -> f32 {
+        self.vector.dist2other(&other.vector)
+    }
     fn iter_vals(&self) -> impl Iterator<Item = f32> {
         self.vector.iter_vals()
     }
@@ -24,27 +43,6 @@ impl<T: VecTrait> VecTrait for Point<T> {
     }
 }
 
-impl<T: VecTrait> Point<T> {
-    pub fn dist2many<'a, I>(&'a self, others: I) -> impl Iterator<Item = Node> + 'a
-    where
-        I: Iterator<Item = &'a Point<T>> + 'a,
-    {
-        others.map(|other| Node::new_with_dist(self.vector.distance(&other.vector), other.id))
-    }
-
-    /// Marks the point as removed,
-    /// returns true if the toggle was made,
-    /// false if the point was already marked.
-    pub fn set_removed(&mut self) -> bool {
-        if self.removed {
-            false
-        } else {
-            self.removed = true;
-            true
-        }
-    }
-}
-
 impl Point<LVQVec> {
     pub fn new_quant(id: u32, level: u8, vector: &Vec<f32>) -> Point<LVQVec> {
         Point {
@@ -53,10 +51,6 @@ impl Point<LVQVec> {
             removed: false,
             vector: LVQVec::new(vector),
         }
-    }
-
-    pub fn distance(&self, other: &Point<LVQVec>) -> f32 {
-        self.vector.dist2other(&other.vector)
     }
 }
 

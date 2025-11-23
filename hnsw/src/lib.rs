@@ -1,2 +1,4 @@
 pub mod helpers;
-pub mod hnsw;
+pub mod index;
+pub mod params;
+pub mod template;

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 // TODO
 // write benchmarks for HNSW insertion algorithm,
 // both for the whole process and for the individual
@@ -11,8 +13,8 @@ use points::point_collection::Points;
 use rand::Rng;
 use vectors::{LVQVec, VecTrait};
 
-const DIMS: [usize; 4] = [128, 256, 512, 1024];
-const GLOVE_DIMS: [usize; 3] = [50, 100, 300];
+const DIMS: [usize; 1] = [300];
+const GLOVE_DIMS: [usize; 1] = [300];
 const M: u8 = 12;
 
 fn insert_at_10000_m12(c: &mut Criterion) {
@@ -48,9 +50,10 @@ fn insert_at_10000_m12(c: &mut Criterion) {
 fn build_10000_m12(c: &mut Criterion) {
     let ml = get_default_ml(M);
     let mut group = c.benchmark_group("Build GloVe 10k m12");
-    // group
-    //     .sample_size(1000)
-    //     .measurement_time(Duration::from_secs(1000));
+    group
+        .sample_size(1000)
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(1000));
 
     for dim in GLOVE_DIMS.iter() {
         let (_, embeddings) = load_glove_array(10_000, format!("glove.6B.{dim}d"), false).unwrap();
@@ -136,10 +139,10 @@ fn dist_computation_full_various_sizes(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    insert_at_10000_m12,
+    // insert_at_10000_m12,
     build_10000_m12,
-    quantize_various_sizes,
-    dist_computation_quantized_various_sizes,
-    dist_computation_full_various_sizes
+    // quantize_various_sizes,
+    // dist_computation_quantized_various_sizes,
+    // dist_computation_full_various_sizes
 );
 criterion_main!(benches);
