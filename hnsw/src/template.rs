@@ -3,6 +3,7 @@ use std::collections::BinaryHeap;
 use crate::{helpers::get_progress_bar, params::Params};
 use graph::{
     graph::Graph,
+    layers::Layers,
     nodes::{Dist, Node},
 };
 use nohash_hasher::IntMap;
@@ -28,7 +29,7 @@ where
 
 pub struct HNSW<T: VecTrait> {
     pub params: Params,
-    pub layers: IntMap<u8, Graph>,
+    pub layers: Layers,
     ep: Node,
     points: Points<T>,
     verbose: bool,
@@ -89,7 +90,7 @@ impl<T: VecTrait> HNSW<T> {
             for layer_nb in max_layer + 1..level + 1 {
                 let mut layer = Graph::new();
                 layer.add_node(point_id);
-                self.layers.insert(layer_nb, layer);
+                self.layers.add_layer(layer_nb, layer);
             }
             self.ep = point_id;
         }
