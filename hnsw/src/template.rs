@@ -10,7 +10,12 @@ use points::{point::Point, point_collection::Points};
 use vectors::VecTrait;
 
 mod searcher;
-use searcher::Searcher;
+
+mod results;
+use results::Results;
+
+mod inserter;
+use inserter::Inserter;
 
 fn select_simple<I>(candidate_dists: I, m: usize) -> Result<BinaryHeap<Dist>, String>
 where
@@ -57,43 +62,29 @@ impl<T: VecTrait> HNSW<T> {
     pub fn insert_point(&mut self, point: Point<T>) -> Result<bool, String> {
         let point_id = point.id;
         self.points.push(point);
-        self.insert(point_id, &mut Searcher::new())
+        self.insert(point_id, &mut Inserter::new())
     }
 
-    fn insert(&mut self, point_id: Node, searcher: &mut Searcher) -> Result<bool, String> {
-        searcher.clear_all();
-
-        // println!("Inserting {point_id}");
-
+    fn insert(&mut self, point_id: Node, inserter: &mut Inserter) -> Result<bool, String> {
         let point = self
             .points
             .get_point(point_id)
             .expect("Point ID not found in collection.");
 
-        let level = point.level;
-        let max_layer = (self.layers.len() - 1) as u8;
-        let add_new_layers = point.level > max_layer;
+        inserter.build_insertion_results(&self, point)?;
 
-        let dist2ep = self
-            .distance(self.ep, point.id)
-            .expect("Could not compute distance between EP and point to insert.");
+        // 4. Write connections in layers
+        // should be implemented by Graph
+        self.make_connections(inserter)?;
 
-        // println!("Dist to EP is {dist2ep}");
+        // 5. Get prunning results, to respect max. degree
+        self.prune_connexions(inserter)?;
 
-        searcher.push_selected(Dist::new(self.ep, dist2ep));
+        // 6. Apply prunning results
+        self.write_results_prune(inserter)?;
 
-        self.search_layers_above(searcher, point)?;
-
-        self.search_layers_below(searcher, point)?;
-
-        self.make_connections(searcher)?;
-
-        // assert!(false);
-
-        self.prune_connexions(searcher)?;
-
-        self.write_results_prune(searcher)?;
-
+        // 7. Add layers if necessary
+        let new_layers = point.level > ((index.layers.len() - 1) as u8);
         if add_new_layers {
             for layer_nb in max_layer + 1..level + 1 {
                 let mut layer = Graph::new();
@@ -106,14 +97,8 @@ impl<T: VecTrait> HNSW<T> {
         Ok(true)
     }
 
-    fn search_layers_above(&self, searcher: &mut Searcher, point: &Point<T>) -> Result<(), String> {
+    fn search_layers_above(&self, searcher: &mut Results, point: &Point<T>) -> Result<(), String> {
         let layers_len = self.layers.len() as u8;
-
-        // println!("Traversing layers above, point level is {}", point.level);
-        // println!(
-        //     "Searcher selected at start of traversal {:?}",
-        //     searcher.selected
-        // );
         for layer_nb in (point.level + 1..layers_len).rev() {
             let layer = match self.layers.get(&layer_nb) {
                 Some(l) => l,
@@ -123,13 +108,7 @@ impl<T: VecTrait> HNSW<T> {
                     ))
                 }
             };
-            // println!("Traversing layer {layer_nb}");
             self.search_layer(searcher, layer, point, 1)?;
-            // println!(
-            //     "Searcher selected after traversal of {layer_nb} {:?}",
-            //     searcher.selected
-            // );
-
             if layer_nb == 0 {
                 break;
             }
@@ -137,35 +116,21 @@ impl<T: VecTrait> HNSW<T> {
         Ok(())
     }
 
-    fn search_layers_below(&self, searcher: &mut Searcher, point: &Point<T>) -> Result<(), String> {
+    fn search_layers_below(&self, searcher: &mut Results, point: &Point<T>) -> Result<(), String> {
         let bound = (point.level).min((self.layers.len() - 1) as u8);
-
-        // println!("Traversing layers below, point level is {}", point.level);
-        // println!(
-        //     "Searcher selected at start of traversal {:?}",
-        //     searcher.selected
-        // );
         for layer_nb in (0..=bound).rev().map(|x| x as u8) {
             let layer = self.layers.get(&layer_nb).unwrap();
-
-            // println!("Traversing layer {layer_nb}");
             self.search_layer(searcher, layer, point, self.params.ef_cons)?;
             self.select_heuristic(searcher, layer, point, self.params.m, false, true)?;
-            // println!(
-            //     "Searcher selected after traversal of {layer_nb} {:?}",
-            //     searcher.selected
-            // );
-
             searcher.insert_layer_results(layer_nb, point.id);
         }
         Ok(())
     }
 
-    fn prune_connexions(&self, searcher: &mut Searcher) -> Result<(), String> {
+    fn prune_connexions(&self, searcher: &mut Results) -> Result<(), String> {
         searcher.clear_prune();
 
         for (layer_nb, node_data) in searcher.get_clone_insertion_results().iter() {
-            // for (layer_nb, node_data) in searcher.iter_insertion_results() {
             let layer = self.layers.get(layer_nb).unwrap();
             let limit = if *layer_nb == 0 {
                 self.params.mmax0 as usize
@@ -173,7 +138,6 @@ impl<T: VecTrait> HNSW<T> {
                 self.params.mmax as usize
             };
 
-            // println!("Pruning nodes on layer {layer_nb}");
             for (_, neighbors) in node_data.iter() {
                 let nodes_to_prune = neighbors
                     .iter()
@@ -181,7 +145,6 @@ impl<T: VecTrait> HNSW<T> {
                     .map(|x| *x);
 
                 for to_prune in nodes_to_prune {
-                    // println!("Pruning node {0} on layer {layer_nb}", to_prune.id);
                     let to_prune_neighbors = layer.neighbors(to_prune.id)?;
                     let to_prune_distances = to_prune_neighbors
                         .iter()
@@ -194,50 +157,8 @@ impl<T: VecTrait> HNSW<T> {
         Ok(())
     }
 
-    fn select_heuristic(
-        &self,
-        searcher: &mut Searcher,
-        layer: &Graph,
-        point: &Point<T>,
-        m: u8,
-        extend_cands: bool,
-        keep_pruned: bool,
-    ) -> Result<(), String> {
-        searcher.heuristic_setup();
-        if extend_cands {
-            // I think this is wrong, because nodes in candidates now contain distances to the candidates, not to our query
-            searcher.extend_candidates_with_neighbors(point, &self.points, layer)?;
-        }
-
-        let node_e = searcher.pop_candidate().unwrap();
-        searcher.push_selected(node_e.0);
-
-        while (!searcher.candidates_is_empty()) & (searcher.selected_len() < m as usize) {
-            let node_e = searcher.pop_candidate().unwrap();
-            let e_point = self.points.get_point(node_e.0.id).unwrap();
-
-            let nearest_selected = searcher.get_nearest_from_selected(e_point, &self.points);
-
-            if node_e.0 < nearest_selected {
-                searcher.push_selected(node_e.0);
-            } else if keep_pruned {
-                searcher.push_visited_heuristic(node_e.0);
-            }
-        }
-
-        if keep_pruned {
-            while (!searcher.visited_heuristic_is_empty()) & (searcher.selected_len() < m as usize)
-            {
-                let node_e = searcher.pop_visited_heuristic().unwrap();
-                searcher.push_selected(node_e.0);
-            }
-        }
-
-        Ok(())
-    }
-
     pub fn insert_bulk(&mut self, points: Points<T>) -> Result<bool, String> {
-        let mut searcher = Searcher::new();
+        let mut searcher = Results::new();
 
         self.store_points(points);
         self.print_index();
@@ -256,24 +177,18 @@ impl<T: VecTrait> HNSW<T> {
         Ok(true)
     }
 
-    fn make_connections(&mut self, searcher: &Searcher) -> Result<(), String> {
-        // println!("Will create connections between nodes after layer traversals");
-        for (layer_nb, node_data) in searcher.iter_insertion_results() {
+    fn make_connections(&mut self, results: &Results) -> Result<(), String> {
+        for (layer_nb, node_data) in results.iter_insertion_results() {
+            // TODO delegate this op to the layer
             let layer = self.layers.get(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
-                // println!("On layer {layer_nb}");
-                // println!("The node {node} will get neighbors {neighbors:?}");
                 layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id))?;
-                // println!(
-                //     "Neighbors of the point are now {:?}",
-                //     layer.neighbors_vec(*node)
-                // );
             }
         }
         Ok(())
     }
 
-    fn write_results_prune(&mut self, searcher: &Searcher) -> Result<(), String> {
+    fn write_results_prune(&mut self, searcher: &Results) -> Result<(), String> {
         for (layer_nb, node_data) in searcher.iter_prune_results() {
             let layer = self.layers.get_mut(&layer_nb).unwrap();
             for (node, neighbors) in node_data.iter() {
@@ -321,66 +236,8 @@ impl<T: VecTrait> HNSW<T> {
     //         .id
     // }
 
-    pub fn search_layer(
-        &self,
-        searcher: &mut Searcher,
-        layer: &Graph,
-        point: &Point<T>,
-        ef: u32,
-    ) -> Result<(), String> {
-        searcher.extend_candidates_with_selected();
-        searcher.extend_visited_with_selected();
-
-        while !searcher.candidates_is_empty() {
-            let cand_dist = searcher.pop_candidate().unwrap();
-            let furthest2q_dist = searcher.peek_selected().unwrap();
-            if cand_dist.0 > *furthest2q_dist {
-                break;
-            }
-            let cand_neighbors = match layer.neighbors_vec(cand_dist.0.id) {
-                Ok(neighs) => neighs,
-                Err(msg) => return Err(format!("Error in search_layer: {msg}")),
-            };
-
-            // println!(
-            //     "SEARCH_LAYER: the candidate has {} neighbors",
-            //     cand_neighbors.len()
-            // );
-
-            // pre-compute distances to candidate neighbors to take advantage of
-            // caches and to prevent the re-construction of the query to a full vector
-            let not_visited: Vec<Node> = cand_neighbors
-                .iter()
-                .filter(|node| searcher.push_visited(**node))
-                .copied()
-                .collect();
-            let q2cand_dists = point.dist2many(not_visited.iter().map(|node| {
-                self.points
-                    .get_point(*node)
-                    .expect("Point ID not found in collection.")
-            }));
-            let q2cand_neighbors_dists: Vec<Dist> = q2cand_dists
-                .zip(not_visited.iter())
-                .map(|(dist, id)| Dist::new(*id, dist))
-                .collect();
-            for n2q_dist in q2cand_neighbors_dists {
-                let f2q_dist = searcher.peek_selected().unwrap();
-                if (n2q_dist < *f2q_dist) | (searcher.selected_len() < ef as usize) {
-                    searcher.push_selected(n2q_dist);
-                    searcher.push_candidate(n2q_dist);
-
-                    if searcher.selected_len() > ef as usize {
-                        searcher.pop_selected();
-                    }
-                }
-            }
-        }
-        searcher.clear_candidates();
-        searcher.clear_visited();
-        Ok(())
-    }
     pub fn ann_by_vector(&self, point: &Point<T>, n: usize, ef: u32) -> Result<Vec<Node>, String> {
-        let mut searcher = Searcher::new();
+        let mut searcher = Results::new();
         searcher.push_selected(Dist::new(
             self.ep,
             self.points.distance2point(point, self.ep).unwrap(),
