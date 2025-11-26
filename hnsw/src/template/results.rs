@@ -7,7 +7,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use vectors::VecTrait;
 
-type LayerResult = IntMap<Node, BinaryHeap<Dist>>;
+pub type LayerResult = IntMap<Node, BinaryHeap<Dist>>;
 type LayersResults = IntMap<u8, LayerResult>;
 type Selected = BinaryHeap<Dist>;
 type RevSelected = BinaryHeap<Reverse<Dist>>;
@@ -94,7 +94,7 @@ impl Results {
         self.selected.push(dist);
     }
 
-    pub fn push_visited(&mut self, idx: u32) -> bool {
+    pub fn push_visited(&mut self, idx: Node) -> bool {
         self.visited.insert(idx)
     }
 

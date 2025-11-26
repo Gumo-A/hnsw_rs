@@ -1,8 +1,9 @@
+use graph::nodes::Node;
 use vectors::{FullVec, LVQVec, VecTrait};
 
 #[derive(Debug, Clone)]
 pub struct Point<T: VecTrait> {
-    pub id: u32,
+    pub id: Node,
     pub level: u8,
     removed: bool,
     vector: T,
@@ -44,7 +45,7 @@ impl<T: VecTrait> VecTrait for Point<T> {
 }
 
 impl Point<LVQVec> {
-    pub fn new_quant(id: u32, level: u8, vector: &Vec<f32>) -> Point<LVQVec> {
+    pub fn new_quant(id: Node, level: u8, vector: &Vec<f32>) -> Point<LVQVec> {
         Point {
             id,
             level,
@@ -55,7 +56,7 @@ impl Point<LVQVec> {
 }
 
 impl Point<FullVec> {
-    pub fn new_full(id: u32, level: u8, vector: Vec<f32>) -> Point<FullVec> {
+    pub fn new_full(id: Node, level: u8, vector: Vec<f32>) -> Point<FullVec> {
         Point {
             id,
             level,

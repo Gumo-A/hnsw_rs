@@ -1,3 +1,4 @@
+use graph::nodes::Node;
 use rand::rngs::ThreadRng;
 use rand::{Rng, thread_rng};
 
@@ -47,7 +48,7 @@ impl Points<FullVec> {
         let mut rng = thread_rng();
         for (idx, v) in vecs.drain(..).enumerate() {
             collection.push(Point::new_full(
-                idx as u32,
+                idx as Node,
                 get_new_node_layer(ml, &mut rng),
                 v,
             ));
@@ -91,12 +92,12 @@ impl<T: VecTrait> Points<T> {
         self.collection.len()
     }
 
-    pub fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+    pub fn ids(&self) -> impl Iterator<Item = Node> + '_ {
         self.collection.iter().map(|p| p.id)
     }
 
     /// Iterator over (ID, Level) pairs of stored Point structs.
-    fn ids_levels(&self) -> impl Iterator<Item = (u32, u8)> + '_ {
+    fn ids_levels(&self) -> impl Iterator<Item = (Node, u8)> + '_ {
         self.collection.iter().map(|p| (p.id, p.level))
     }
 
@@ -117,7 +118,7 @@ impl<T: VecTrait> Points<T> {
         }
         if !is_ok {
             for (idx, point) in self.collection.iter_mut().enumerate() {
-                point.id = idx as u32;
+                point.id = idx as Node;
             }
             Some(true) // changed ids
         } else {
@@ -137,15 +138,15 @@ impl<T: VecTrait> Points<T> {
     }
 
     pub fn push(&mut self, mut point: Point<T>) {
-        point.id = self.len() as u32;
+        point.id = self.len() as Node;
         self.collection.push(point);
     }
 
     /// Removes a Point from the collection,
     /// returning true if it was removed,
     /// or false if it was already.
-    pub fn remove(&mut self, index: u32) -> bool {
-        if index >= self.len() as u32 {
+    pub fn remove(&mut self, index: Node) -> bool {
+        if index >= self.len() as Node {
             false
         } else {
             self.collection
@@ -155,11 +156,11 @@ impl<T: VecTrait> Points<T> {
         }
     }
 
-    pub fn get_point(&self, index: u32) -> Option<&Point<T>> {
+    pub fn get_point(&self, index: Node) -> Option<&Point<T>> {
         self.collection.get(index as usize)
     }
 
-    pub fn distance(&self, a_idx: u32, b_idx: u32) -> Option<f32> {
+    pub fn distance(&self, a_idx: Node, b_idx: Node) -> Option<f32> {
         let point_a = self.get_point(a_idx);
         let point_b = self.get_point(b_idx);
         match (point_a, point_b) {
@@ -168,7 +169,7 @@ impl<T: VecTrait> Points<T> {
         }
     }
 
-    pub fn distance2point(&self, point: &Point<T>, idx: u32) -> Option<f32> {
+    pub fn distance2point(&self, point: &Point<T>, idx: Node) -> Option<f32> {
         let other = self.get_point(idx);
         match other {
             Some(b) => Some(point.dist2other(b)),
@@ -176,7 +177,7 @@ impl<T: VecTrait> Points<T> {
         }
     }
 
-    pub fn get_points(&self, indices: &Vec<u32>) -> Vec<&Point<T>> {
+    pub fn get_points(&self, indices: &Vec<Node>) -> Vec<&Point<T>> {
         indices
             .iter()
             .map(|idx| self.collection.get(*idx as usize).unwrap())
@@ -185,12 +186,12 @@ impl<T: VecTrait> Points<T> {
 
     pub fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point<T>>
     where
-        I: Iterator<Item = u32>,
+        I: Iterator<Item = Node>,
     {
         indices.map(|idx| self.collection.get(idx as usize).unwrap())
     }
 
-    fn get_point_mut(&mut self, index: u32) -> Option<&mut Point<T>> {
+    fn get_point_mut(&mut self, index: Node) -> Option<&mut Point<T>> {
         self.collection.get_mut(index as usize)
     }
 
@@ -201,7 +202,7 @@ impl<T: VecTrait> Points<T> {
         }
         let mut next_id = self.collection.len();
         for mut point in other.collection {
-            point.id = next_id as u32;
+            point.id = next_id as Node;
             self.collection.push(point);
             next_id += 1;
         }

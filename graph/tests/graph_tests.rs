@@ -1,4 +1,4 @@
-use graph::graph::Graph;
+use graph::{graph::Graph, nodes::Node};
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
 use std::sync::{Arc, Mutex};
@@ -6,12 +6,12 @@ use std::sync::{Arc, Mutex};
 fn make_rand_graph(n: usize, degree: usize) -> Graph {
     let mut rng = rand::thread_rng();
     let nodes =
-        IntMap::from_iter((0..n).map(|id| (id as u32, Arc::new(Mutex::new(IntSet::default())))));
+        IntMap::from_iter((0..n).map(|id| (id as Node, Arc::new(Mutex::new(IntSet::default())))));
     let graph = Graph { nodes };
     for node in 0..n {
         let neighbors = (0..n).choose_multiple(&mut rng, degree);
         for n in neighbors {
-            graph.add_edge(node as u32, n as u32).unwrap();
+            graph.add_edge(node as Node, n as Node).unwrap();
         }
     }
     graph

@@ -1,12 +1,11 @@
 use std::collections::BinaryHeap;
 
-use crate::{helpers::get_progress_bar, params::Params};
+use crate::{helpers::get_progress_bar, params::Params, template::searcher::Searcher};
 use graph::{
     graph::Graph,
     layers::Layers,
     nodes::{Dist, Node},
 };
-use nohash_hasher::IntMap;
 use points::{point::Point, point_collection::Points};
 use vectors::VecTrait;
 
@@ -42,12 +41,11 @@ impl<T: VecTrait> HNSW<T> {
         } else {
             Params::from_m(m, dim)
         };
-        let layers = IntMap::default();
         HNSW {
             params,
             ep: 0,
             points: Points::new(),
-            layers: layers,
+            layers: Layers::new(),
             verbose,
         }
     }
@@ -71,68 +69,36 @@ impl<T: VecTrait> HNSW<T> {
             .points
             .get_point(point_id)
             .expect("Point ID not found in collection.");
+        let level = point.level;
 
         inserter.build_insertion_results(&self, point)?;
-
-        // 4. Write connections in layers
-        // should be implemented by Graph
-        self.make_connections(inserter)?;
-
-        // 5. Get prunning results, to respect max. degree
-        self.prune_connexions(inserter)?;
-
-        // 6. Apply prunning results
-        self.write_results_prune(inserter)?;
-
-        // 7. Add layers if necessary
-        let new_layers = point.level > ((index.layers.len() - 1) as u8);
-        if add_new_layers {
-            for layer_nb in max_layer + 1..level + 1 {
-                let mut layer = Graph::new();
-                layer.add_node(point_id);
-                self.layers.add_layer(layer_nb, layer);
-            }
-            self.ep = point_id;
-        }
+        self.make_connections(inserter.get_results())?;
+        self.prune_connexions(inserter.get_results_mut())?;
+        self.write_results_prune(inserter.get_results())?;
+        self.add_layers(point_id, level);
 
         Ok(true)
     }
 
-    fn search_layers_above(&self, searcher: &mut Results, point: &Point<T>) -> Result<(), String> {
-        let layers_len = self.layers.len() as u8;
-        for layer_nb in (point.level + 1..layers_len).rev() {
-            let layer = match self.layers.get(&layer_nb) {
-                Some(l) => l,
-                None => {
-                    return Err(format!(
-                        "Could not get layer {layer_nb} while searching layers above."
-                    ))
-                }
-            };
-            self.search_layer(searcher, layer, point, 1)?;
-            if layer_nb == 0 {
-                break;
-            }
-        }
-        Ok(())
+    pub fn get_layer(&self, layer_nb: &u8) -> &Graph {
+        self.layers.get_layer(layer_nb)
     }
 
-    fn search_layers_below(&self, searcher: &mut Results, point: &Point<T>) -> Result<(), String> {
-        let bound = (point.level).min((self.layers.len() - 1) as u8);
-        for layer_nb in (0..=bound).rev().map(|x| x as u8) {
-            let layer = self.layers.get(&layer_nb).unwrap();
-            self.search_layer(searcher, layer, point, self.params.ef_cons)?;
-            self.select_heuristic(searcher, layer, point, self.params.m, false, true)?;
-            searcher.insert_layer_results(layer_nb, point.id);
+    fn add_layers(&mut self, point_id: Node, level: u8) {
+        let max_layer = self.layers.len() - 1;
+        if level > max_layer {
+            for layer_nb in max_layer + 1..level + 1 {
+                self.layers.add_layer_with_node(layer_nb, point_id);
+            }
+            self.ep = point_id;
         }
-        Ok(())
     }
 
     fn prune_connexions(&self, searcher: &mut Results) -> Result<(), String> {
         searcher.clear_prune();
 
         for (layer_nb, node_data) in searcher.get_clone_insertion_results().iter() {
-            let layer = self.layers.get(layer_nb).unwrap();
+            let layer = self.get_layer(layer_nb);
             let limit = if *layer_nb == 0 {
                 self.params.mmax0 as usize
             } else {
@@ -159,7 +125,7 @@ impl<T: VecTrait> HNSW<T> {
     }
 
     pub fn insert_bulk(&mut self, points: Points<T>) -> Result<bool, String> {
-        let mut searcher = Results::new();
+        let mut inserter = Inserter::new();
 
         self.store_points(points);
         self.print_index();
@@ -172,7 +138,7 @@ impl<T: VecTrait> HNSW<T> {
 
         let ids: Vec<Node> = self.points.ids().collect();
         for id in ids.iter() {
-            self.insert(*id, &mut searcher)?;
+            self.insert(*id, &mut inserter)?;
             bar.inc(1);
         }
         Ok(true)
@@ -180,18 +146,14 @@ impl<T: VecTrait> HNSW<T> {
 
     fn make_connections(&mut self, results: &Results) -> Result<(), String> {
         for (layer_nb, node_data) in results.iter_insertion_results() {
-            // TODO delegate this op to the layer
-            let layer = self.layers.get(&layer_nb).unwrap();
-            for (node, neighbors) in node_data.iter() {
-                layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id))?;
-            }
+            self.layers.apply_insertion_results(&layer_nb, node_data)?;
         }
         Ok(())
     }
 
     fn write_results_prune(&mut self, searcher: &Results) -> Result<(), String> {
         for (layer_nb, node_data) in searcher.iter_prune_results() {
-            let layer = self.layers.get_mut(&layer_nb).unwrap();
+            let layer = self.layers.get_layer_mut(&layer_nb);
             for (node, neighbors) in node_data.iter() {
                 layer.add_node(*node);
                 layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id))?;
@@ -209,15 +171,12 @@ impl<T: VecTrait> HNSW<T> {
     fn store_points(&mut self, points: Points<T>) {
         for point in points.iter_points() {
             for layer_nb in 0..=point.level {
-                let layer = self.layers.entry(layer_nb).or_insert(Graph::new());
-                layer.add_node(point.id);
+                self.layers.add_node_to_layer(layer_nb, point.id);
             }
         }
         let max_layer_nb = self.layers.len() - 1;
         self.ep = *self
-            .layers
-            .get(&(max_layer_nb as u8))
-            .unwrap()
+            .get_layer(&(max_layer_nb as u8))
             .nodes
             .keys()
             .next()
@@ -238,26 +197,28 @@ impl<T: VecTrait> HNSW<T> {
     // }
 
     pub fn ann_by_vector(&self, point: &Point<T>, n: usize, ef: u32) -> Result<Vec<Node>, String> {
-        let mut searcher = Results::new();
-        searcher.push_selected(Dist::new(
+        let mut results = Results::new();
+        let searcher = Searcher::new();
+        results.push_selected(Dist::new(
             self.ep,
             self.points.distance2point(point, self.ep).unwrap(),
         ));
         let nb_layers = self.layers.len();
 
         for layer_nb in (1..nb_layers).rev().map(|x| x as u8) {
-            self.search_layer(
-                &mut searcher,
-                self.layers.get(&(layer_nb)).unwrap(),
+            searcher.search_layer(
+                &mut results,
+                self.get_layer(&(layer_nb)),
                 &point,
+                &self.points,
                 1,
             )?;
         }
 
-        let layer_0 = &self.layers.get(&0).unwrap();
-        self.search_layer(&mut searcher, layer_0, &point, ef)?;
+        let layer_0 = &self.get_layer(&0);
+        searcher.search_layer(&mut results, layer_0, &point, &self.points, ef)?;
 
-        let anns: Vec<Node> = searcher
+        let anns: Vec<Node> = results
             .get_top_selected(n)
             .iter()
             .map(|dist| dist.id)
@@ -265,9 +226,13 @@ impl<T: VecTrait> HNSW<T> {
         Ok(anns)
     }
 
+    fn iter_layers(&self) -> impl Iterator<Item = (&u8, &Graph)> {
+        self.layers.iter_layers()
+    }
+
     pub fn assert_param_compliance(&self) {
         let mut is_ok = true;
-        for (layer_nb, layer) in self.layers.iter() {
+        for (layer_nb, layer) in self.iter_layers() {
             let max_degree = if *layer_nb > 0 {
                 self.params.mmax
             } else {
@@ -304,7 +269,7 @@ impl<T: VecTrait> HNSW<T> {
         println!("ef_cons = {}", self.params.ef_cons);
         println!("Nb. layers = {}", self.layers.len());
         println!("Nb. of points = {}", self.points.len());
-        for (idx, layer) in self.layers.iter() {
+        for (idx, layer) in self.iter_layers() {
             println!("NB. nodes in layer {idx}: {}", layer.nb_nodes());
         }
         println!("ep: {:?}", self.ep);

@@ -1,4 +1,4 @@
-use graph::nodes::{Dist, Node};
+use graph::nodes::Dist;
 use points::point::Point;
 use vectors::VecTrait;
 
@@ -19,6 +19,14 @@ impl Inserter {
             searcher: Searcher::new(),
             new_layers: false,
         }
+    }
+
+    pub fn get_results(&self) -> &Results {
+        &self.results
+    }
+
+    pub fn get_results_mut(&mut self) -> &mut Results {
+        &mut self.results
     }
 
     pub fn build_insertion_results<T: VecTrait>(
@@ -50,14 +58,7 @@ impl Inserter {
         let layers_len = index.layers.len() as u8;
 
         for layer_nb in (point.level + 1..layers_len).rev() {
-            let layer = match index.layers.get(&layer_nb) {
-                Some(l) => l,
-                None => {
-                    return Err(format!(
-                        "Could not get layer {layer_nb} while searching layers above."
-                    ))
-                }
-            };
+            let layer = index.get_layer(&layer_nb);
             self.searcher
                 .search_layer(&mut self.results, layer, point, &index.points, 1)?;
             if layer_nb == 0 {
@@ -73,7 +74,7 @@ impl Inserter {
     ) -> Result<(), String> {
         let bound = (point.level).min((index.layers.len() - 1) as u8);
         for layer_nb in (0..=bound).rev().map(|x| x as u8) {
-            let layer = index.layers.get(&layer_nb).unwrap();
+            let layer = index.get_layer(&layer_nb);
             self.searcher.search_layer(
                 &mut self.results,
                 layer,

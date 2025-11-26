@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 hnsw = { path = "../hnsw"}
 points = { path = "../points"}
+graph = { path = "../graph"}
 indicatif = "0.17.8"
 serde_json = "1.0.114"
 rand = "0.8.5"

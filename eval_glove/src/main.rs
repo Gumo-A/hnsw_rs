@@ -52,11 +52,10 @@ fn main() -> std::io::Result<()> {
 
     let ef_cons = 500;
 
-    let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
+    let embs = Points::new_full(train_set.clone(), get_default_ml(m));
     let start = Instant::now();
     let mut store = HNSW::new(m, Some(ef_cons), embs.dim().unwrap() as u32, true);
     store.insert_bulk(embs).unwrap();
-    store.print_index();
     // let index = build_index(m, Some(ef_cons), embs.clone(), true).unwrap();
     // let index = build_index_par(m, Some(ef_cons), embs, true).unwrap();
     println!(

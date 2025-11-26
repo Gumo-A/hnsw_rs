@@ -3,7 +3,9 @@ use std::fs::{self, ReadDir};
 use std::fs::{DirEntry, File};
 use std::io::{BufReader, Result};
 
-pub fn split_ids(ids: Vec<u32>, nb_splits: u8) -> Vec<Vec<u32>> {
+use graph::nodes::Node;
+
+pub fn split_ids(ids: Vec<Node>, nb_splits: u8) -> Vec<Vec<Node>> {
     let mut split_vector = Vec::new();
 
     let per_split = ids.len() / (nb_splits as usize);

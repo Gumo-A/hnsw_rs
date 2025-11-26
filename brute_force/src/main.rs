@@ -4,6 +4,7 @@ use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::thread;
 
+use graph::nodes::Node;
 use rand::seq::IteratorRandom;
 
 use hnsw::helpers::args::parse_args_bf;
@@ -44,7 +45,7 @@ fn main() -> std::io::Result<()> {
     let test_arc = Arc::new(test_set);
 
     let nb_threads = std::thread::available_parallelism().unwrap().get() as u8;
-    let test_ids: Vec<u32> = test_arc.ids().collect();
+    let test_ids: Vec<Node> = test_arc.ids().collect();
     let mut indices_split = split_ids(test_ids, nb_threads);
     let mut handles = Vec::new();
     for i in 0..nb_threads {
