@@ -1,8 +1,7 @@
 use graph::nodes::Dist;
 use points::point::Point;
-use vectors::VecTrait;
 
-use crate::template::{results::Results, HNSW};
+use crate::template::{results::Results, VecSer, HNSW};
 
 use crate::template::searcher::Searcher;
 
@@ -29,7 +28,7 @@ impl Inserter {
         &mut self.results
     }
 
-    pub fn build_insertion_results<T: VecTrait>(
+    pub fn build_insertion_results<T: VecSer>(
         &mut self,
         index: &HNSW<T>,
         point: &Point<T>,
@@ -40,7 +39,7 @@ impl Inserter {
         Ok(())
     }
 
-    pub fn setup_insert<T: VecTrait>(&mut self, index: &HNSW<T>, point: &Point<T>) {
+    pub fn setup_insert<T: VecSer>(&mut self, index: &HNSW<T>, point: &Point<T>) {
         self.results.clear_all();
 
         let dist2ep = index
@@ -50,7 +49,7 @@ impl Inserter {
         self.results.push_selected(Dist::new(index.ep, dist2ep));
     }
 
-    pub fn traverse_layers_above<T: VecTrait>(
+    pub fn traverse_layers_above<T: VecSer>(
         &mut self,
         index: &HNSW<T>,
         point: &Point<T>,
@@ -67,7 +66,7 @@ impl Inserter {
         }
         Ok(())
     }
-    pub fn traverse_layers_below<T: VecTrait>(
+    pub fn traverse_layers_below<T: VecSer>(
         &mut self,
         index: &HNSW<T>,
         point: &Point<T>,

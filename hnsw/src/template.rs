@@ -1,4 +1,4 @@
-use std::collections::BinaryHeap;
+use std::{collections::BinaryHeap, sync::Arc};
 
 use crate::{helpers::get_progress_bar, params::Params, template::searcher::Searcher};
 use graph::{
@@ -7,7 +7,7 @@ use graph::{
     nodes::{Dist, Node},
 };
 use points::{point::Point, point_collection::Points};
-use vectors::VecTrait;
+use vectors::{serializer::Serializer, VecSer};
 
 mod searcher;
 
@@ -26,15 +26,18 @@ where
     Ok(BinaryHeap::from_iter(cands.iter().copied().take(m)))
 }
 
-pub struct HNSW<T: VecTrait> {
-    pub params: Params,
-    pub layers: Layers,
+pub struct HNSW<T: VecSer> {
+    params: Params,
+    layers: Layers,
     ep: Node,
     points: Points<T>,
     verbose: bool,
 }
 
-impl<T: VecTrait> HNSW<T> {
+impl<T: VecSer> HNSW<T> {
+    pub fn serialize(&self) -> Vec<u8> {
+        self.points.serialize()
+    }
     pub fn new(m: u8, ef_cons: Option<u32>, dim: u32, verbose: bool) -> Self {
         let params = if ef_cons.is_some() {
             Params::from_m_efcons(m, ef_cons.unwrap(), dim)
@@ -64,18 +67,18 @@ impl<T: VecTrait> HNSW<T> {
         self.insert(point_id, &mut Inserter::new())
     }
 
-    fn insert(&mut self, point_id: Node, inserter: &mut Inserter) -> Result<bool, String> {
+    // not really insertion, this only determines neighbors
+    // of a point already in the points store and in the layers
+    fn insert(&self, point_id: Node, inserter: &mut Inserter) -> Result<bool, String> {
         let point = self
             .points
             .get_point(point_id)
             .expect("Point ID not found in collection.");
-        let level = point.level;
 
         inserter.build_insertion_results(&self, point)?;
         self.make_connections(inserter.get_results())?;
         self.prune_connexions(inserter.get_results_mut())?;
         self.write_results_prune(inserter.get_results())?;
-        self.add_layers(point_id, level);
 
         Ok(true)
     }
@@ -128,7 +131,6 @@ impl<T: VecTrait> HNSW<T> {
         let mut inserter = Inserter::new();
 
         self.store_points(points);
-        self.print_index();
 
         let bar = get_progress_bar(
             "Inserting Vectors".to_string(),
@@ -144,18 +146,17 @@ impl<T: VecTrait> HNSW<T> {
         Ok(true)
     }
 
-    fn make_connections(&mut self, results: &Results) -> Result<(), String> {
+    fn make_connections(&self, results: &Results) -> Result<(), String> {
         for (layer_nb, node_data) in results.iter_insertion_results() {
             self.layers.apply_insertion_results(&layer_nb, node_data)?;
         }
         Ok(())
     }
 
-    fn write_results_prune(&mut self, searcher: &Results) -> Result<(), String> {
+    fn write_results_prune(&self, searcher: &Results) -> Result<(), String> {
         for (layer_nb, node_data) in searcher.iter_prune_results() {
-            let layer = self.layers.get_layer_mut(&layer_nb);
+            let layer = self.layers.get_layer(&layer_nb);
             for (node, neighbors) in node_data.iter() {
-                layer.add_node(*node);
                 layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id))?;
             }
         }
@@ -273,5 +274,51 @@ impl<T: VecTrait> HNSW<T> {
             println!("NB. nodes in layer {idx}: {}", layer.nb_nodes());
         }
         println!("ep: {:?}", self.ep);
+    }
+}
+
+impl<T: VecSer + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
+    pub fn insert_bulk_par(
+        mut self,
+        points: Points<T>,
+        nb_threads: usize,
+    ) -> Result<HNSW<T>, String> {
+        self.store_points(points);
+        let mut total_insertions = 0;
+        for layer_nb in 0..self.layers.len() {
+            total_insertions += self.layers.get_layer(&layer_nb).nb_nodes();
+        }
+        let bar = get_progress_bar("layerzzz".to_string(), total_insertions, true);
+        let index_arc = Arc::new(self);
+
+        for layer_nb in (0..index_arc.layers.len()).rev().map(|x| x as u8) {
+            let layer = index_arc.layers.get_layer(&layer_nb);
+            let chunks = ((layer.nb_nodes() as f64) / (nb_threads as f64)).ceil() as usize;
+            let mut ids: Vec<Vec<Node>> = layer
+                .iter_nodes()
+                .collect::<Vec<Node>>()
+                .chunks(chunks)
+                .map(|chunk| Vec::from(chunk))
+                .collect();
+
+            let mut handlers = Vec::new();
+            while let Some(ids_split) = ids.pop() {
+                let index_copy = Arc::clone(&index_arc);
+                let bar_ref = bar.clone();
+                handlers.push(std::thread::spawn(move || {
+                    let mut inserter = Inserter::new();
+                    for id in ids_split.iter() {
+                        index_copy.insert(*id, &mut inserter).unwrap();
+                        bar_ref.inc(1);
+                    }
+                }));
+            }
+            for handle in handlers {
+                handle.join().unwrap();
+            }
+        }
+
+        let index = Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
+        Ok(index)
     }
 }

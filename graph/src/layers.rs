@@ -51,13 +51,16 @@ impl Layers {
     }
 
     pub fn add_layer_with_node(&mut self, layer_nb: u8, point_id: Node) {
-        let max_layer = self.len() - 1; // to make a useful error message below
-        if layer_nb == max_layer + 1 {
+        let max_layer = self.len();
+        if layer_nb == max_layer {
             let mut layer = Graph::new();
             layer.add_node(point_id);
             self.levels.insert(layer_nb, layer).unwrap();
         } else {
-            panic!("Tried to add layer {layer_nb}, while the current max. layer is {max_layer}");
+            panic!(
+                "Tried to add layer {layer_nb}, while the current max. layer is {0}",
+                max_layer - 1
+            );
         }
     }
 

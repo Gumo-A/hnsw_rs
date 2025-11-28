@@ -24,6 +24,10 @@ impl Graph {
         }
     }
 
+    pub fn iter_nodes(&self) -> impl Iterator<Item = Node> {
+        self.nodes.keys().copied()
+    }
+
     pub fn from_layer_data(data: IntMap<Node, IntMap<Node, Node>>) -> Graph {
         let mut nodes = IntMap::default();
         for (node_id, neighbors) in data.iter() {

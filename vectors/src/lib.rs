@@ -1,11 +1,17 @@
-use rand::Rng;
 mod bytes;
 mod full;
 mod lvq;
+pub mod serializer;
 
 pub use bytes::ByteVec;
 pub use full::FullVec;
 pub use lvq::LVQVec;
+
+use rand::Rng;
+
+use crate::serializer::Serializer;
+
+pub trait VecSer: VecTrait + Serializer {}
 
 pub trait VecTrait {
     fn iter_vals(&self) -> impl Iterator<Item = f32>;

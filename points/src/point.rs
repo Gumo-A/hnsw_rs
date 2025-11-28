@@ -1,5 +1,5 @@
 use graph::nodes::Node;
-use vectors::{FullVec, LVQVec, VecTrait};
+use vectors::{FullVec, LVQVec, VecSer, VecTrait, serializer::Serializer};
 
 #[derive(Debug, Clone)]
 pub struct Point<T: VecTrait> {
@@ -77,3 +77,37 @@ impl Point<FullVec> {
         Point::new_quant(self.id, self.level, self.get_low_vector())
     }
 }
+
+impl<T: VecTrait + Serializer> Serializer for Point<T> {
+    fn size(&self) -> usize {
+        6 + self.vector.size()
+    }
+
+    /// 4 bytes for ID, one byte for level,
+    /// one for removed flag, followed by vector
+    /// byte string.
+    fn serialize(&self) -> Vec<u8> {
+        let vec_bytes = self.vector.serialize();
+        let mut bytes = Vec::with_capacity(6 + vec_bytes.len());
+        bytes.extend_from_slice(&self.id.to_be_bytes());
+        bytes.extend_from_slice(&self.level.to_be_bytes());
+        bytes.extend_from_slice(&(self.removed as u8).to_be_bytes());
+        bytes.extend(vec_bytes);
+        bytes
+    }
+
+    fn deserialize(data: Vec<u8>) -> Self {
+        let id: Node = u32::from_be_bytes(data[..4].try_into().unwrap());
+        let level = u8::from_be_bytes(data[4..5].try_into().unwrap());
+        let removed = u8::from_be_bytes(data[5..6].try_into().unwrap()) != 0;
+        let vector = T::deserialize(data[6..].try_into().unwrap());
+        Point {
+            id,
+            level,
+            removed,
+            vector,
+        }
+    }
+}
+
+impl<T: VecSer> VecSer for Point<T> {}

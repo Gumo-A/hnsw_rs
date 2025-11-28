@@ -822,17 +822,12 @@
 //             .map(|point| point.id)
 //             .collect();
 
-//         let mut points_split = split_ids(ids, nb_threads);
-
+//         let mut points_split = ids.chunks(ids.len() / nb_threads);
 //         let mut handlers = Vec::new();
-//         for thread_idx in 0..nb_threads {
+//         while let Some(ids_split) = points_split.next() {
 //             let index_copy = Arc::clone(&index_arc);
 //             let ids_split: Vec<u32> = points_split.pop().unwrap();
-//             let bar = get_progress_bar(
-//                 format!("Layer {layer_nb}:"),
-//                 ids_split.len(),
-//                 (verbose) & (thread_idx == 0),
-//             );
+//             let bar = get_progress_bar(format!("Layer {layer_nb}:"), ids_split.len(), (verbose));
 //             handlers.push(std::thread::spawn(move || {
 //                 HNSW::insert_par(index_copy, ids_split, bar).unwrap();
 //             }));

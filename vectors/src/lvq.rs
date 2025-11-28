@@ -1,12 +1,12 @@
 const BITS: i32 = 8;
 const CHUNK_SIZE: usize = 8;
 
-use crate::VecTrait;
+use crate::{VecSer, VecTrait, serializer::Serializer};
 
 #[derive(Debug, Clone)]
 pub struct LVQVec {
-    delta: f32,
-    lower: f32,
+    pub delta: f32,
+    pub lower: f32,
     pub quantized_vec: Vec<u8>,
 }
 
@@ -145,5 +145,36 @@ impl VecTrait for LVQVec {
     }
 }
 
-#[cfg(test)]
-mod tests {}
+impl Serializer for LVQVec {
+    fn size(&self) -> usize {
+        8 + self.dim()
+    }
+
+    /// 4 for low, 4 for delta
+    /// followed by dim bytes
+    fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.lower.to_be_bytes());
+        bytes.extend_from_slice(&self.delta.to_be_bytes());
+        for byte in self.quantized_vec.iter() {
+            bytes.push(*byte);
+        }
+        bytes
+    }
+
+    fn deserialize(data: Vec<u8>) -> Self {
+        let lower = f32::from_be_bytes(data[4..8].try_into().unwrap());
+        let delta = f32::from_be_bytes(data[8..12].try_into().unwrap());
+        let mut quantized_vec: Vec<u8> = Vec::new();
+        for bytes_arr in data.iter().skip(12) {
+            quantized_vec.push(*bytes_arr);
+        }
+        LVQVec {
+            delta,
+            lower,
+            quantized_vec,
+        }
+    }
+}
+
+impl VecSer for LVQVec {}

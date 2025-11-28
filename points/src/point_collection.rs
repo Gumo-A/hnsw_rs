@@ -1,6 +1,9 @@
+use core::panic;
+
 use graph::nodes::Node;
 use rand::rngs::ThreadRng;
 use rand::{Rng, thread_rng};
+use vectors::serializer::Serializer;
 
 use crate::point::Point;
 use vectors::{FullVec, LVQVec, VecTrait};
@@ -220,5 +223,64 @@ impl<'a, T: VecTrait> Points<T> {
     }
     pub fn iter_points_mut<'b: 'a>(&mut self) -> impl Iterator<Item = &mut Point<T>> {
         self.collection.iter_mut()
+    }
+}
+
+impl<T: VecTrait + Serializer> Serializer for Points<T> {
+    fn size(&self) -> usize {
+        let point_size = self.get_point(0).unwrap().size();
+        4 + (self.dim().unwrap() * 4) + 8 + (point_size * self.len())
+    }
+
+    /// 4 bytes for dim, dim * 4 bytes for the means,
+    /// 4 for point size, 4 for nb. of points, byte string of serialized points.
+    fn serialize(&self) -> Vec<u8> {
+        let (means, dim) = match (&self.means, self.dim()) {
+            (Some(m), Some(d)) => (m, d),
+            (None, Some(d)) => (&Vec::from_iter((0..d).map(|_| 0.0)), d),
+            _ => panic!("Trying to serialize empty collection"),
+        };
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(dim as u32).to_be_bytes());
+
+        for float in means.iter() {
+            bytes.extend_from_slice(&float.to_be_bytes());
+        }
+
+        let point_size = self.get_point(0).unwrap().size();
+        bytes.extend_from_slice(&point_size.to_be_bytes());
+        bytes.extend_from_slice(&self.len().to_be_bytes());
+
+        for point in self.iter_points() {
+            bytes.extend(point.serialize());
+        }
+        bytes
+    }
+
+    fn deserialize(data: Vec<u8>) -> Self {
+        let dim = u32::from_be_bytes(data[..4].try_into().unwrap());
+
+        let mut means: Vec<f32> = Vec::with_capacity(dim as usize);
+        let mut i = 4;
+        for _ in 0..dim {
+            means.push(f32::from_be_bytes(data[i..i + 4].try_into().unwrap()));
+            i += 4;
+        }
+        let means = Some(means);
+
+        let point_size = u32::from_be_bytes(data[i..i + 4].try_into().unwrap()) as usize;
+        i += 4;
+        let nb_points = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
+        i += 4;
+
+        let mut collection = Vec::with_capacity(nb_points as usize);
+        for _ in 0..nb_points {
+            let point: Point<T> = Point::deserialize(data[i..i + point_size].into());
+            collection.push(point);
+            i += point_size;
+        }
+
+        Points { collection, means }
     }
 }

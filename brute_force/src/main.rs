@@ -8,11 +8,10 @@ use graph::nodes::Node;
 use rand::seq::IteratorRandom;
 
 use hnsw::helpers::args::parse_args_bf;
-use hnsw::helpers::data::split_ids;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
 use points::point_collection::Points;
 
-const NB_NNS: usize = 10;
+const NB_NNS: usize = 100;
 
 fn main() -> std::io::Result<()> {
     let (dim, lim) = match parse_args_bf() {
@@ -25,8 +24,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let file_name = format!("glove.6B.{dim}d");
-    // let file_name = format!("glove.840B.{dim}d");
+    let file_name = format!("glove.840B.{dim}d");
 
     let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/"
@@ -44,9 +42,17 @@ fn main() -> std::io::Result<()> {
     let train_arc = Arc::new(train_set);
     let test_arc = Arc::new(test_set);
 
-    let nb_threads = std::thread::available_parallelism().unwrap().get() as u8;
+    let nb_threads = std::thread::available_parallelism().unwrap().get();
     let test_ids: Vec<Node> = test_arc.ids().collect();
-    let mut indices_split = split_ids(test_ids, nb_threads);
+    let mut indices_split: Vec<Vec<Node>> = test_ids
+        .chunks(((test_ids.len() as f32) / (nb_threads as f32)) as usize)
+        .map(|chunk| Vec::from(chunk))
+        .collect();
+    let mut nb = 0;
+    for split in indices_split.iter() {
+        nb += split.len()
+    }
+    assert_eq!(nb, test_ids.len());
     let mut handles = Vec::new();
     for i in 0..nb_threads {
         let train_ref = train_arc.clone();
@@ -63,7 +69,7 @@ fn main() -> std::io::Result<()> {
     for thread in handles {
         let bf_result = thread.join().unwrap();
         for (key, val) in bf_result {
-            bf_data.insert(key, val);
+            assert!(bf_data.insert(key, val).is_none());
         }
     }
 

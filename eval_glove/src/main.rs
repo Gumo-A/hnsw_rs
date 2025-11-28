@@ -12,6 +12,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use points::{point::Point, point_collection::Points};
 use vectors::{FullVec, LVQVec};
 
+use std::fs;
+use std::io::Write; // bring trait into scope
+
 fn main() -> std::io::Result<()> {
     let (dim, lim, m) = match parse_args_eval() {
         Ok(args) => args,
@@ -23,8 +26,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let file_name = format!("glove.6B.{dim}d");
-    // let file_name = format!("glove.840B.{dim}d");
+    let file_name = format!("glove.840B.{dim}d");
 
     let (words, embeddings) = load_glove_array(lim, file_name.clone(), true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
@@ -52,12 +54,23 @@ fn main() -> std::io::Result<()> {
 
     let ef_cons = 500;
 
-    let embs = Points::new_full(train_set.clone(), get_default_ml(m));
+    let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
     let start = Instant::now();
     let mut store = HNSW::new(m, Some(ef_cons), embs.dim().unwrap() as u32, true);
-    store.insert_bulk(embs).unwrap();
+    store = store.insert_bulk_par(embs, 8).unwrap();
     // let index = build_index(m, Some(ef_cons), embs.clone(), true).unwrap();
     // let index = build_index_par(m, Some(ef_cons), embs, true).unwrap();
+
+    let ser_points = store.serialize();
+
+    // ... later in code
+    let mut file = fs::OpenOptions::new()
+        .create(true) // To create a new file
+        .write(true)
+        // either use the ? operator or unwrap since it returns a Result
+        .open("./points_collection.bin")?;
+
+    file.write_all(&ser_points)?;
     println!(
         "ef_cons {ef_cons} elapsed {} ms",
         start.elapsed().as_millis()
@@ -69,7 +82,7 @@ fn main() -> std::io::Result<()> {
     //     start.elapsed().as_millis() - end.elapsed().as_millis()
     // );
 
-    // estimate_recall(&store, &test_set, &bf_data);
+    estimate_recall(&store, &test_set, &bf_data);
 
     // index.assert_param_compliance();
 
@@ -160,7 +173,7 @@ fn estimate_recall(
     bf_data: &HashMap<usize, Vec<usize>>,
 ) {
     let n = 10;
-    for ef in (10..100).step_by(20) {
+    for ef in (500..600).step_by(20) {
         let bar = ProgressBar::new(test_set.len() as u64);
         bar.set_message(format!("Finding ANNs ef={ef}"));
         bar.set_style(
@@ -178,7 +191,10 @@ fn estimate_recall(
                 .iter()
                 .map(|x| *x as usize)
                 .collect();
-            let true_nns: &Vec<usize> = bf_data.get(&idx).unwrap();
+            let true_nns: &Vec<usize> = match bf_data.get(&idx) {
+                None => continue,
+                Some(t) => t,
+            };
             let mut hits = 0;
             for true_nn in true_nns.iter().take(n) {
                 if anns.contains(true_nn) {

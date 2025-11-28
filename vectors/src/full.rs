@@ -1,4 +1,4 @@
-use crate::VecTrait;
+use crate::{VecSer, VecTrait, serializer::Serializer};
 
 const CHUNK_SIZE: usize = 8;
 
@@ -84,3 +84,30 @@ impl VecTrait for FullVec {
             .for_each(|(idx, x)| *x += means[idx]);
     }
 }
+
+impl Serializer for FullVec {
+    fn size(&self) -> usize {
+        self.dim() * 4
+    }
+
+    /// blocks of 4 bytes
+    /// for the floats (big endian)
+    fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for float in self.vals.iter() {
+            bytes.extend_from_slice(&float.to_be_bytes());
+        }
+        bytes
+    }
+
+    fn deserialize(data: Vec<u8>) -> Self {
+        let bytes = data.chunks_exact(4);
+        let mut vals: Vec<f32> = Vec::new();
+        for bytes_arr in bytes {
+            vals.push(f32::from_be_bytes(bytes_arr.try_into().unwrap()))
+        }
+        FullVec::new(vals)
+    }
+}
+
+impl VecSer for FullVec {}
