@@ -3,7 +3,7 @@ use graph::{
     nodes::{Dist, Node},
 };
 use points::{point::Point, point_collection::Points};
-use vectors::VecTrait;
+use vectors::{VecBase, VecTrait};
 
 use crate::template::results::Results;
 
@@ -20,7 +20,7 @@ impl Searcher {
         layer: &Graph,
         point: &Point<T>,
         points: &Points<T>,
-        ef: u32,
+        ef: usize,
     ) -> Result<(), String> {
         results.extend_candidates_with_selected();
         results.extend_visited_with_selected();
@@ -69,17 +69,29 @@ impl Searcher {
         Ok(())
     }
 
+    pub fn select_simple(&self, results: &mut Results, m: usize) -> Result<(), String> {
+        results.select_setup();
+        for _ in 0..m {
+            let node = match results.pop_candidate() {
+                None => break,
+                Some(n) => n,
+            };
+            results.push_selected(node.0);
+        }
+        Ok(())
+    }
+
     pub fn select_heuristic<T: VecTrait>(
         &self,
         results: &mut Results,
         layer: &Graph,
         point: &Point<T>,
         points: &Points<T>,
-        m: u8,
+        m: usize,
         extend_cands: bool,
         keep_pruned: bool,
     ) -> Result<(), String> {
-        results.heuristic_setup();
+        results.select_setup();
         if extend_cands {
             results.extend_candidates_with_neighbors(point, points, layer)?;
         }

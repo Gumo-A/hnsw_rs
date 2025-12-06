@@ -1,14 +1,13 @@
 use graph::nodes::Dist;
 use points::point::Point;
 
-use crate::template::{results::Results, VecSer, HNSW};
+use crate::template::{results::Results, VecTrait, HNSW};
 
 use crate::template::searcher::Searcher;
 
 pub struct Inserter {
     results: Results,
     searcher: Searcher,
-    new_layers: bool,
 }
 
 impl Inserter {
@@ -16,7 +15,6 @@ impl Inserter {
         Inserter {
             results: Results::new(),
             searcher: Searcher::new(),
-            new_layers: false,
         }
     }
 
@@ -28,7 +26,7 @@ impl Inserter {
         &mut self.results
     }
 
-    pub fn build_insertion_results<T: VecSer>(
+    pub fn build_insertion_results<T: VecTrait>(
         &mut self,
         index: &HNSW<T>,
         point: &Point<T>,
@@ -39,7 +37,7 @@ impl Inserter {
         Ok(())
     }
 
-    pub fn setup_insert<T: VecSer>(&mut self, index: &HNSW<T>, point: &Point<T>) {
+    pub fn setup_insert<T: VecTrait>(&mut self, index: &HNSW<T>, point: &Point<T>) {
         self.results.clear_all();
 
         let dist2ep = index
@@ -49,7 +47,7 @@ impl Inserter {
         self.results.push_selected(Dist::new(index.ep, dist2ep));
     }
 
-    pub fn traverse_layers_above<T: VecSer>(
+    pub fn traverse_layers_above<T: VecTrait>(
         &mut self,
         index: &HNSW<T>,
         point: &Point<T>,
@@ -60,13 +58,13 @@ impl Inserter {
             let layer = index.get_layer(&layer_nb);
             self.searcher
                 .search_layer(&mut self.results, layer, point, &index.points, 1)?;
-            if layer_nb == 0 {
-                break;
-            }
+            // if layer_nb == 0 {
+            //     break;
+            // }
         }
         Ok(())
     }
-    pub fn traverse_layers_below<T: VecSer>(
+    pub fn traverse_layers_below<T: VecTrait>(
         &mut self,
         index: &HNSW<T>,
         point: &Point<T>,
@@ -81,13 +79,15 @@ impl Inserter {
                 &index.points,
                 index.params.ef_cons,
             )?;
+            // self.searcher
+            //     .select_simple(&mut self.results, index.params.m)?;
             self.searcher.select_heuristic(
                 &mut self.results,
                 layer,
                 point,
                 &index.points,
                 index.params.m,
-                false,
+                true,
                 true,
             )?;
             self.results.insert_layer_results(layer_nb, point.id);

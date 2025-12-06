@@ -7,7 +7,7 @@ use graph::{
     nodes::{Dist, Node},
 };
 use points::{point::Point, point_collection::Points};
-use vectors::{serializer::Serializer, VecSer};
+use vectors::{serializer::Serializer, VecBase, VecTrait};
 
 mod searcher;
 
@@ -26,19 +26,20 @@ where
     Ok(BinaryHeap::from_iter(cands.iter().copied().take(m)))
 }
 
-pub struct HNSW<T: VecSer> {
+#[derive(Debug, Clone)]
+pub struct HNSW<T: VecTrait> {
     params: Params,
     layers: Layers,
     ep: Node,
     points: Points<T>,
-    verbose: bool,
 }
 
-impl<T: VecSer> HNSW<T> {
-    pub fn serialize(&self) -> Vec<u8> {
+impl<T: VecTrait> HNSW<T> {
+    pub fn serialize_points(&self) -> Vec<u8> {
         self.points.serialize()
     }
-    pub fn new(m: u8, ef_cons: Option<u32>, dim: u32, verbose: bool) -> Self {
+
+    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
         let params = if ef_cons.is_some() {
             Params::from_m_efcons(m, ef_cons.unwrap(), dim)
         } else {
@@ -49,7 +50,6 @@ impl<T: VecSer> HNSW<T> {
             ep: 0,
             points: Points::new(),
             layers: Layers::new(),
-            verbose,
         }
     }
 
@@ -59,6 +59,13 @@ impl<T: VecSer> HNSW<T> {
 
     pub fn distance(&self, a: Node, b: Node) -> Option<f32> {
         self.points.distance(a, b)
+    }
+
+    pub fn layer_degrees(&self, layer_nb: &u8) {
+        let layer = self.layers.get_layer(layer_nb);
+        for node in layer.nodes.keys() {
+            println!("{}", layer.degree(*node).unwrap());
+        }
     }
 
     pub fn insert_point(&mut self, point: Point<T>) -> Result<bool, String> {
@@ -87,14 +94,11 @@ impl<T: VecSer> HNSW<T> {
         self.layers.get_layer(layer_nb)
     }
 
-    fn add_layers(&mut self, point_id: Node, level: u8) {
-        let max_layer = self.layers.len() - 1;
-        if level > max_layer {
-            for layer_nb in max_layer + 1..level + 1 {
-                self.layers.add_layer_with_node(layer_nb, point_id);
-            }
-            self.ep = point_id;
+    fn make_connections(&self, results: &Results) -> Result<(), String> {
+        for (layer_nb, node_data) in results.iter_insertion_results() {
+            self.layers.apply_insertion_results(&layer_nb, node_data)?;
         }
+        Ok(())
     }
 
     fn prune_connexions(&self, searcher: &mut Results) -> Result<(), String> {
@@ -127,34 +131,8 @@ impl<T: VecSer> HNSW<T> {
         Ok(())
     }
 
-    pub fn insert_bulk(&mut self, points: Points<T>) -> Result<bool, String> {
-        let mut inserter = Inserter::new();
-
-        self.store_points(points);
-
-        let bar = get_progress_bar(
-            "Inserting Vectors".to_string(),
-            self.points.len(),
-            self.verbose,
-        );
-
-        let ids: Vec<Node> = self.points.ids().collect();
-        for id in ids.iter() {
-            self.insert(*id, &mut inserter)?;
-            bar.inc(1);
-        }
-        Ok(true)
-    }
-
-    fn make_connections(&self, results: &Results) -> Result<(), String> {
-        for (layer_nb, node_data) in results.iter_insertion_results() {
-            self.layers.apply_insertion_results(&layer_nb, node_data)?;
-        }
-        Ok(())
-    }
-
-    fn write_results_prune(&self, searcher: &Results) -> Result<(), String> {
-        for (layer_nb, node_data) in searcher.iter_prune_results() {
+    fn write_results_prune(&self, results: &Results) -> Result<(), String> {
+        for (layer_nb, node_data) in results.iter_prune_results() {
             let layer = self.layers.get_layer(&layer_nb);
             for (node, neighbors) in node_data.iter() {
                 layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id))?;
@@ -170,20 +148,26 @@ impl<T: VecSer> HNSW<T> {
     /// This is only the storing part, no indexing can
     /// be done on these points after this operation,
     fn store_points(&mut self, points: Points<T>) {
-        for point in points.iter_points() {
-            for layer_nb in 0..=point.level {
-                self.layers.add_node_to_layer(layer_nb, point.id);
+        let ids_levels = self.points.extend(points);
+        for (point_id, level) in ids_levels {
+            for layer_nb in 0..=level {
+                self.layers.add_node_to_layer(layer_nb, point_id);
             }
         }
+
         let max_layer_nb = self.layers.len() - 1;
-        self.ep = *self
+        let new_ep = *self
             .get_layer(&(max_layer_nb as u8))
             .nodes
             .keys()
             .next()
             .unwrap();
-
-        self.points.extend(points);
+        // TODO: if index already had points and we insert more,
+        // one of the new points could have a higher level than the
+        // current max. So it will become the new EP, and therefore
+        // needs to be connected in all the layers.
+        // self.insert(new_ep, &mut Inserter::new()).unwrap();
+        self.ep = new_ep;
     }
 
     // fn get_nearest<I>(&self, point: &Point<T>, others: I) -> Node
@@ -197,12 +181,19 @@ impl<T: VecSer> HNSW<T> {
     //         .id
     // }
 
-    pub fn ann_by_vector(&self, point: &Point<T>, n: usize, ef: u32) -> Result<Vec<Node>, String> {
+    pub fn ann_by_vector(
+        &self,
+        point: &Point<T>,
+        n: usize,
+        ef: usize,
+    ) -> Result<Vec<Node>, String> {
         let mut results = Results::new();
         let searcher = Searcher::new();
+        let mut point = point.clone();
+        point.center(&self.points.means.clone().unwrap());
         results.push_selected(Dist::new(
             self.ep,
-            self.points.distance2point(point, self.ep).unwrap(),
+            self.points.distance2point(&point, self.ep).unwrap(),
         ));
         let nb_layers = self.layers.len();
 
@@ -277,12 +268,8 @@ impl<T: VecSer> HNSW<T> {
     }
 }
 
-impl<T: VecSer + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
-    pub fn insert_bulk_par(
-        mut self,
-        points: Points<T>,
-        nb_threads: usize,
-    ) -> Result<HNSW<T>, String> {
+impl<T: VecTrait + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
+    pub fn insert_bulk(mut self, points: Points<T>, nb_threads: usize) -> Result<HNSW<T>, String> {
         self.store_points(points);
         let mut total_insertions = 0;
         for layer_nb in 0..self.layers.len() {

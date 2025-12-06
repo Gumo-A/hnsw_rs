@@ -1,20 +1,27 @@
-use vectors::{FullVec, LVQVec, VecTrait, gen_rand_vecs};
+use vectors::{FullVec, LVQVec, VecBase, gen_rand_vecs};
 
 #[test]
-fn distance_computation() {
-    for _ in 0..100 {
-        let rand_vecs = gen_rand_vecs(128, 2);
-        let a = FullVec::new(rand_vecs[0].clone());
-        let b = LVQVec::new(&rand_vecs[1].clone());
-        assert!(a.distance(&b) >= 0.0);
+fn dist_err_lt_one_percent() {
+    for _ in 0..1000 {
+        let rand_a = gen_rand_vecs(128, 1)[0].clone();
+        let rand_b = gen_rand_vecs(128, 1)[0].clone();
+
+        let a = FullVec::new(rand_a.clone());
+        let b = FullVec::new(rand_b.clone());
+
+        let full2full_dist = a.distance(&b);
+
+        let a = LVQVec::new(&rand_a);
+        let quant2full_dist = a.distance(&b);
+
+        let b = LVQVec::new(&rand_b);
+        let quant2quant_dist = a.distance(&b);
+
+        let quant2full_err = (full2full_dist - quant2full_dist).abs() / full2full_dist;
+        let quant2quant_err = (full2full_dist - quant2quant_dist).abs() / full2full_dist;
+        println!("quant2full_diff {quant2full_err}");
+        println!("quant2quant_diff {quant2quant_err}");
+        assert!(quant2full_err < 0.01);
+        assert!(quant2quant_err < 0.01);
     }
-}
-
-#[test]
-fn distance_precision() {
-    let a = FullVec::new(vec![0.75, 0.75]);
-    let b = LVQVec::new(&vec![0.25, 0.25]);
-    let dist = a.distance(&b);
-    print!("{dist}");
-    assert!(dist == (1.0 / (2.0f32).sqrt()));
 }

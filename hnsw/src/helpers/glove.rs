@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
 use std::str::FromStr;
 use std::sync::Arc;
-use vectors::{FullVec, VecTrait};
+use vectors::{FullVec, VecBase};
 
 pub fn load_glove_array(
     lim: usize,
@@ -127,22 +127,8 @@ pub fn brute_force_nns(
     train_set: Arc<Points<FullVec>>,
     test_set: Arc<Points<FullVec>>,
     ids: Vec<Node>,
-    verbose: bool,
+    bar: ProgressBar,
 ) -> HashMap<Node, Vec<Node>> {
-    let bar = if verbose {
-        let bar = ProgressBar::new(ids.len() as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{msg} {wide_bar} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec}",
-            )
-            .unwrap(),
-        );
-        bar.set_message("Finding NNs");
-        bar
-    } else {
-        ProgressBar::hidden()
-    };
-
     let mut brute_force_results: HashMap<Node, Vec<Node>> = HashMap::new();
     for idx in ids.iter() {
         let query = test_set

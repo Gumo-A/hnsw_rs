@@ -1,4 +1,4 @@
-use crate::VecTrait;
+use crate::VecBase;
 
 #[derive(Debug, Clone)]
 pub struct ByteVec {
@@ -14,8 +14,8 @@ impl ByteVec {
     }
 }
 
-impl VecTrait for ByteVec {
-    fn distance(&self, other: &impl VecTrait) -> f32 {
+impl VecBase for ByteVec {
+    fn distance(&self, other: &impl VecBase) -> f32 {
         self.iter_vals()
             .zip(other.iter_vals())
             .fold(0.0, |acc, e| acc + (e.0 - e.1).powi(2))

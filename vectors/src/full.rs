@@ -1,4 +1,4 @@
-use crate::{VecSer, VecTrait, serializer::Serializer};
+use crate::{VecBase, VecTrait, serializer::Serializer};
 
 const CHUNK_SIZE: usize = 8;
 
@@ -19,8 +19,8 @@ impl FullVec {
     }
 }
 
-impl VecTrait for FullVec {
-    fn distance(&self, other: &impl VecTrait) -> f32 {
+impl VecBase for FullVec {
+    fn distance(&self, other: &impl VecBase) -> f32 {
         let other = other.get_vals();
         let mut acc = [0.0f32; CHUNK_SIZE];
         let vector_chunks = other.chunks_exact(CHUNK_SIZE);
@@ -62,6 +62,7 @@ impl VecTrait for FullVec {
     fn iter_vals(&self) -> impl Iterator<Item = f32> {
         self.vals.iter().copied()
     }
+
     fn dim(&self) -> usize {
         self.vals.len()
     }
@@ -110,4 +111,108 @@ impl Serializer for FullVec {
     }
 }
 
-impl VecSer for FullVec {}
+impl VecTrait for FullVec {}
+
+#[cfg(test)]
+mod tests {
+    use crate::gen_rand_vecs;
+
+    use super::*;
+
+    #[test]
+    fn serialization() {
+        let a = FullVec::new(gen_rand_vecs(128, 1)[0].clone());
+        let ser_a = a.serialize();
+        let b = FullVec::deserialize(ser_a);
+        for (a_val, b_val) in a.iter_vals().zip(b.iter_vals()) {
+            assert_eq!(a_val, b_val);
+        }
+    }
+
+    #[test]
+    fn distance() {
+        let mut others = Vec::new();
+        for _ in 0..100 {
+            let a = FullVec::new(gen_rand_vecs(128, 1)[0].clone());
+            others.push(a);
+        }
+        let a = FullVec::new(gen_rand_vecs(128, 1)[0].clone());
+        a.dist2many(others.iter())
+            .for_each(|dist| assert!(dist >= 0.0));
+
+        let a = FullVec::new(vec![0.5]);
+        let b = FullVec::new(vec![0.25]);
+        let dist = a.dist2other(&b);
+        let dist2other = a.dist2other(&b);
+        assert!(dist == 0.25);
+        assert_eq!(dist, dist2other);
+
+        let a = FullVec::new(vec![0.75]);
+        let b = FullVec::new(vec![0.25]);
+        let dist = a.dist2other(&b);
+        let dist2other = a.dist2other(&b);
+        assert!(dist == 0.5);
+        assert_eq!(dist, dist2other);
+
+        let a = FullVec::new(vec![0.0, 0.0]);
+        let b = FullVec::new(vec![0.0, 1.0]);
+        let dist = a.dist2other(&b);
+        let dist2other = a.dist2other(&b);
+        assert!(dist == 1.0);
+        assert_eq!(dist, dist2other);
+
+        let a = FullVec::new(vec![1.0, 0.0]);
+        let b = FullVec::new(vec![0.0, 1.0]);
+        let dist = a.dist2other(&b);
+        let dist2other = a.dist2other(&b);
+        assert!(dist == 2.0f32.sqrt());
+        assert_eq!(dist, dist2other);
+
+        let a = FullVec::new(vec![-1.0, 0.0]);
+        let b = FullVec::new(vec![0.0, 1.0]);
+        let dist = a.dist2other(&b);
+        let dist2other = a.dist2other(&b);
+        assert!(dist == 2.0f32.sqrt());
+        assert_eq!(dist, dist2other);
+
+        let a = FullVec::new(vec![1.0, 0.0]);
+        let b = FullVec::new(vec![0.0, -1.0]);
+        let dist = a.dist2other(&b);
+        let dist2other = a.dist2other(&b);
+        assert!(dist == 2.0f32.sqrt());
+        assert_eq!(dist, dist2other);
+
+        let a = FullVec::new(gen_rand_vecs(128, 1)[0].clone());
+        let b = a.clone();
+        let dist = a.dist2other(&b);
+        let dist2other = a.dist2other(&b);
+        assert!(dist == 0.0);
+        assert_eq!(dist, dist2other);
+    }
+
+    #[test]
+    fn center_decenter() {
+        let n = 128;
+        let means = gen_rand_vecs(n, 1)[0].clone();
+        let mut vectors: Vec<FullVec> = gen_rand_vecs(n, 4)
+            .iter()
+            .map(|v| FullVec::new(v.clone()))
+            .collect();
+        let vectors_clone = vectors.clone();
+        for (v, vc) in vectors.iter_mut().zip(vectors_clone.iter()) {
+            v.center(&means);
+            for (idx, (v_val, vc_val)) in v.iter_vals().zip(vc.iter_vals()).enumerate() {
+                let err = (v_val - (vc_val - means[idx])).abs() / (vc_val - means[idx]);
+                assert!(err < 0.0001);
+            }
+        }
+
+        for (v, vc) in vectors.iter_mut().zip(vectors_clone.iter()) {
+            v.decenter(&means);
+            for (v_val, vc_val) in v.iter_vals().zip(vc.iter_vals()) {
+                let err = (v_val - vc_val).abs() / vc_val;
+                assert!(err < 0.0001);
+            }
+        }
+    }
+}

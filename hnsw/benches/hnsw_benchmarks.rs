@@ -6,16 +6,16 @@ use std::time::Duration;
 // functions that are called during insertion.
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hnsw::helpers::glove::load_glove_array;
-use hnsw::hnsw::index::{build_index, HNSW};
-use hnsw::hnsw::params::get_default_ml;
+use hnsw::params::get_default_ml;
+use hnsw::template::HNSW;
 use points::point::Point;
 use points::point_collection::Points;
 use rand::Rng;
-use vectors::{LVQVec, VecTrait};
+use vectors::{LVQVec, VecBase};
 
 const DIMS: [usize; 1] = [300];
 const GLOVE_DIMS: [usize; 1] = [300];
-const M: u8 = 12;
+const M: usize = 12;
 
 fn insert_at_10000_m12(c: &mut Criterion) {
     let ml = get_default_ml(M);
@@ -26,13 +26,10 @@ fn insert_at_10000_m12(c: &mut Criterion) {
 
     for dim in GLOVE_DIMS.iter() {
         let (_, embeddings) = load_glove_array(10_000, format!("glove.6B.{dim}d"), false).unwrap();
-        let index = build_index(
-            M,
-            None,
-            Points::new_quant(embeddings[..9_999].to_vec(), ml),
-            false,
-        )
-        .unwrap();
+        let index = HNSW::new(M, None, embeddings[0].len());
+        let index = index
+            .insert_bulk(Points::new_quant(embeddings[..9_999].to_vec(), ml), 1)
+            .unwrap();
         let vector = embeddings[9_999].clone();
         group.bench_function(BenchmarkId::from_parameter(dim), |b| {
             b.iter_batched(
@@ -61,7 +58,8 @@ fn build_10000_m12(c: &mut Criterion) {
             b.iter_batched(
                 || embeddings.clone(),
                 move |embs| {
-                    let _ = build_index(M, None, Points::new_quant(embs, ml), false);
+                    let index = HNSW::new(M, None, embs[0].len());
+                    let _ = index.insert_bulk(Points::new_quant(embs, ml), 1);
                 },
                 criterion::BatchSize::LargeInput,
             )
@@ -139,10 +137,10 @@ fn dist_computation_full_various_sizes(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    // insert_at_10000_m12,
+    insert_at_10000_m12,
     build_10000_m12,
-    // quantize_various_sizes,
-    // dist_computation_quantized_various_sizes,
-    // dist_computation_full_various_sizes
+    quantize_various_sizes,
+    dist_computation_quantized_various_sizes,
+    dist_computation_full_various_sizes
 );
 criterion_main!(benches);

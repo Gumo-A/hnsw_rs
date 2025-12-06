@@ -8,6 +8,7 @@ use crate::{
     nodes::{Dist, Node},
 };
 
+#[derive(Debug, Clone)]
 pub struct Layers {
     levels: IntMap<u8, Graph>,
 }

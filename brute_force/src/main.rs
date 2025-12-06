@@ -1,3 +1,4 @@
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
@@ -24,7 +25,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let file_name = format!("glove.840B.{dim}d");
+    let file_name = format!("glove.{dim}d");
 
     let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/"
@@ -52,15 +53,27 @@ fn main() -> std::io::Result<()> {
     for split in indices_split.iter() {
         nb += split.len()
     }
+
     assert_eq!(nb, test_ids.len());
+
+    let bar = ProgressBar::new(test_ids.len() as u64);
+    bar.set_style(
+            ProgressStyle::with_template(
+                "{msg} {wide_bar} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec}",
+            )
+            .unwrap(),
+        );
+    bar.set_message("Finding NNs");
+
     let mut handles = Vec::new();
-    for i in 0..nb_threads {
+    for _ in 0..nb_threads {
         let train_ref = train_arc.clone();
         let test_ref = test_arc.clone();
         let ids_to_compute = indices_split.pop().unwrap();
 
+        let bar_clone = bar.clone();
         handles.push(thread::spawn(move || {
-            let bf_data = brute_force_nns(NB_NNS, train_ref, test_ref, ids_to_compute, i == 0);
+            let bf_data = brute_force_nns(NB_NNS, train_ref, test_ref, ids_to_compute, bar_clone);
             bf_data
         }));
     }

@@ -11,11 +11,11 @@ use rand::Rng;
 
 use crate::serializer::Serializer;
 
-pub trait VecSer: VecTrait + Serializer {}
+pub trait VecTrait: VecBase + Serializer + Clone {}
 
-pub trait VecTrait {
+pub trait VecBase {
     fn iter_vals(&self) -> impl Iterator<Item = f32>;
-    fn distance(&self, other: &impl VecTrait) -> f32;
+    fn distance(&self, other: &impl VecBase) -> f32;
 
     fn dist2other(&self, other: &Self) -> f32;
     fn dist2many<'a, I>(&'a self, others: I) -> impl Iterator<Item = f32> + 'a
@@ -41,6 +41,7 @@ pub trait VecTrait {
 pub fn gen_rand_vecs(dim: usize, n: usize) -> Vec<Vec<f32>> {
     let mut rng = rand::thread_rng();
     let mut vecs = vec![];
+    assert!(n > 0);
     for _ in 0..n {
         vecs.push((0..dim).map(|_| rng.r#gen::<f32>()).collect())
     }

@@ -6,7 +6,7 @@ use rand::{Rng, thread_rng};
 use vectors::serializer::Serializer;
 
 use crate::point::Point;
-use vectors::{FullVec, LVQVec, VecTrait};
+use vectors::{FullVec, LVQVec, VecBase, VecTrait};
 
 fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> u8 {
     let mut rand_nb = 0.0;
@@ -42,7 +42,7 @@ fn compute_means<T: VecTrait>(vectors: &Vec<Point<T>>) -> Option<Vec<f32>> {
 #[derive(Debug, Clone)]
 pub struct Points<T: VecTrait> {
     collection: Vec<Point<T>>,
-    means: Option<Vec<f32>>,
+    pub means: Option<Vec<f32>>,
 }
 
 impl Points<FullVec> {
@@ -198,22 +198,27 @@ impl<T: VecTrait> Points<T> {
         self.collection.get_mut(index as usize)
     }
 
-    pub fn extend(&mut self, other: Points<T>) {
+    /// Updates means, adds points with correct IDs, returns vector
+    /// with tuples of new IDs and levels.
+    pub fn extend(&mut self, other: Points<T>) -> Vec<(Node, u8)> {
         self.check_ids();
-        for point in self.collection.iter_mut() {
-            point.decenter(self.means.as_ref().unwrap());
-        }
+        // for point in self.collection.iter_mut() {
+        //     point.decenter(self.means.as_ref().unwrap());
+        // }
+        let mut ids_levels = Vec::with_capacity(other.len());
         let mut next_id = self.collection.len();
         for mut point in other.collection {
             point.id = next_id as Node;
+            ids_levels.push((point.id, point.level));
             self.collection.push(point);
             next_id += 1;
         }
 
         self.means = compute_means(&self.collection);
-        for point in self.collection.iter_mut() {
-            point.center(self.means.as_ref().unwrap());
-        }
+        // for point in self.collection.iter_mut() {
+        //     point.center(self.means.as_ref().unwrap());
+        // }
+        ids_levels
     }
 }
 
@@ -226,7 +231,7 @@ impl<'a, T: VecTrait> Points<T> {
     }
 }
 
-impl<T: VecTrait + Serializer> Serializer for Points<T> {
+impl<T: VecTrait> Serializer for Points<T> {
     fn size(&self) -> usize {
         let point_size = self.get_point(0).unwrap().size();
         4 + (self.dim().unwrap() * 4) + 8 + (point_size * self.len())

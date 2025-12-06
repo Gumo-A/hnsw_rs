@@ -5,7 +5,7 @@ use points::point::Point;
 use points::point_collection::Points;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use vectors::VecTrait;
+use vectors::{VecBase, VecTrait};
 
 pub type LayerResult = IntMap<Node, BinaryHeap<Dist>>;
 type LayersResults = IntMap<u8, LayerResult>;
@@ -102,7 +102,7 @@ impl Results {
         self.selected.clone()
     }
 
-    pub fn heuristic_setup(&mut self) {
+    pub fn select_setup(&mut self) {
         self.clear_visited_heuristic();
         self.clear_candidates();
         self.candidates

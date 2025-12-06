@@ -1,5 +1,5 @@
 use graph::nodes::Node;
-use vectors::{FullVec, LVQVec, VecSer, VecTrait, serializer::Serializer};
+use vectors::{FullVec, LVQVec, VecBase, VecTrait, serializer::Serializer};
 
 #[derive(Debug, Clone)]
 pub struct Point<T: VecTrait> {
@@ -23,8 +23,8 @@ impl<T: VecTrait> Point<T> {
     }
 }
 
-impl<T: VecTrait> VecTrait for Point<T> {
-    fn distance(&self, other: &impl VecTrait) -> f32 {
+impl<T: VecTrait> VecBase for Point<T> {
+    fn distance(&self, other: &impl VecBase) -> f32 {
         self.vector.distance(other)
     }
     fn dist2other(&self, other: &Self) -> f32 {
@@ -78,7 +78,7 @@ impl Point<FullVec> {
     }
 }
 
-impl<T: VecTrait + Serializer> Serializer for Point<T> {
+impl<T: VecTrait> Serializer for Point<T> {
     fn size(&self) -> usize {
         6 + self.vector.size()
     }
@@ -110,4 +110,44 @@ impl<T: VecTrait + Serializer> Serializer for Point<T> {
     }
 }
 
-impl<T: VecSer> VecSer for Point<T> {}
+impl<T: VecTrait> VecTrait for Point<T> {}
+
+#[cfg(test)]
+mod test {
+
+    use vectors::gen_rand_vecs;
+
+    use super::*;
+
+    #[test]
+    fn serialization() {
+        for _ in 0..100 {
+            let rand_vecs = gen_rand_vecs(128, 2);
+
+            let a_id = 32;
+            let a_level = 2;
+            let a_vector = rand_vecs[0].clone();
+
+            let b_id = 16;
+            let b_level = 1;
+            let b_vector = rand_vecs[1].clone();
+
+            let a = Point::new_full(a_id, a_level, a_vector.clone());
+            let b = Point::new_full(b_id, b_level, b_vector.clone());
+
+            let a_ser = a.serialize();
+            let b_ser = b.serialize();
+
+            let a: Point<FullVec> = Point::deserialize(a_ser);
+            let b: Point<FullVec> = Point::deserialize(b_ser);
+
+            assert_eq!(a_id, a.id);
+            assert_eq!(a_level, a.level);
+            assert_eq!(a_vector, a.vector.get_vals());
+
+            assert_eq!(b_id, b.id);
+            assert_eq!(b_level, b.level);
+            assert_eq!(b_vector, b.vector.get_vals());
+        }
+    }
+}
