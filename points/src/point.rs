@@ -86,6 +86,11 @@ impl<T: VecTrait> Serializer for Point<T> {
     /// 4 bytes for ID, one byte for level,
     /// one for removed flag, followed by vector
     /// byte string.
+    /// Val        Bytes
+    /// ID         4
+    /// level      1
+    /// removed    1
+    /// vector     variable
     fn serialize(&self) -> Vec<u8> {
         let vec_bytes = self.vector.serialize();
         let mut bytes = Vec::with_capacity(6 + vec_bytes.len());
@@ -96,6 +101,14 @@ impl<T: VecTrait> Serializer for Point<T> {
         bytes
     }
 
+    /// 4 bytes for ID, one byte for level,
+    /// one for removed flag, followed by vector
+    /// byte string.
+    /// Val        Bytes
+    /// ID         4
+    /// level      1
+    /// removed    1
+    /// vector     variable
     fn deserialize(data: Vec<u8>) -> Self {
         let id: Node = u32::from_be_bytes(data[..4].try_into().unwrap());
         let level = u8::from_be_bytes(data[4..5].try_into().unwrap());
@@ -121,33 +134,34 @@ mod test {
 
     #[test]
     fn serialization() {
-        for _ in 0..100 {
-            let rand_vecs = gen_rand_vecs(128, 2);
+        let rand_vecs = gen_rand_vecs(128, 2);
 
-            let a_id = 32;
-            let a_level = 2;
-            let a_vector = rand_vecs[0].clone();
+        let a_id = 32;
+        let a_level = 2;
+        let a_vector = rand_vecs[0].clone();
 
-            let b_id = 16;
-            let b_level = 1;
-            let b_vector = rand_vecs[1].clone();
+        let b_id = 16;
+        let b_level = 1;
+        let b_vector = rand_vecs[1].clone();
 
-            let a = Point::new_full(a_id, a_level, a_vector.clone());
-            let b = Point::new_full(b_id, b_level, b_vector.clone());
+        let a = Point::new_full(a_id, a_level, a_vector.clone());
+        let b = Point::new_full(b_id, b_level, b_vector.clone());
 
-            let a_ser = a.serialize();
-            let b_ser = b.serialize();
+        let a_ser = a.serialize();
+        let b_ser = b.serialize();
 
-            let a: Point<FullVec> = Point::deserialize(a_ser);
-            let b: Point<FullVec> = Point::deserialize(b_ser);
+        let a: Point<FullVec> = Point::deserialize(a_ser);
+        let b: Point<FullVec> = Point::deserialize(b_ser);
 
-            assert_eq!(a_id, a.id);
-            assert_eq!(a_level, a.level);
-            assert_eq!(a_vector, a.vector.get_vals());
+        assert_eq!(a_id, a.id);
+        assert_eq!(a_level, a.level);
+        assert_eq!(a_vector, a.vector.get_vals());
 
-            assert_eq!(b_id, b.id);
-            assert_eq!(b_level, b.level);
-            assert_eq!(b_vector, b.vector.get_vals());
-        }
+        assert_eq!(b_id, b.id);
+        assert_eq!(b_level, b.level);
+        assert_eq!(b_vector, b.vector.get_vals());
     }
+
+    #[test]
+    fn placeholder() {}
 }

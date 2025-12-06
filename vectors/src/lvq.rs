@@ -163,6 +163,11 @@ impl Serializer for LVQVec {
 
     /// 4 for low, 4 for delta
     /// followed by dim bytes
+    ///
+    /// Val       Bytes
+    /// low       4
+    /// delta     4
+    /// quant_vec dim
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.lower.to_be_bytes());

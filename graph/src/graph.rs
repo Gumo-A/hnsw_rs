@@ -1,20 +1,15 @@
 use core::panic;
 use nohash_hasher::{IntMap, IntSet};
 use std::sync::{Arc, Mutex};
+use vectors::serializer::Serializer;
 
 use crate::nodes::Node;
 
-type Neighbors = IntSet<Node>;
+type Neighbors = Arc<Mutex<IntSet<Node>>>;
 
 #[derive(Debug, Clone)]
 pub struct Graph {
-    pub nodes: IntMap<Node, Arc<Mutex<Neighbors>>>,
-}
-
-impl Default for Graph {
-    fn default() -> Self {
-        Self::new()
-    }
+    pub nodes: IntMap<Node, Neighbors>,
 }
 
 impl Graph {
@@ -28,7 +23,7 @@ impl Graph {
         self.nodes.keys().copied()
     }
 
-    pub fn from_layer_data(data: IntMap<Node, IntMap<Node, Node>>) -> Graph {
+    pub fn from_adj_list(data: IntMap<Node, IntMap<Node, Node>>) -> Graph {
         let mut nodes = IntMap::default();
         for (node_id, neighbors) in data.iter() {
             nodes.insert(
@@ -105,7 +100,7 @@ impl Graph {
         Ok(ab_rem & ba_rem)
     }
 
-    pub fn neighbors(&self, node_id: Node) -> Result<Neighbors, String> {
+    pub fn neighbors(&self, node_id: Node) -> Result<IntSet<Node>, String> {
         match self.nodes.get(&node_id) {
             Some(neighbors) => Ok(neighbors.lock().unwrap().clone()),
             None => Err(format!(
@@ -206,7 +201,87 @@ impl Graph {
         self.nodes.len()
     }
 
-    pub fn contains(&self, node_id: &Node) -> bool {
-        self.nodes.contains_key(node_id)
+    pub fn contains(&self, node_id: Node) -> bool {
+        self.nodes.contains_key(&node_id)
+    }
+
+    fn node_size(&self, node_id: Node) -> usize {
+        6 + (self.degree(node_id).unwrap() * 4)
+    }
+
+    /// Val          Bytes
+    /// Node         4
+    /// nb_neighbors 2
+    /// neighbors    nb_neighbors * 4
+    fn serialize_adj_list(&self, node_id: Node) -> Vec<u8> {
+        let neighbors = self.neighbors_vec(node_id).unwrap();
+        let mut bytes = Vec::with_capacity(neighbors.len() + 1);
+        bytes.extend_from_slice(&node_id.to_be_bytes());
+        bytes.extend_from_slice(&(neighbors.len() as u16).to_be_bytes());
+        for n in neighbors {
+            bytes.extend_from_slice(&n.to_be_bytes());
+        }
+        bytes
+    }
+
+    /// Val          Bytes
+    /// neighbors    nb_neighbors * 4
+    fn deserialize_neighbors(data: &[u8]) -> Vec<Node> {
+        let nb_neighbors = data.len() / 4;
+        let mut neighbors = Vec::with_capacity(nb_neighbors);
+        let mut i = 0;
+        for _ in 0..nb_neighbors {
+            let n: Node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
+            i += 4;
+            neighbors.push(n);
+        }
+        neighbors
+    }
+}
+
+impl Serializer for Graph {
+    fn size(&self) -> usize {
+        let mut size = 4;
+        for node in self.iter_nodes() {
+            size += self.node_size(node);
+        }
+        size
+    }
+
+    /// Val          Bytes
+    /// nb_nodes     4
+    /// adj_list     nb_nodes * variable
+    fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.nb_nodes() * 4);
+        bytes.extend_from_slice(&self.nb_nodes().to_be_bytes());
+        for node in self.iter_nodes() {
+            bytes.extend(self.serialize_adj_list(node));
+        }
+        bytes
+    }
+
+    /// Val          Bytes
+    /// nb_nodes     4
+    /// adj_list     nb_nodes * variable
+    fn deserialize(data: Vec<u8>) -> Graph {
+        let mut i = 4;
+        let nb_nodes = u32::from_be_bytes(data[..i].try_into().unwrap());
+        let mut nodes = IntMap::default();
+        for _ in 0..nb_nodes {
+            let node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
+            i += 4;
+            let nb_neighbors = u16::from_be_bytes(data[i..i + 2].try_into().unwrap()) as usize;
+            i += 2;
+            let neighbors = IntSet::from_iter(
+                Graph::deserialize_neighbors(&data[i..i + (nb_neighbors * 4)])
+                    .iter()
+                    .copied(),
+            );
+            i += nb_neighbors * 4;
+
+            nodes.insert(node, Arc::new(Mutex::new(neighbors)));
+        }
+
+        Graph { nodes }
     }
 }

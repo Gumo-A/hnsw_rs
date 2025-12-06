@@ -229,6 +229,7 @@ version = "0.1.0"
 dependencies = [
  "nohash-hasher",
  "rand",
+ "vectors",
 ]
 
 [[package]]

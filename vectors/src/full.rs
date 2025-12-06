@@ -93,6 +93,9 @@ impl Serializer for FullVec {
 
     /// blocks of 4 bytes
     /// for the floats (big endian)
+    ///
+    /// Val    Bytes
+    /// vector dim * 4
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         for float in self.vals.iter() {

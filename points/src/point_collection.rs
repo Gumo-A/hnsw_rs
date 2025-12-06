@@ -237,8 +237,12 @@ impl<T: VecTrait> Serializer for Points<T> {
         4 + (self.dim().unwrap() * 4) + 8 + (point_size * self.len())
     }
 
-    /// 4 bytes for dim, dim * 4 bytes for the means,
-    /// 4 for point size, 4 for nb. of points, byte string of serialized points.
+    /// Val        Bytes
+    /// dim        4
+    /// means      dim * 4
+    /// point_size 4
+    /// nb_points  4
+    /// points     variable
     fn serialize(&self) -> Vec<u8> {
         let (means, dim) = match (&self.means, self.dim()) {
             (Some(m), Some(d)) => (m, d),
@@ -249,13 +253,13 @@ impl<T: VecTrait> Serializer for Points<T> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&(dim as u32).to_be_bytes());
 
-        for float in means.iter() {
-            bytes.extend_from_slice(&float.to_be_bytes());
+        for idx in 0..dim {
+            bytes.extend_from_slice(&means[idx].to_be_bytes());
         }
 
-        let point_size = self.get_point(0).unwrap().size();
+        let point_size = self.get_point(0).unwrap().size() as u32;
         bytes.extend_from_slice(&point_size.to_be_bytes());
-        bytes.extend_from_slice(&self.len().to_be_bytes());
+        bytes.extend_from_slice(&(self.len() as u32).to_be_bytes());
 
         for point in self.iter_points() {
             bytes.extend(point.serialize());
@@ -263,11 +267,16 @@ impl<T: VecTrait> Serializer for Points<T> {
         bytes
     }
 
+    /// Val        Bytes
+    /// dim        4
+    /// means      dim * 4
+    /// point_size 4
+    /// nb_points  4
+    /// points     variable
     fn deserialize(data: Vec<u8>) -> Self {
-        let dim = u32::from_be_bytes(data[..4].try_into().unwrap());
-
-        let mut means: Vec<f32> = Vec::with_capacity(dim as usize);
         let mut i = 4;
+        let dim = u32::from_be_bytes(data[..i].try_into().unwrap());
+        let mut means: Vec<f32> = Vec::with_capacity(dim as usize);
         for _ in 0..dim {
             means.push(f32::from_be_bytes(data[i..i + 4].try_into().unwrap()));
             i += 4;
@@ -288,4 +297,42 @@ impl<T: VecTrait> Serializer for Points<T> {
 
         Points { collection, means }
     }
+}
+
+#[cfg(test)]
+mod test {
+
+    use vectors::gen_rand_vecs;
+
+    use super::*;
+
+    fn get_collection_data<T: VecTrait>(points: Points<T>) -> (f32, f32, f32, u32, usize) {
+        let dist = points
+            .get_point(32)
+            .unwrap()
+            .distance(points.get_point(64).unwrap());
+        let val = points.get_point(16).unwrap().iter_vals().next().unwrap();
+        let mean_1 = points.means.as_ref().unwrap()[0];
+        (dist, val, mean_1, points.len() as u32, points.size())
+    }
+
+    #[test]
+    fn serialization() {
+        let rand_vecs = gen_rand_vecs(128, 1024);
+
+        let points = Points::new_full(rand_vecs, 1.0);
+        let points_ser = points.serialize();
+        let (dist, val, mean_1, len, size) = get_collection_data(points);
+        let points: Points<FullVec> = Points::deserialize(points_ser);
+        let (dist_ser, val_ser, mean_1_ser, len_ser, size_ser) = get_collection_data(points);
+
+        assert_eq!(dist, dist_ser);
+        assert_eq!(val, val_ser);
+        assert_eq!(mean_1, mean_1_ser);
+        assert_eq!(len, len_ser);
+        assert_eq!(size, size_ser);
+    }
+
+    #[test]
+    fn placeholder() {}
 }
