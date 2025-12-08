@@ -12,7 +12,7 @@ pub fn get_progress_bar(message: String, remaining: usize, verbose: bool) -> Pro
     };
     bar.set_style(
         ProgressStyle::with_template(
-            "{msg} {bar:60} {percent}% of {len} Elapsed: {elapsed} | ETA: {eta} | {per_sec}\n",
+            "{msg} {wide_bar} {percent}% of {pos}/{len} Elapsed: {elapsed} | ETA: {eta} | {per_sec}\n",
         )
         .unwrap()
         .progress_chars(">>-"),

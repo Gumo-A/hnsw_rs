@@ -3,20 +3,19 @@ use graph::nodes::{Dist, Node};
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
 use points::point_collection::Points;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::BTreeSet;
 use vectors::{VecBase, VecTrait};
 
-pub type LayerResult = IntMap<Node, BinaryHeap<Dist>>;
+pub type LayerResult = IntMap<Node, BTreeSet<Dist>>;
 type LayersResults = IntMap<u8, LayerResult>;
-type Selected = BinaryHeap<Dist>;
-type RevSelected = BinaryHeap<Reverse<Dist>>;
+type Selected = BTreeSet<Dist>;
+type Candidates = BTreeSet<Dist>;
 
 pub struct Results {
     selected: Selected,
-    candidates: RevSelected,
+    candidates: Candidates,
     visited: IntSet<Node>,
-    visited_heuristic: RevSelected,
+    visited_heuristic: Candidates,
     insertion_results: LayersResults,
     prune_results: LayersResults,
 }
@@ -24,10 +23,10 @@ pub struct Results {
 impl Results {
     pub fn new() -> Self {
         Self {
-            selected: BinaryHeap::new(),
-            candidates: BinaryHeap::new(),
+            selected: BTreeSet::new(),
+            candidates: BTreeSet::new(),
             visited: IntSet::default(),
-            visited_heuristic: BinaryHeap::new(),
+            visited_heuristic: BTreeSet::new(),
             insertion_results: IntMap::default(),
             prune_results: IntMap::default(),
         }
@@ -40,13 +39,7 @@ impl Results {
     }
 
     pub fn get_top_selected(&self, n: usize) -> Vec<Dist> {
-        self.selected
-            .clone()
-            .into_sorted_vec()
-            .iter()
-            .take(n)
-            .copied()
-            .collect()
+        self.selected.clone().iter().take(n).copied().collect()
     }
 
     pub fn get_nearest_from_selected<T: VecTrait>(
@@ -74,7 +67,7 @@ impl Results {
         layer_result.insert(point_id, point_neighbors);
     }
 
-    pub fn insert_prune_result(&mut self, layer_nb: u8, node_id: Node, nearest: BinaryHeap<Dist>) {
+    pub fn insert_prune_result(&mut self, layer_nb: u8, node_id: Node, nearest: BTreeSet<Dist>) {
         let layer_result = self
             .prune_results
             .entry(layer_nb)
@@ -91,7 +84,7 @@ impl Results {
     }
 
     pub fn push_selected(&mut self, dist: Dist) {
-        self.selected.push(dist);
+        self.selected.insert(dist);
     }
 
     pub fn push_visited(&mut self, idx: Node) -> bool {
@@ -106,7 +99,7 @@ impl Results {
         self.clear_visited_heuristic();
         self.clear_candidates();
         self.candidates
-            .extend(self.selected.iter().map(|dist| Reverse(*dist)));
+            .extend(self.selected.iter().map(|dist| *dist));
         self.clear_selected();
     }
 
@@ -115,23 +108,27 @@ impl Results {
     }
 
     pub fn push_candidate(&mut self, candidate: Dist) {
-        self.candidates.push(Reverse(candidate));
+        self.candidates.insert(candidate);
     }
 
     pub fn push_visited_heuristic(&mut self, visited: Dist) {
-        self.visited_heuristic.push(Reverse(visited));
+        self.visited_heuristic.insert(visited);
     }
 
     pub fn pop_selected(&mut self) -> Option<Dist> {
-        self.selected.pop()
+        self.selected.pop_last()
     }
 
-    pub fn pop_candidate(&mut self) -> Option<Reverse<Dist>> {
-        self.candidates.pop()
+    pub fn pop_best_candidate(&mut self) -> Option<Dist> {
+        self.candidates.pop_first()
     }
 
-    pub fn pop_visited_heuristic(&mut self) -> Option<Reverse<Dist>> {
-        self.visited_heuristic.pop()
+    pub fn best_candidate(&self) -> Option<&Dist> {
+        self.candidates.first()
+    }
+
+    pub fn pop_best_visited_heuristic(&mut self) -> Option<Dist> {
+        self.visited_heuristic.pop_first()
     }
 
     pub fn candidates_is_empty(&self) -> bool {
@@ -142,8 +139,8 @@ impl Results {
         self.visited_heuristic.is_empty()
     }
 
-    pub fn peek_selected(&self) -> Option<&Dist> {
-        self.selected.peek()
+    pub fn worst_selected(&self) -> Option<&Dist> {
+        self.selected.last()
     }
 
     pub fn extend_candidates_with_neighbors<T: VecTrait>(
@@ -164,7 +161,7 @@ impl Results {
         // }
         let mut neighbors = Vec::new();
         for node in self.candidates.iter() {
-            for neighbor in layer.neighbors(node.0.id)? {
+            for neighbor in layer.neighbors(node.id)? {
                 neighbors.push(neighbor)
             }
         }
@@ -177,7 +174,7 @@ impl Results {
 
     pub fn extend_candidates_with_selected(&mut self) {
         for node in self.selected.iter() {
-            self.candidates.push(Reverse(node.clone()));
+            self.candidates.insert(node.clone());
         }
     }
 

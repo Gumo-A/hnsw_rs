@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Instant;
 
 use hnsw::helpers::args::parse_args_eval;
@@ -58,18 +59,7 @@ fn main() -> std::io::Result<()> {
     let start = Instant::now();
     let mut store = HNSW::new(m, Some(ef_cons), embs.dim().unwrap());
     store = store.insert_bulk(embs, 7).unwrap();
-    // store.layer_degrees(&0);
-    // let index = build_index(m, Some(ef_cons), embs.clone(), true).unwrap();
-    // let index = build_index_par(m, Some(ef_cons), embs, true).unwrap();
-
-    // let ser_points = store.serialize();
-
-    // let mut file = fs::OpenOptions::new()
-    //     .create(true) // To create a new file
-    //     .write(true)
-    //     .open("./points_collection.bin")?;
-
-    // file.write_all(&ser_points)?;
+    store.save(Path::new("./index"));
 
     println!(
         "ef_cons {ef_cons} elapsed {} ms",

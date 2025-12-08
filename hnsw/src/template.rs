@@ -1,4 +1,11 @@
-use std::{collections::BinaryHeap, sync::Arc};
+use core::panic;
+use std::{
+    collections::BTreeSet,
+    fs::{create_dir, File},
+    io::Write,
+    path::Path,
+    sync::Arc,
+};
 
 use crate::{helpers::get_progress_bar, params::Params, template::searcher::Searcher};
 use graph::{
@@ -17,13 +24,13 @@ use results::Results;
 mod inserter;
 use inserter::Inserter;
 
-fn select_simple<I>(candidate_dists: I, m: usize) -> Result<BinaryHeap<Dist>, String>
+fn select_simple<I>(candidate_dists: I, m: usize) -> Result<BTreeSet<Dist>, String>
 where
     I: Iterator<Item = Dist>,
 {
     let mut cands = Vec::from_iter(candidate_dists);
     cands.sort();
-    Ok(BinaryHeap::from_iter(cands.iter().copied().take(m)))
+    Ok(BTreeSet::from_iter(cands.iter().copied().take(m)))
 }
 
 #[derive(Debug, Clone)]
@@ -35,8 +42,25 @@ pub struct HNSW<T: VecTrait> {
 }
 
 impl<T: VecTrait> HNSW<T> {
-    pub fn serialize_points(&self) -> Vec<u8> {
-        self.points.serialize()
+    pub fn save(&self, dir: &Path) {
+        if !dir.exists() {
+            match create_dir(dir) {
+                Ok(_) => (),
+                Err(e) => panic!("Could not create dir {dir:?}: {e}"),
+            }
+        }
+
+        let mut points_file =
+            File::create(dir.join("points")).expect("Could not create points file");
+        let mut layers_file =
+            File::create(dir.join("layers")).expect("Could not create layers file");
+
+        points_file
+            .write_all(&self.points.serialize())
+            .expect("Could not write bytes to point file");
+        layers_file
+            .write_all(&self.layers.serialize())
+            .expect("Could not write bytes to layers file");
     }
 
     pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
@@ -122,7 +146,7 @@ impl<T: VecTrait> HNSW<T> {
                     let to_prune_neighbors = layer.neighbors(to_prune.id)?;
                     let to_prune_distances = to_prune_neighbors
                         .iter()
-                        .map(|n| Dist::new(to_prune.id, self.distance(to_prune.id, *n).unwrap()));
+                        .map(|n| Dist::new(*n, self.distance(to_prune.id, *n).unwrap()));
                     let nearest = select_simple(to_prune_distances, limit)?;
                     searcher.insert_prune_result(*layer_nb, to_prune.id, nearest);
                 }
@@ -283,6 +307,7 @@ impl<T: VecTrait + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
             let chunks = ((layer.nb_nodes() as f64) / (nb_threads as f64)).ceil() as usize;
             let mut ids: Vec<Vec<Node>> = layer
                 .iter_nodes()
+                .filter(|id| index_arc.points.get_point(*id).unwrap().level == layer_nb)
                 .collect::<Vec<Node>>()
                 .chunks(chunks)
                 .map(|chunk| Vec::from(chunk))

@@ -31,6 +31,9 @@ impl Inserter {
         index: &HNSW<T>,
         point: &Point<T>,
     ) -> Result<(), String> {
+        if point.id == index.ep {
+            return Ok(());
+        }
         self.setup_insert(index, point);
         self.traverse_layers_above(index, point)?;
         self.traverse_layers_below(index, point)?;
@@ -58,9 +61,6 @@ impl Inserter {
             let layer = index.get_layer(&layer_nb);
             self.searcher
                 .search_layer(&mut self.results, layer, point, &index.points, 1)?;
-            // if layer_nb == 0 {
-            //     break;
-            // }
         }
         Ok(())
     }

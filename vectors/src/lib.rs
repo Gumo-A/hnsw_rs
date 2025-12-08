@@ -14,10 +14,13 @@ use crate::serializer::Serializer;
 pub trait VecTrait: VecBase + Serializer + Clone {}
 
 pub trait VecBase {
+    fn center(&mut self, means: &Vec<f32>);
+    fn decenter(&mut self, means: &Vec<f32>);
+    fn dim(&self) -> usize;
     fn iter_vals(&self) -> impl Iterator<Item = f32>;
     fn distance(&self, other: &impl VecBase) -> f32;
-
     fn dist2other(&self, other: &Self) -> f32;
+
     fn dist2many<'a, I>(&'a self, others: I) -> impl Iterator<Item = f32> + 'a
     where
         I: Iterator<Item = &'a Self> + 'a,
@@ -32,10 +35,6 @@ pub trait VecBase {
     fn quantize(&self) -> LVQVec {
         LVQVec::new(&self.get_vals())
     }
-
-    fn center(&mut self, means: &Vec<f32>);
-    fn decenter(&mut self, means: &Vec<f32>);
-    fn dim(&self) -> usize;
 }
 
 pub fn gen_rand_vecs(dim: usize, n: usize) -> Vec<Vec<f32>> {

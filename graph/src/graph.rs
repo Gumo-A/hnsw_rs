@@ -1,5 +1,6 @@
 use core::panic;
 use nohash_hasher::{IntMap, IntSet};
+use rand::seq::IteratorRandom;
 use std::sync::{Arc, Mutex};
 use vectors::serializer::Serializer;
 
@@ -10,28 +11,19 @@ type Neighbors = Arc<Mutex<IntSet<Node>>>;
 #[derive(Debug, Clone)]
 pub struct Graph {
     pub nodes: IntMap<Node, Neighbors>,
+    pub level: u8,
 }
 
 impl Graph {
-    pub fn new() -> Self {
+    pub fn new(level: u8) -> Self {
         Graph {
             nodes: IntMap::default(),
+            level,
         }
     }
 
     pub fn iter_nodes(&self) -> impl Iterator<Item = Node> {
         self.nodes.keys().copied()
-    }
-
-    pub fn from_adj_list(data: IntMap<Node, IntMap<Node, Node>>) -> Graph {
-        let mut nodes = IntMap::default();
-        for (node_id, neighbors) in data.iter() {
-            nodes.insert(
-                *node_id,
-                Arc::new(Mutex::new(IntSet::from_iter(neighbors.values().copied()))),
-            );
-        }
-        Self { nodes }
     }
 
     pub fn add_node(&mut self, point_id: Node) {
@@ -43,7 +35,7 @@ impl Graph {
     pub fn add_edge(&self, node_a: Node, node_b: Node) -> Result<(), String> {
         // This if statatements garantee the unwraps() below won't fail.
         if node_a == node_b {
-            return Ok(());
+            return Err("Self-connections are forbiden".to_string());
         }
 
         if !self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b) {
@@ -71,33 +63,32 @@ impl Graph {
 
     /// Removes an edge from the Graph.
     /// Since the add_edge method won't allow for self-connecting nodes, we don't check that here.
-    /// Returns whether the edge was removed.
-    pub fn remove_edge(&self, node_a: Node, node_b: Node) -> Result<bool, String> {
-        if !self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b) {
-            return Err(format!(
-                "Error removing edge, one of the nodes don't exist in the graph."
-            ));
+    ///
+    /// Returns error if one node doesn't exist or if removing would isolate a node.
+    pub fn remove_edge(&self, node_a: Node, node_b: Node) -> Result<(), String> {
+        // TODO: write error types to let the caller know why this function failed
+        // and act accordingly
+        let (a, b) = match (self.nodes.get(&node_a), self.nodes.get(&node_b)) {
+            (Some(a), Some(b)) => (a, b),
+            _ => {
+                return Err("One of the nodes doesn't exist in the graph.".to_string());
+            }
+        };
+
+        let mut a_neighbors = a.lock().unwrap();
+        let mut b_neighbors = b.lock().unwrap();
+
+        if (a_neighbors.len() == 1) | (b_neighbors.len() == 1) {
+            // TODO fix cases where this happens. I have to implement useful errors to
+            // handle this case
+            // return Err("Removing the edge would leave a node isolated".to_string());
+            return Ok(());
         }
 
-        if (self.degree(node_a)? == 1) | (self.degree(node_b)? == 1) {
-            return Ok(false);
-        }
+        a_neighbors.remove(&node_b);
+        b_neighbors.remove(&node_a);
 
-        let ab_rem = self
-            .nodes
-            .get(&node_a)
-            .unwrap()
-            .lock()
-            .unwrap()
-            .remove(&node_b);
-        let ba_rem = self
-            .nodes
-            .get(&node_b)
-            .unwrap()
-            .lock()
-            .unwrap()
-            .remove(&node_a);
-        Ok(ab_rem & ba_rem)
+        Ok(())
     }
 
     pub fn neighbors(&self, node_id: Node) -> Result<IntSet<Node>, String> {
@@ -163,7 +154,7 @@ impl Graph {
         Ok(())
     }
 
-    pub fn remove_edges_with_node(&mut self, node: Node) {
+    fn remove_edges_with_node(&mut self, node: Node) {
         for ex_neighbor in self.remove_neighbors(node) {
             self.nodes
                 .get_mut(&ex_neighbor)
@@ -241,19 +232,26 @@ impl Graph {
 
 impl Serializer for Graph {
     fn size(&self) -> usize {
-        let mut size = 4;
+        let mut size = 5;
         for node in self.iter_nodes() {
             size += self.node_size(node);
         }
         size
     }
 
+    /// Stores the length of the byte string to read in the
+    /// first 4 bytes.
+    ///
     /// Val          Bytes
+    /// length       4  // needed by the caller of `deserialize()`
     /// nb_nodes     4
+    /// level        1
     /// adj_list     nb_nodes * variable
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.nb_nodes() * 4);
-        bytes.extend_from_slice(&self.nb_nodes().to_be_bytes());
+        bytes.extend_from_slice(&(self.size() as u32).to_be_bytes());
+        bytes.extend_from_slice(&(self.nb_nodes() as u32).to_be_bytes());
+        bytes.extend_from_slice(&[self.level]);
         for node in self.iter_nodes() {
             bytes.extend(self.serialize_adj_list(node));
         }
@@ -262,10 +260,13 @@ impl Serializer for Graph {
 
     /// Val          Bytes
     /// nb_nodes     4
+    /// level        1
     /// adj_list     nb_nodes * variable
     fn deserialize(data: Vec<u8>) -> Graph {
         let mut i = 4;
         let nb_nodes = u32::from_be_bytes(data[..i].try_into().unwrap());
+        let level = u8::from_be_bytes(data[i..i + 1].try_into().unwrap());
+        i += 1;
         let mut nodes = IntMap::default();
         for _ in 0..nb_nodes {
             let node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
@@ -282,6 +283,280 @@ impl Serializer for Graph {
             nodes.insert(node, Arc::new(Mutex::new(neighbors)));
         }
 
-        Graph { nodes }
+        Graph { nodes, level }
+    }
+}
+
+pub fn make_rand_graph(n: usize, degree: usize) -> Graph {
+    let mut rng = rand::thread_rng();
+    let nodes =
+        IntMap::from_iter((0..n).map(|id| (id as Node, Arc::new(Mutex::new(IntSet::default())))));
+    let graph = Graph { nodes, level: 0 };
+    for node in 0..n {
+        let neighbors = (0..n).choose_multiple(&mut rng, degree);
+        for n in neighbors {
+            match graph.add_edge(node as Node, n as Node) {
+                Err(_) => continue,
+                Ok(_) => continue,
+            }
+        }
+    }
+    graph
+}
+
+pub fn simple_graph() -> Graph {
+    let mut g = Graph::new(1);
+    for i in 0..5 {
+        g.add_node(i as Node);
+    }
+    g.add_edge(0, 1).unwrap();
+    g.add_edge(0, 2).unwrap();
+    g.add_edge(1, 2).unwrap();
+    g.add_edge(2, 3).unwrap();
+    g.add_edge(3, 4).unwrap();
+    g.add_edge(4, 1).unwrap();
+    g
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        graph::{Graph, make_rand_graph, simple_graph},
+        nodes::Node,
+    };
+    use nohash_hasher::IntSet;
+    use std::sync::Arc;
+    use vectors::serializer::Serializer;
+
+    #[test]
+    fn build_graph() {
+        let graph = make_rand_graph(100, 8);
+        assert!(graph.nodes.len() == 100);
+    }
+
+    #[test]
+    fn no_one_way_connections() {
+        let graph = make_rand_graph(100, 8);
+        for idx in 0..100 {
+            let neighbors = graph.neighbors(idx).unwrap();
+            for n in neighbors {
+                let neighs_neighs = graph.neighbors(n).unwrap();
+                assert!(neighs_neighs.contains(&idx));
+            }
+        }
+    }
+
+    #[test]
+    fn add_node_and_contains() {
+        let mut g = Graph::new(0);
+        assert!(!g.contains(42));
+        g.add_node(42);
+        assert!(g.contains(42));
+        assert_eq!(g.nb_nodes(), 1);
+        assert_eq!(g.degree(42).unwrap(), 0);
+    }
+
+    #[test]
+    fn add_edge_rejects_missing_nodes() {
+        let mut g = Graph::new(0);
+        g.add_node(1);
+        assert!(g.add_edge(1, 2).is_err());
+        assert!(g.add_edge(999, 1000).is_err());
+    }
+
+    #[test]
+    fn no_self_loops() {
+        let mut g = Graph::new(0);
+        g.add_node(5);
+        assert!(g.add_edge(5, 5).is_err());
+    }
+
+    #[test]
+    fn remove_edge_success_and_failure() {
+        let g = simple_graph();
+
+        // Existing edge
+        g.remove_edge(0, 1).unwrap();
+        assert!(!g.neighbors(0).unwrap().contains(&1));
+        assert!(!g.neighbors(1).unwrap().contains(&0));
+
+        // Missing node
+        assert!(g.remove_edge(0, 999).is_err());
+    }
+
+    #[test]
+    fn can_not_leave_node_isolated() {
+        let mut g = Graph::new(0);
+        g.add_node(10);
+        g.add_node(20);
+        g.add_node(30);
+
+        // Now 20 has degree 2, 10 and 30 have degree 1
+        g.add_edge(10, 20).unwrap();
+        g.add_edge(20, 30).unwrap();
+
+        // Can't remove edge, it would leave 30 isolated
+        assert!(g.remove_edge(20, 30).is_err());
+    }
+
+    #[test]
+    fn neighbors_and_neighbors_vec() {
+        let g = simple_graph();
+        let neigh_set = g.neighbors(1).unwrap();
+        let neigh_vec = g.neighbors_vec(1).unwrap();
+
+        let expected: IntSet<Node> = [0, 2, 4].into_iter().collect();
+        assert_eq!(neigh_set, expected);
+
+        assert_eq!(neigh_vec.len(), 3);
+        assert!(neigh_vec.contains(&0));
+        assert!(neigh_vec.contains(&2));
+        assert!(neigh_vec.contains(&4));
+    }
+
+    #[test]
+    fn replace_neighbors_full_replace() {
+        let mut g = Graph::new(0);
+        for i in 0..6 {
+            g.add_node(i);
+        }
+
+        g.add_edge(0, 1).unwrap();
+        g.add_edge(0, 2).unwrap();
+        g.add_edge(0, 3).unwrap();
+
+        // So that nodes are not isolated after replacement
+        g.add_edge(1, 3).unwrap();
+        g.add_edge(1, 2).unwrap();
+
+        assert_eq!(g.degree(0).unwrap(), 3);
+
+        // Replace with completely different neighbors
+        g.replace_neighbors(0, 4..=5).unwrap();
+
+        let new_neigh = g.neighbors(0).unwrap();
+        assert_eq!(new_neigh.len(), 2);
+        assert!(new_neigh.contains(&4));
+        assert!(new_neigh.contains(&5));
+        assert!(!new_neigh.contains(&1));
+
+        // Old neighbors should no longer point back (symmetry preserved)
+        assert!(!g.neighbors(1).unwrap().contains(&0));
+        assert!(!g.neighbors(2).unwrap().contains(&0));
+        assert!(g.neighbors(4).unwrap().contains(&0));
+        assert!(g.neighbors(5).unwrap().contains(&0));
+    }
+
+    #[test]
+    fn replace_neighbors_on_isolated_node() {
+        let mut g = Graph::new(0);
+        g.add_node(100);
+        for i in 200..205 {
+            g.add_node(i);
+        }
+
+        g.replace_neighbors(100, 200..205).unwrap();
+
+        assert_eq!(g.degree(100).unwrap(), 5);
+        for i in 200..205 {
+            assert!(g.neighbors(i).unwrap().contains(&100));
+        }
+    }
+
+    #[test]
+    fn remove_node_cleans_up_all_edges() {
+        let mut g = simple_graph();
+        g.remove_node(1).unwrap();
+
+        // Node 1 gone
+        assert!(!g.contains(1));
+        assert_eq!(g.nb_nodes(), 4);
+
+        // All former neighbors of 1 no longer have it
+        for node in [0, 2, 4] {
+            assert!(!g.neighbors(node).unwrap().contains(&1));
+        }
+
+        // Other edges preserved
+        assert!(g.neighbors(0).unwrap().contains(&2));
+        assert!(g.neighbors(3).unwrap().contains(&4));
+    }
+
+    #[test]
+    fn remove_edges_with_node_leaves_isolated_node() {
+        let mut g = simple_graph();
+
+        g.remove_edges_with_node(2);
+
+        // Node 2 still exists but isolated
+        assert!(g.contains(2));
+        assert_eq!(g.degree(2).unwrap(), 0);
+
+        // Neighbors no longer connected to 2
+        assert!(!g.neighbors(0).unwrap().contains(&2));
+        assert!(!g.neighbors(1).unwrap().contains(&2));
+        assert!(!g.neighbors(3).unwrap().contains(&2));
+    }
+
+    #[test]
+    fn degree_on_missing_node_errors() {
+        let g = Graph::new(0);
+        assert!(g.degree(999).is_err());
+    }
+
+    #[test]
+    fn serialization_round_trip() {
+        let original = simple_graph();
+        let original_bytes = original.serialize();
+        let original_size = u32::from_be_bytes(original_bytes[..4].try_into().unwrap()) as usize;
+
+        assert_eq!(original_size, original.size());
+        assert_eq!(original_size, original_bytes.len() - 4);
+
+        let restored = Graph::deserialize(original_bytes[4..original_size + 4].try_into().unwrap());
+
+        assert_eq!(original.nb_nodes(), restored.nb_nodes());
+        assert_eq!(original.level, restored.level);
+
+        for node in original.iter_nodes() {
+            assert!(restored.contains(node));
+            let orig_neigh: IntSet<Node> = original.neighbors(node).unwrap().into_iter().collect();
+            let rest_neigh: IntSet<Node> = restored.neighbors(node).unwrap().into_iter().collect();
+            assert_eq!(orig_neigh, rest_neigh);
+        }
+    }
+
+    #[test]
+    fn concurrent_add_edge_from_multiple_threads() {
+        // Node 0 starts with 2 neighbors
+        let g = Arc::new(simple_graph());
+        let mut handles = vec![];
+
+        for i in 1..5 {
+            let g_clone = g.clone();
+            let handle = std::thread::spawn(move || {
+                g_clone.add_edge(0, i).unwrap();
+            });
+            handles.push(handle);
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Node 0 should now have connetions the other 4
+        let final_neighbors = g.neighbors(0).unwrap();
+        assert!(final_neighbors.len() == 4);
+        for i in 1..5 {
+            assert!(final_neighbors.contains(&i));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Could not get the neighbors")]
+    fn remove_neighbors_on_missing_node_panics() {
+        let mut g = Graph::new(0);
+        // should panic
+        g.remove_neighbors(999);
     }
 }
