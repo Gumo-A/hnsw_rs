@@ -1,4 +1,4 @@
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 
 pub mod args;
 pub mod data;
@@ -18,5 +18,6 @@ pub fn get_progress_bar(message: String, remaining: usize, verbose: bool) -> Pro
         .progress_chars(">>-"),
     );
     bar.set_message(message);
+    let bar = bar.with_finish(ProgressFinish::AndLeave);
     bar
 }

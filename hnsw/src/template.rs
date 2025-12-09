@@ -2,7 +2,7 @@ use core::panic;
 use std::{
     collections::BTreeSet,
     fs::{create_dir, File},
-    io::Write,
+    io::{BufReader, Read, Write},
     path::Path,
     sync::Arc,
 };
@@ -35,9 +35,8 @@ where
 
 #[derive(Debug, Clone)]
 pub struct HNSW<T: VecTrait> {
-    params: Params,
+    pub params: Params,
     layers: Layers,
-    ep: Node,
     points: Points<T>,
 }
 
@@ -54,6 +53,8 @@ impl<T: VecTrait> HNSW<T> {
             File::create(dir.join("points")).expect("Could not create points file");
         let mut layers_file =
             File::create(dir.join("layers")).expect("Could not create layers file");
+        let mut params_file =
+            File::create(dir.join("params")).expect("Could not create params file");
 
         points_file
             .write_all(&self.points.serialize())
@@ -61,6 +62,43 @@ impl<T: VecTrait> HNSW<T> {
         layers_file
             .write_all(&self.layers.serialize())
             .expect("Could not write bytes to layers file");
+        params_file
+            .write_all(&self.params.serialize())
+            .expect("Could not write bytes to params file");
+    }
+
+    pub fn load(dir: &Path) -> Result<Self, String> {
+        if !dir.exists() {
+            return Err(format!("{dir:?} does not exist"));
+        }
+
+        let points = match File::open(dir.join("points")) {
+            Ok(f) => {
+                let reader = BufReader::new(f);
+                Points::deserialize(reader.bytes().map(|b| b.unwrap()).collect())
+            }
+            Err(e) => return Err(format!("Problem reading points file: {e}")),
+        };
+        let layers = match File::open(dir.join("layers")) {
+            Ok(f) => {
+                let reader = BufReader::new(f);
+                Layers::deserialize(reader.bytes().map(|b| b.unwrap()).collect())
+            }
+            Err(e) => return Err(format!("Problem reading layers file: {e}")),
+        };
+        let params = match File::open(dir.join("params")) {
+            Ok(f) => {
+                let reader = BufReader::new(f);
+                Params::deserialize(reader.bytes().map(|b| b.unwrap()).collect())
+            }
+            Err(e) => return Err(format!("Problem reading params file: {e}")),
+        };
+
+        Ok(HNSW {
+            points,
+            layers,
+            params,
+        })
     }
 
     pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
@@ -71,7 +109,6 @@ impl<T: VecTrait> HNSW<T> {
         };
         HNSW {
             params,
-            ep: 0,
             points: Points::new(),
             layers: Layers::new(),
         }
@@ -191,7 +228,7 @@ impl<T: VecTrait> HNSW<T> {
         // current max. So it will become the new EP, and therefore
         // needs to be connected in all the layers.
         // self.insert(new_ep, &mut Inserter::new()).unwrap();
-        self.ep = new_ep;
+        self.params.ep = new_ep;
     }
 
     // fn get_nearest<I>(&self, point: &Point<T>, others: I) -> Node
@@ -216,8 +253,8 @@ impl<T: VecTrait> HNSW<T> {
         let mut point = point.clone();
         point.center(&self.points.means.clone().unwrap());
         results.push_selected(Dist::new(
-            self.ep,
-            self.points.distance2point(&point, self.ep).unwrap(),
+            self.params.ep,
+            self.points.distance2point(&point, self.params.ep).unwrap(),
         ));
         let nb_layers = self.layers.len();
 
@@ -288,18 +325,14 @@ impl<T: VecTrait> HNSW<T> {
         for (idx, layer) in self.iter_layers() {
             println!("NB. nodes in layer {idx}: {}", layer.nb_nodes());
         }
-        println!("ep: {:?}", self.ep);
+        println!("ep: {:?}", self.params.ep);
     }
 }
 
 impl<T: VecTrait + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
     pub fn insert_bulk(mut self, points: Points<T>, nb_threads: usize) -> Result<HNSW<T>, String> {
         self.store_points(points);
-        let mut total_insertions = 0;
-        for layer_nb in 0..self.layers.len() {
-            total_insertions += self.layers.get_layer(&layer_nb).nb_nodes();
-        }
-        let bar = get_progress_bar("layerzzz".to_string(), total_insertions, true);
+        let bar = get_progress_bar("layerzzz".to_string(), self.len(), true);
         let index_arc = Arc::new(self);
 
         for layer_nb in (0..index_arc.layers.len()).rev().map(|x| x as u8) {

@@ -8,7 +8,7 @@ use vectors::serializer::Serializer;
 use crate::point::Point;
 use vectors::{FullVec, LVQVec, VecBase, VecTrait};
 
-fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> u8 {
+fn get_new_node_layer(ml: f64, rng: &mut ThreadRng) -> u8 {
     let mut rand_nb = 0.0;
     loop {
         if (rand_nb == 0.0) | (rand_nb == 1.0) {
@@ -18,7 +18,7 @@ fn get_new_node_layer(ml: f32, rng: &mut ThreadRng) -> u8 {
         }
     }
 
-    (-rand_nb.log(std::f32::consts::E) * ml).floor() as u8
+    (-rand_nb.log(std::f32::consts::E) * ml as f32).floor() as u8
 }
 
 fn compute_means<T: VecTrait>(vectors: &Vec<Point<T>>) -> Option<Vec<f32>> {
@@ -46,7 +46,7 @@ pub struct Points<T: VecTrait> {
 }
 
 impl Points<FullVec> {
-    pub fn new_full(mut vecs: Vec<Vec<f32>>, ml: f32) -> Points<FullVec> {
+    pub fn new_full(mut vecs: Vec<Vec<f32>>, ml: f64) -> Points<FullVec> {
         let mut collection = Vec::new();
         let mut rng = thread_rng();
         for (idx, v) in vecs.drain(..).enumerate() {
@@ -79,7 +79,7 @@ impl Points<FullVec> {
 }
 
 impl Points<LVQVec> {
-    pub fn new_quant(vecs: Vec<Vec<f32>>, ml: f32) -> Points<LVQVec> {
+    pub fn new_quant(vecs: Vec<Vec<f32>>, ml: f64) -> Points<LVQVec> {
         Points::new_full(vecs, ml).quantize()
     }
 }

@@ -25,7 +25,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let file_name = format!("glove.{dim}d");
+    let file_name = format!("glove.840B.{dim}d");
 
     let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/"

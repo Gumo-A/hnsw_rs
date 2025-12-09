@@ -31,7 +31,7 @@ impl Inserter {
         index: &HNSW<T>,
         point: &Point<T>,
     ) -> Result<(), String> {
-        if point.id == index.ep {
+        if point.id == index.params.ep {
             return Ok(());
         }
         self.setup_insert(index, point);
@@ -44,10 +44,11 @@ impl Inserter {
         self.results.clear_all();
 
         let dist2ep = index
-            .distance(index.ep, point.id)
+            .distance(index.params.ep, point.id)
             .expect("Could not compute distance between EP and point to insert.");
 
-        self.results.push_selected(Dist::new(index.ep, dist2ep));
+        self.results
+            .push_selected(Dist::new(index.params.ep, dist2ep));
     }
 
     pub fn traverse_layers_above<T: VecTrait>(

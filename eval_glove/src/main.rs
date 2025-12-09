@@ -27,7 +27,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let file_name = format!("glove.{dim}d");
+    let file_name = format!("glove.840B.{dim}d");
 
     let (words, embeddings) = load_glove_array(lim, file_name.clone(), true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
@@ -56,14 +56,35 @@ fn main() -> std::io::Result<()> {
     let ef_cons = 100;
 
     let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
-    let start = Instant::now();
+    let s = Instant::now();
     let mut store = HNSW::new(m, Some(ef_cons), embs.dim().unwrap());
-    store = store.insert_bulk(embs, 7).unwrap();
-    store.save(Path::new("./index"));
-
+    store = store.insert_bulk(embs, 8).unwrap();
+    let e = s.elapsed().as_millis();
     println!(
-        "ef_cons {ef_cons} elapsed {} ms",
-        start.elapsed().as_millis()
+        "took {0} ms to build index with {1} points and M {2}",
+        e,
+        store.len(),
+        store.params.m
+    );
+
+    let s = Instant::now();
+    store.save(Path::new("./index"));
+    let e = s.elapsed().as_millis();
+    println!(
+        "took {0} ms to save index with {1} points and M {2}",
+        e,
+        store.len(),
+        store.params.m
+    );
+
+    let s = Instant::now();
+    let store = HNSW::load(Path::new("./index")).unwrap();
+    let e = s.elapsed().as_millis();
+    println!(
+        "took {0} ms to load index with {1} points and M {2}",
+        e,
+        store.len(),
+        store.params.m
     );
 
     // index.print_index();
