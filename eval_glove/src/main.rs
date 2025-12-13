@@ -58,24 +58,24 @@ fn main() -> std::io::Result<()> {
     let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
     let s = Instant::now();
     let mut store = HNSW::new(m, Some(ef_cons), embs.dim().unwrap());
-    store = store.insert_bulk(embs, 1).unwrap();
+    store = store.insert_bulk(embs, 8).unwrap();
     let e = s.elapsed().as_millis();
-    println!(
-        "took {0} ms to build index with {1} points and M {2}",
-        e,
-        store.len(),
-        store.params.m
-    );
+    // println!(
+    //     "took {0} ms to build index with {1} points and M {2}",
+    //     e,
+    //     store.len(),
+    //     store.params.m
+    // );
 
     let s = Instant::now();
     store.save(Path::new("./index"));
     let e = s.elapsed().as_millis();
-    println!(
-        "took {0} ms to save index with {1} points and M {2}",
-        e,
-        store.len(),
-        store.params.m
-    );
+    // println!(
+    //     "took {0} ms to save index with {1} points and M {2}",
+    //     e,
+    //     store.len(),
+    //     store.params.m
+    // );
 
     let s = Instant::now();
     let store: HNSW<LVQVec> = HNSW::load(Path::new("./index")).unwrap();
@@ -87,7 +87,7 @@ fn main() -> std::io::Result<()> {
     //     store.params.m
     // );
 
-    store.layer_degrees(&0);
+    // store.layer_degrees(&0);
 
     // index.print_index();
     // println!(
@@ -95,7 +95,7 @@ fn main() -> std::io::Result<()> {
     //     start.elapsed().as_millis() - end.elapsed().as_millis()
     // );
 
-    // estimate_recall(&store, &test_set, &bf_data);
+    estimate_recall(&store, &test_set, &bf_data);
 
     // index.assert_param_compliance();
 

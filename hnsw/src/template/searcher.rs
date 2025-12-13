@@ -24,9 +24,9 @@ impl Searcher {
         results.extend_candidates_with_selected();
         results.extend_visited_with_selected();
 
-        while !results.candidates_is_empty() {
-            let cand_dist = results.pop_best_candidate().unwrap();
-            let furthest2q_dist = results.worst_selected().unwrap();
+        while !results.candidates.is_empty() {
+            let cand_dist = results.candidates.pop_first().unwrap();
+            let furthest2q_dist = results.selected.last().unwrap();
             if cand_dist > *furthest2q_dist {
                 break;
             }
@@ -42,7 +42,7 @@ impl Searcher {
 
             let q2cand_neighbors_dists: Vec<Dist> = cand_neighbors
                 .iter()
-                .filter(|node| results.push_visited(**node))
+                .filter(|node| results.insert_visited(**node))
                 .copied()
                 .map(|node| {
                     let other = points
@@ -52,13 +52,13 @@ impl Searcher {
                 })
                 .collect();
             for n2q_dist in q2cand_neighbors_dists {
-                let f2q_dist = results.worst_selected().unwrap();
-                if (n2q_dist < *f2q_dist) | (results.selected_len() < ef as usize) {
-                    results.push_selected(n2q_dist);
-                    results.push_candidate(n2q_dist);
+                let f2q_dist = results.selected.last().unwrap();
+                if (n2q_dist < *f2q_dist) | (results.selected.len() < ef as usize) {
+                    results.insert_selected(n2q_dist);
+                    results.insert_candidate(n2q_dist);
 
-                    if results.selected_len() > ef as usize {
-                        results.pop_selected();
+                    if results.selected.len() > ef as usize {
+                        results.selected.pop_last();
                     }
                 }
             }
@@ -69,13 +69,8 @@ impl Searcher {
     }
 
     pub fn select_simple(&self, results: &mut Results, m: usize) -> Result<(), String> {
-        results.select_setup();
-        for _ in 0..m {
-            let node = match results.best_candidate() {
-                None => break,
-                Some(n) => n,
-            };
-            results.push_selected(node.clone());
+        while results.selected.len() > m {
+            results.selected.pop_last();
         }
         Ok(())
     }
@@ -95,26 +90,26 @@ impl Searcher {
             results.extend_candidates_with_neighbors(point, points, layer)?;
         }
 
-        let node_e = results.pop_best_candidate().unwrap();
-        results.push_selected(node_e);
+        let node_e = results.candidates.pop_first().unwrap();
+        results.insert_selected(node_e);
 
-        while (!results.candidates_is_empty()) & (results.selected_len() < m as usize) {
-            let node_e = results.pop_best_candidate().unwrap();
+        while (!results.candidates.is_empty()) & (results.selected.len() < m as usize) {
+            let node_e = results.candidates.pop_first().unwrap();
             let e_point = points.get_point(node_e.id).unwrap();
 
             let nearest_selected = results.get_nearest_from_selected(e_point, points);
 
             if node_e < nearest_selected {
-                results.push_selected(node_e);
+                results.insert_selected(node_e);
             } else if keep_pruned {
-                results.push_visited_heuristic(node_e);
+                results.insert_visited_h(node_e);
             }
         }
 
         if keep_pruned {
-            while (!results.visited_heuristic_is_empty()) & (results.selected_len() < m as usize) {
-                let node_e = results.pop_best_visited_heuristic().unwrap();
-                results.push_selected(node_e);
+            while (!results.visited_h.is_empty()) & (results.selected.len() < m as usize) {
+                let node_e = results.visited_h.pop_first().unwrap();
+                results.insert_selected(node_e);
             }
         }
 

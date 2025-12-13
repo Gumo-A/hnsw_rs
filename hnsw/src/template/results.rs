@@ -8,18 +8,17 @@ use points::point_collection::Points;
 use std::collections::BTreeSet;
 use vectors::{VecBase, VecTrait};
 
-pub type LayerResult = IntMap<Node, BTreeSet<Dist>>;
+type OrderedDists = BTreeSet<Dist>;
+pub type LayerResult = IntMap<Node, OrderedDists>;
 type LayersResults = IntMap<u8, LayerResult>;
-type Selected = BTreeSet<Dist>;
-type Candidates = BTreeSet<Dist>;
 
 pub struct Results {
-    selected: Selected,
-    candidates: Candidates,
-    visited: IntSet<Node>,
-    visited_heuristic: Candidates,
-    insertion_results: LayersResults,
-    prune_results: LayersResults,
+    pub selected: OrderedDists,
+    pub candidates: OrderedDists,
+    pub visited: IntSet<Node>,
+    pub visited_h: OrderedDists,
+    pub insertion_results: LayersResults,
+    pub prune_results: LayersResults,
 }
 
 impl Results {
@@ -28,20 +27,26 @@ impl Results {
             selected: BTreeSet::new(),
             candidates: BTreeSet::new(),
             visited: IntSet::default(),
-            visited_heuristic: BTreeSet::new(),
+            visited_h: BTreeSet::new(),
             insertion_results: IntMap::default(),
             prune_results: IntMap::default(),
         }
     }
 
-    pub fn get_layer_result(&mut self, layer_nb: u8) -> &mut LayerResult {
+    pub fn get_insertion_result(&mut self, layer_nb: u8) -> &mut LayerResult {
         self.insertion_results
             .entry(layer_nb)
             .or_insert(IntMap::default())
     }
 
+    pub fn get_prune_result(&mut self, layer_nb: u8) -> &mut LayerResult {
+        self.prune_results
+            .entry(layer_nb)
+            .or_insert(IntMap::default())
+    }
+
     pub fn get_top_selected(&self, n: usize) -> Vec<Dist> {
-        self.selected.clone().iter().take(n).copied().collect()
+        self.selected.iter().take(n).copied().collect()
     }
 
     pub fn get_nearest_from_selected<T: VecTrait>(
@@ -59,90 +64,39 @@ impl Results {
             .unwrap()
     }
 
-    pub fn iter_insertion_results(&self) -> impl Iterator<Item = (&u8, &LayerResult)> {
-        self.insertion_results.iter()
-    }
-
-    pub fn insert_layer_results(&mut self, layer_nb: u8, point_id: Node) {
-        let point_neighbors = self.get_selected_clone();
-        let layer_result = self.get_layer_result(layer_nb);
+    pub fn save_layer_results(&mut self, layer_nb: u8, point_id: Node) {
+        let point_neighbors = self.selected.clone();
+        let layer_result = self.get_insertion_result(layer_nb);
         layer_result.insert(point_id, point_neighbors);
     }
 
     pub fn insert_prune_result(&mut self, layer_nb: u8, node_id: Node, nearest: BTreeSet<Dist>) {
-        let layer_result = self
-            .prune_results
-            .entry(layer_nb)
-            .or_insert(IntMap::default());
+        let layer_result = self.get_prune_result(layer_nb);
         layer_result.insert(node_id, nearest);
     }
 
-    pub fn iter_prune_results(&self) -> impl Iterator<Item = (&u8, &LayerResult)> {
-        self.prune_results.iter()
-    }
-
-    pub fn get_clone_insertion_results(&self) -> LayersResults {
-        self.insertion_results.clone()
-    }
-
-    pub fn push_selected(&mut self, dist: Dist) {
+    pub fn insert_selected(&mut self, dist: Dist) {
         self.selected.insert(dist);
     }
 
-    pub fn push_visited(&mut self, idx: Node) -> bool {
+    pub fn insert_visited(&mut self, idx: Node) -> bool {
         self.visited.insert(idx)
     }
 
-    pub fn get_selected_clone(&self) -> Selected {
-        self.selected.clone()
-    }
-
     pub fn select_setup(&mut self) {
-        self.clear_visited_heuristic();
-        self.clear_candidates();
+        self.visited_h.clear();
+        self.candidates.clear();
         self.candidates
             .extend(self.selected.iter().map(|dist| *dist));
-        self.clear_selected();
+        self.selected.clear();
     }
 
-    pub fn selected_len(&self) -> usize {
-        self.selected.len()
-    }
-
-    pub fn push_candidate(&mut self, candidate: Dist) {
+    pub fn insert_candidate(&mut self, candidate: Dist) {
         self.candidates.insert(candidate);
     }
 
-    pub fn push_visited_heuristic(&mut self, visited: Dist) {
-        self.visited_heuristic.insert(visited);
-    }
-
-    pub fn pop_selected(&mut self) -> Option<Dist> {
-        self.selected.pop_last()
-    }
-
-    pub fn pop_best_candidate(&mut self) -> Option<Dist> {
-        self.candidates.pop_first()
-    }
-
-    pub fn best_candidate(&self) -> Option<&Dist> {
-        self.candidates.first()
-    }
-
-    pub fn pop_best_visited_heuristic(&mut self) -> Option<Dist> {
-        self.visited_heuristic.pop_first()
-    }
-
-    pub fn candidates_is_empty(&self) -> bool {
-        self.candidates.is_empty()
-    }
-
-    pub fn visited_heuristic_is_empty(&self) -> bool {
-        self.visited_heuristic.is_empty()
-    }
-
-    pub fn worst_selected(&self) -> Option<&Dist> {
-        self.selected.last()
+    pub fn insert_visited_h(&mut self, visited: Dist) {
+        self.visited_h.insert(visited);
     }
 
     pub fn extend_candidates_with_neighbors<T: VecTrait>(
@@ -166,7 +120,7 @@ impl Results {
         }
         for neighbor in neighbors {
             let dist = Dist::new(neighbor, points.distance(point.id, neighbor).unwrap());
-            self.push_candidate(dist);
+            self.insert_candidate(dist);
         }
         Ok(())
     }
@@ -200,22 +154,46 @@ impl Results {
         self.selected.clear();
     }
     pub fn clear_visited_heuristic(&mut self) {
-        self.visited_heuristic.clear();
+        self.visited_h.clear();
     }
 
     pub fn clear_all(&mut self) {
         self.selected.clear();
         self.candidates.clear();
         self.visited.clear();
-        self.visited_heuristic.clear();
+        self.visited_h.clear();
         self.insertion_results.clear();
         self.prune_results.clear();
     }
+}
 
-    pub fn clear_searchers(&mut self) {
-        self.selected.clear();
-        self.candidates.clear();
-        self.visited.clear();
-        self.visited_heuristic.clear();
+#[cfg(test)]
+mod test {
+    use graph::nodes::Dist;
+
+    use crate::template::results::Results;
+
+    fn get_results() -> Results {
+        let mut r = Results::new();
+        r.insert_selected(Dist::new(0, 0.5));
+        r.insert_selected(Dist::new(1, 0.6));
+        r.insert_selected(Dist::new(2, 0.7));
+        r.insert_selected(Dist::new(3, 0.8));
+        r.insert_selected(Dist::new(4, 0.9));
+        r
+    }
+
+    #[test]
+    fn extend_candidates() {
+        let mut r = get_results();
+        r.extend_candidates_with_selected();
+        assert_eq!(r.selected.len(), r.candidates.len());
+        while r.selected.len() > 0 {
+            assert_eq!(
+                r.candidates.pop_first().unwrap().id,
+                r.selected.pop_first().unwrap().id
+            );
+        }
+        assert_eq!(r.selected.len(), r.candidates.len());
     }
 }

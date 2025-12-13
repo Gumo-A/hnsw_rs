@@ -125,9 +125,11 @@ impl Graph {
         for ex_neighbor in to_remove {
             if let Err(e) = self.remove_edge(node, ex_neighbor) {
                 match e {
-                    GraphError::WouldIsolateNode(n) => println!(
-                        "Was going to remove edge {node}-{ex_neighbor}, but didn't because it would leave {n} isolated"
-                    ),
+                    GraphError::WouldIsolateNode(n) => {
+                        // println!(
+                        //     "Was going to remove edge {node}-{ex_neighbor}, but didn't because it would leave {n} isolated"
+                        // );
+                    }
                     _ => return Err(e),
                 }
             };

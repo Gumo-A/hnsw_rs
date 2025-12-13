@@ -62,9 +62,7 @@ impl Points<FullVec> {
 
     fn quantize(mut self) -> Points<LVQVec> {
         let mut collection = Vec::new();
-        let means = self.means.as_ref().unwrap();
-        for mut point in self.collection.drain(..) {
-            point.center(means);
+        for point in self.collection.drain(..) {
             collection.push(Point::new_quant(
                 point.id,
                 point.level,

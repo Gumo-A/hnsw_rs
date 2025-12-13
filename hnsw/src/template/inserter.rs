@@ -48,7 +48,7 @@ impl Inserter {
             .expect("Could not compute distance between EP and point to insert.");
 
         self.results
-            .push_selected(Dist::new(index.params.ep, dist2ep));
+            .insert_selected(Dist::new(index.params.ep, dist2ep));
     }
 
     pub fn traverse_layers_above<T: VecTrait>(
@@ -80,18 +80,18 @@ impl Inserter {
                 &index.points,
                 index.params.ef_cons,
             )?;
-            // self.searcher
-            //     .select_simple(&mut self.results, index.params.m)?;
-            self.searcher.select_heuristic(
-                &mut self.results,
-                layer,
-                point,
-                &index.points,
-                index.params.m,
-                true,
-                true,
-            )?;
-            self.results.insert_layer_results(layer_nb, point.id);
+            self.searcher
+                .select_simple(&mut self.results, index.params.m)?;
+            // self.searcher.select_heuristic(
+            //     &mut self.results,
+            //     layer,
+            //     point,
+            //     &index.points,
+            //     index.params.m,
+            //     true,
+            //     true,
+            // )?;
+            self.results.save_layer_results(layer_nb, point.id);
         }
         Ok(())
     }
