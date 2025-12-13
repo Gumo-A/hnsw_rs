@@ -3,33 +3,6 @@ use std::fs::{self, ReadDir};
 use std::fs::{DirEntry, File};
 use std::io::{BufReader, Result};
 
-use crate::hnsw::points::Point;
-
-pub fn split_ids(ids: Vec<u32>, nb_splits: u8) -> Vec<Vec<u32>> {
-    let mut split_vector = Vec::new();
-
-    let per_split = ids.len() / (nb_splits as usize);
-
-    let mut buffer = 0;
-    for idx in 0..nb_splits {
-        if idx == nb_splits - 1 {
-            split_vector.push(ids[buffer..].to_vec());
-        } else {
-            split_vector.push(ids[buffer..(buffer + per_split)].to_vec());
-            buffer += per_split;
-        }
-    }
-
-    let mut sum_lens = 0;
-    for i in split_vector.iter() {
-        sum_lens += i.len();
-    }
-
-    assert!(sum_lens == ids.len(), "sum: {sum_lens}");
-
-    split_vector
-}
-
 pub fn split(nb_elements: usize, nb_splits: usize) -> Vec<Vec<usize>> {
     let mut split_vector: Vec<Vec<usize>> = Vec::new();
 
@@ -54,44 +27,6 @@ pub fn split(nb_elements: usize, nb_splits: usize) -> Vec<Vec<usize>> {
         sum_lens == nb_elements,
         "Total elements: {nb_elements}, sum of splits: {sum_lens}"
     );
-
-    split_vector
-}
-
-pub fn split_eps(
-    points: HashMap<usize, Point>,
-    eps: HashMap<usize, HashSet<usize>>,
-    nb_splits: usize,
-) -> Vec<Vec<(usize, Point)>> {
-    let mut to_split = Vec::new();
-    for (ep, points_ids) in eps.iter() {
-        for id in points_ids {
-            to_split.push((*ep, points.get(id).unwrap().clone()));
-        }
-    }
-
-    assert_eq!(to_split.len(), points.len());
-
-    let mut split_vector: Vec<Vec<(usize, Point)>> = Vec::new();
-
-    let per_split = points.len() / nb_splits;
-
-    let mut buffer = 0;
-    for idx in 0..nb_splits {
-        if idx == nb_splits - 1 {
-            split_vector.push(to_split[buffer..].to_vec());
-            continue;
-        }
-        split_vector.push(to_split[buffer..(buffer + per_split)].to_vec());
-        buffer += per_split;
-    }
-
-    let mut sum_lens = 0;
-    for i in split_vector.iter() {
-        sum_lens += i.len();
-    }
-
-    assert!(sum_lens == points.len(), "sum: {sum_lens}");
 
     split_vector
 }

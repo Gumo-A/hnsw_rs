@@ -1,13 +1,20 @@
 #[allow(unused_imports)]
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Instant;
 
-use hnsw::helpers::args::{parse_args_eval, parse_args_eval_ef_cons};
+use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::data::load_bf_data;
-use hnsw::helpers::glove::{load_glove_array, load_sift_array};
-use hnsw::hnsw::index::HNSW;
+use hnsw::helpers::glove::load_glove_array;
 
+use hnsw::params::get_default_ml;
+use hnsw::template::HNSW;
 use indicatif::{ProgressBar, ProgressStyle};
+use points::{point::Point, point_collection::Points};
+use vectors::{FullVec, LVQVec};
+
+use std::fs;
+use std::io::Write;
 
 fn main() -> std::io::Result<()> {
     let (dim, lim, m) = match parse_args_eval() {
@@ -20,8 +27,7 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    // let file_name = format!("glove.twitter.27B.{dim}d");
-    let file_name = format!("glove.6B.{dim}d");
+    let file_name = format!("glove.840B.{dim}d");
 
     let (words, embeddings) = load_glove_array(lim, file_name.clone(), true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
@@ -47,30 +53,49 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let efs = Vec::from_iter((10..=200).step_by(10));
+    let ef_cons = 100;
 
-    for ef_cons in efs {
-        let embs = train_set.clone();
-        let start = Instant::now();
-        let index = HNSW::build_index_par(m, Some(ef_cons), embs, true).unwrap();
-        println!(
-            "ef_cons {ef_cons} elapsed {} ms",
-            start.elapsed().as_millis()
-        );
+    let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
+    let s = Instant::now();
+    let mut store = HNSW::new(m, Some(ef_cons), embs.dim().unwrap());
+    store = store.insert_bulk(embs, 8).unwrap();
+    let e = s.elapsed().as_millis();
+    // println!(
+    //     "took {0} ms to build index with {1} points and M {2}",
+    //     e,
+    //     store.len(),
+    //     store.params.m
+    // );
 
-        // index.print_index();
-        // println!(
-        //     "Multi-thread (v3) elapsed time: {}ms",
-        //     start.elapsed().as_millis() - end.elapsed().as_millis()
-        // );
+    let s = Instant::now();
+    store.save(Path::new("./index"));
+    let e = s.elapsed().as_millis();
+    // println!(
+    //     "took {0} ms to save index with {1} points and M {2}",
+    //     e,
+    //     store.len(),
+    //     store.params.m
+    // );
 
-        let index_path = format!("./ef_cons_impact/{file_name}_m{m}_efcons{ef_cons}.ann");
+    let s = Instant::now();
+    let store: HNSW<LVQVec> = HNSW::load(Path::new("./index")).unwrap();
+    let e = s.elapsed().as_millis();
+    // println!(
+    //     "took {0} ms to load index with {1} points and M {2}",
+    //     e,
+    //     store.len(),
+    //     store.params.m
+    // );
 
-        // println!("Saving index to current dir...");
-        index.save(index_path.as_str())?;
-        // let index = HNSW::from_path(&index_path)?;
-        estimate_recall(&index, &test_set, &bf_data);
-    }
+    // store.layer_degrees(&0);
+
+    // index.print_index();
+    // println!(
+    //     "Multi-thread (v3) elapsed time: {}ms",
+    //     start.elapsed().as_millis() - end.elapsed().as_millis()
+    // );
+
+    estimate_recall(&store, &test_set, &bf_data);
 
     // index.assert_param_compliance();
 
@@ -89,11 +114,13 @@ fn main() -> std::io::Result<()> {
 
     // let ef = 1000;
     // for (i, idx) in bf_data.keys().enumerate() {
-    //     if i > 3 {
+    //     if i > 5 {
     //         break;
     //     }
-    //     let point = test_set.get(*idx).unwrap();
-    //     let anns = index.ann_by_vector(point, 10, ef).unwrap();
+    //     let vector = test_set.get(*idx).unwrap();
+    //     let anns = store
+    //         .ann_by_vector(&Point::new_quant(0, 0, &vector.clone()), 10, ef)
+    //         .unwrap();
     //     let anns_words: Vec<String> = anns
     //         .iter()
     //         .map(|x| train_words[*x as usize].clone())
@@ -110,6 +137,7 @@ fn main() -> std::io::Result<()> {
     //         .collect();
     //     println!("True NN of {}", test_words[*idx]);
     //     println!("{:?}", true_nns);
+    //     println!("");
     // }
     // {
     //     use text_io::read;
@@ -153,8 +181,13 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
-    for ef in (10..=10000).step_by(10) {
+fn estimate_recall(
+    index: &HNSW<LVQVec>,
+    test_set: &Vec<Vec<f32>>,
+    bf_data: &HashMap<usize, Vec<usize>>,
+) {
+    let n = 100;
+    for ef in (100..=1000).step_by(100) {
         let bar = ProgressBar::new(test_set.len() as u64);
         bar.set_message(format!("Finding ANNs ef={ef}"));
         bar.set_style(
@@ -163,35 +196,36 @@ fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usi
                 .progress_chars(">>-"),
         );
 
-        let mut recall_10 = Vec::new();
+        let mut recall_100 = Vec::new();
         let start = Instant::now();
         for (idx, query) in test_set.iter().enumerate() {
-            let anns = index.ann_by_vector(query, 10, ef).unwrap();
-            let true_nns: &Vec<usize> = bf_data.get(&idx).unwrap();
+            bar.inc(1);
+            let anns: Vec<usize> = index
+                .ann_by_vector(&Point::new_quant(0, 0, &query.clone()), n, ef)
+                .unwrap()
+                .iter()
+                .map(|x| *x as usize)
+                .collect();
+            let true_nns: &Vec<usize> = match bf_data.get(&idx) {
+                None => continue,
+                Some(t) => t,
+            };
             let mut hits = 0;
-            for true_nn in true_nns.iter().take(10) {
-                if anns.contains(&(*true_nn as u32)) {
+            for true_nn in true_nns.iter().take(n) {
+                if anns.contains(true_nn) {
                     hits += 1;
                 }
             }
-            recall_10.push((hits as f32) / 10.0);
-            bar.inc(1);
+            recall_100.push((hits as f32) / (n as f32));
         }
         let mut query_time = (start.elapsed().as_nanos() as f32) / (test_set.len() as f32);
         query_time = query_time.trunc();
         query_time /= 1_000_000.0;
         let mut avg_recall = 0.0;
-        for recall in recall_10.iter() {
+        for recall in recall_100.iter() {
             avg_recall += recall;
         }
-        avg_recall /= recall_10.len() as f32;
-        if query_time > 1.0 {
-            println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
-            break;
-        }
-        if avg_recall >= 0.9 {
-            println!("Recall@10 {avg_recall}, Query Time: {query_time} ms");
-            break;
-        }
+        avg_recall /= recall_100.len() as f32;
+        println!("ef={ef} Recall@10 {avg_recall}, Query Time: {query_time} ms");
     }
 }

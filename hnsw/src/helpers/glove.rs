@@ -1,10 +1,13 @@
-use crate::hnsw::dist::Dist;
-use crate::hnsw::points::{Point, Points};
+use core::panic;
+use graph::nodes::{Dist, Node};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::collections::{BTreeMap, HashMap};
+use points::{point::Point, point_collection::Points};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
+use std::str::FromStr;
 use std::sync::Arc;
+use vectors::{FullVec, VecBase};
 
 pub fn load_glove_array(
     lim: usize,
@@ -46,13 +49,29 @@ pub fn load_glove_array(
             break;
         }
         let line = line_result?;
-        let mut parts = line.split_whitespace();
+        let mut parts = line.split(' ');
 
-        let word = parts.next().expect("Empty line");
+        let mut word = String::from_str(parts.next().expect("Empty line")).unwrap();
+        let mut values = Vec::new();
+        for i in parts {
+            let parse_attempt = i.parse::<f32>();
+            match parse_attempt {
+                Ok(v) => values.push(v),
+                Err(_) => word.push_str(i),
+            }
+        }
 
-        let values: Vec<f32> = parts
-            .map(|s| s.parse::<f32>().expect("Could not parse float"))
-            .collect();
+        if embeddings.len() > 1 {
+            if embeddings[0].len() != values.len() {
+                panic!(
+                    "Line {0}: vector is not the same size as others. Len: {1}, Word {2}",
+                    idx + 1,
+                    values.len(),
+                    word
+                );
+            }
+        }
+
         embeddings.push(values);
         words.push(word.to_string());
     }
@@ -105,29 +124,17 @@ pub fn load_sift_array(lim: usize, verbose: bool) -> Result<Vec<Vec<f32>>> {
 
 pub fn brute_force_nns(
     nb_nns: usize,
-    train_set: Arc<Points>,
-    test_set: Arc<Points>,
-    ids: Vec<u32>,
-    verbose: bool,
-) -> HashMap<u32, Vec<u32>> {
-    let bar = if verbose {
-        let bar = ProgressBar::new(ids.len() as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{msg} {wide_bar} {human_pos}/{human_len} {percent}% [ ETA: {eta_precise} : Elapsed: {elapsed} ] {per_sec}",
-            )
-            .unwrap(),
-        );
-        bar.set_message("Finding NNs");
-        bar
-    } else {
-        ProgressBar::hidden()
-    };
-
-    let mut brute_force_results: HashMap<u32, Vec<u32>> = HashMap::new();
+    train_set: Arc<Points<FullVec>>,
+    test_set: Arc<Points<FullVec>>,
+    ids: Vec<Node>,
+    bar: ProgressBar,
+) -> HashMap<Node, Vec<Node>> {
+    let mut brute_force_results: HashMap<Node, Vec<Node>> = HashMap::new();
     for idx in ids.iter() {
-        let query = test_set.get_point(*idx as u32).unwrap();
-        let nns: Vec<u32> = get_nn_bf(query, &train_set, nb_nns);
+        let query = test_set
+            .get_point(*idx as Node)
+            .expect("Point ID not found in collection.");
+        let nns: Vec<Node> = get_nn_bf(query, &train_set, nb_nns);
         assert_eq!(nb_nns, nns.len());
         brute_force_results.insert(*idx, nns);
         bar.inc(1);
@@ -136,20 +143,19 @@ pub fn brute_force_nns(
     brute_force_results
 }
 
-fn get_nn_bf(point: &Point, others: &Arc<Points>, nb_nns: usize) -> Vec<u32> {
+fn get_nn_bf(point: &Point<FullVec>, others: &Arc<Points<FullVec>>, nb_nns: usize) -> Vec<Node> {
     let sorted = sort_by_distance(point, others);
-    sorted
-        .values()
-        .copied()
-        .take(nb_nns)
-        .map(|x| x as u32)
-        .collect()
+    sorted.iter().take(nb_nns).map(|x| x.id).collect()
 }
 
-fn sort_by_distance(point: &Point, others: &Arc<Points>) -> BTreeMap<Dist, usize> {
-    let result = others.iterate().map(|(idx, p)| {
-        let dist = p.dist2other(point);
-        (dist, idx as usize)
-    });
-    BTreeMap::from_iter(result)
+fn sort_by_distance(point: &Point<FullVec>, others: &Arc<Points<FullVec>>) -> Vec<Dist> {
+    let points: Vec<&Point<FullVec>> = others.iter_points().collect();
+    let result = point.dist2many(points.iter().map(|p| *p));
+    let mut dists = Vec::from_iter(
+        result
+            .zip(points.iter())
+            .map(|(dist, p)| Dist::new(p.id, dist)),
+    );
+    dists.sort();
+    dists
 }

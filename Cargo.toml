@@ -3,14 +3,19 @@ resolver = "2"
 members = [
   "hnsw",
   "brute_force", 
-  "eval_glove", 
-  "binary_files", "load_index",
+  "eval_glove",
+  "vectors", 
+  "graph",
+  "points"
 ]
 
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
+
+[profile.release-profile]
+inherits = "release"
+debug = true
 
 [build]
 rustflags = ["-C", "target-cpu=native"]

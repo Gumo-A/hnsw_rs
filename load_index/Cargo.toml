@@ -1,8 +1,0 @@
-[package]
-name = "load_index"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-hnsw = { path = "../hnsw"}
-indicatif = "0.17.8"
