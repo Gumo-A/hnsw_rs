@@ -1,10 +1,10 @@
-use core::panic;
+use crate::errors::GraphError;
+use crate::nodes::Node;
+
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
 use std::sync::{Arc, Mutex};
 use vectors::serializer::Serializer;
-
-use crate::nodes::Node;
 
 type Neighbors = Arc<Mutex<IntSet<Node>>>;
 
@@ -32,57 +32,49 @@ impl Graph {
             .or_insert(Arc::new(Mutex::new(IntSet::default())));
     }
 
-    pub fn add_edge(&self, node_a: Node, node_b: Node) -> Result<(), String> {
-        // This if statatements garantee the unwraps() below won't fail.
+    pub fn add_edge(&self, node_a: Node, node_b: Node) -> Result<(), GraphError> {
         if node_a == node_b {
-            return Err("Self-connections are forbiden".to_string());
+            return Err(GraphError::SelfConnection(node_a));
         }
 
-        if !self.nodes.contains_key(&node_a) | !self.nodes.contains_key(&node_b) {
-            println!("node_a is in graph {}", self.nodes.contains_key(&node_a));
-            println!("node_b is in graph {}", self.nodes.contains_key(&node_b));
-            return Err(format!(
-                "Error adding edge, one of the nodes is not in the graph."
-            ));
-        }
+        let (a, b) = self.get_nodes_neighbors(node_a, node_b)?;
 
-        self.nodes
-            .get(&node_a)
-            .unwrap()
-            .lock()
-            .unwrap()
-            .insert(node_b);
-        self.nodes
-            .get(&node_b)
-            .unwrap()
-            .lock()
-            .unwrap()
-            .insert(node_a);
+        a.lock().unwrap().insert(node_b);
+        b.lock().unwrap().insert(node_a);
         Ok(())
+    }
+
+    fn get_nodes_neighbors(
+        &self,
+        node_a: Node,
+        node_b: Node,
+    ) -> Result<(&Neighbors, &Neighbors), GraphError> {
+        match (self.nodes.get(&node_a), self.nodes.get(&node_b)) {
+            (Some(a), Some(b)) => Ok((a, b)),
+            (Some(_), None) => {
+                return Err(GraphError::NodeNotInGraph(node_b));
+            }
+            _ => {
+                return Err(GraphError::NodeNotInGraph(node_a));
+            }
+        }
     }
 
     /// Removes an edge from the Graph.
     /// Since the add_edge method won't allow for self-connecting nodes, we don't check that here.
     ///
     /// Returns error if one node doesn't exist or if removing would isolate a node.
-    pub fn remove_edge(&self, node_a: Node, node_b: Node) -> Result<(), String> {
-        // TODO: write error types to let the caller know why this function failed
-        // and act accordingly
-        let (a, b) = match (self.nodes.get(&node_a), self.nodes.get(&node_b)) {
-            (Some(a), Some(b)) => (a, b),
-            _ => {
-                return Err("One of the nodes doesn't exist in the graph.".to_string());
-            }
-        };
+    pub fn remove_edge(&self, node_a: Node, node_b: Node) -> Result<(), GraphError> {
+        let (a, b) = self.get_nodes_neighbors(node_a, node_b)?;
 
         let mut a_neighbors = a.lock().unwrap();
         let mut b_neighbors = b.lock().unwrap();
 
-        if (a_neighbors.len() == 1) | (b_neighbors.len() == 1) {
-            // TODO fix cases where this happens. I have to implement useful errors to
-            // handle this case
-            // return Err("Removing the edge would leave a node isolated".to_string());
-            return Ok(());
+        if a_neighbors.len() == 1 {
+            return Err(GraphError::WouldIsolateNode(node_a));
+        }
+        if b_neighbors.len() == 1 {
+            return Err(GraphError::WouldIsolateNode(node_b));
         }
 
         a_neighbors.remove(&node_b);
@@ -91,22 +83,18 @@ impl Graph {
         Ok(())
     }
 
-    pub fn neighbors(&self, node_id: Node) -> Result<IntSet<Node>, String> {
-        match self.nodes.get(&node_id) {
+    pub fn neighbors(&self, node: Node) -> Result<IntSet<Node>, GraphError> {
+        match self.nodes.get(&node) {
             Some(neighbors) => Ok(neighbors.lock().unwrap().clone()),
-            None => Err(format!(
-                "Error getting neighbors of {node_id} (function 'neighbors'), it is not in the graph."
-            )),
+            None => Err(GraphError::NodeNotInGraph(node)),
         }
     }
 
-    pub fn neighbors_vec(&self, node_id: Node) -> Result<Vec<Node>, String> {
-        let neighbors = match self.nodes.get(&node_id) {
+    pub fn neighbors_vec(&self, node: Node) -> Result<Vec<Node>, GraphError> {
+        let neighbors = match self.nodes.get(&node) {
             Some(neighbors) => neighbors,
             None => {
-                return Err(format!(
-                    "Error getting neighbors of {node_id} (function 'neighbors'), it is not in the graph."
-                ));
+                return Err(GraphError::NodeNotInGraph(node));
             }
         };
 
@@ -114,7 +102,7 @@ impl Graph {
         Ok(neighbors)
     }
 
-    pub fn replace_neighbors<I>(&self, node: Node, new_neighbors: I) -> Result<(), String>
+    pub fn replace_neighbors<I>(&self, node: Node, new_neighbors: I) -> Result<(), GraphError>
     where
         I: Iterator<Item = Node>,
     {
@@ -135,13 +123,20 @@ impl Graph {
         }
 
         for ex_neighbor in to_remove {
-            self.remove_edge(node, ex_neighbor)?;
+            if let Err(e) = self.remove_edge(node, ex_neighbor) {
+                match e {
+                    GraphError::WouldIsolateNode(n) => println!(
+                        "Was going to remove edge {node}-{ex_neighbor}, but didn't because it would leave {n} isolated"
+                    ),
+                    _ => return Err(e),
+                }
+            };
         }
 
         Ok(())
     }
 
-    pub fn remove_node(&mut self, node: Node) -> Result<(), String> {
+    pub fn remove_node(&mut self, node: Node) -> Result<(), GraphError> {
         for ex_neighbor in self.neighbors(node)? {
             self.nodes
                 .get_mut(&ex_neighbor)
@@ -154,8 +149,8 @@ impl Graph {
         Ok(())
     }
 
-    fn remove_edges_with_node(&mut self, node: Node) {
-        for ex_neighbor in self.remove_neighbors(node) {
+    fn remove_edges_with_node(&mut self, node: Node) -> Result<(), GraphError> {
+        for ex_neighbor in self.remove_neighbors(node)? {
             self.nodes
                 .get_mut(&ex_neighbor)
                 .unwrap()
@@ -163,28 +158,23 @@ impl Graph {
                 .unwrap()
                 .remove(&node);
         }
+        Ok(())
     }
 
-    fn remove_neighbors(&mut self, node_id: Node) -> IntSet<Node> {
-        let removed = self.nodes.remove(&node_id);
+    fn remove_neighbors(&mut self, node: Node) -> Result<IntSet<Node>, GraphError> {
+        let removed = self.nodes.remove(&node);
         self.nodes
-            .insert(node_id, Arc::new(Mutex::new(IntSet::default())));
+            .insert(node, Arc::new(Mutex::new(IntSet::default())));
         match removed {
-            Some(neighbors) => Arc::into_inner(neighbors).unwrap().into_inner().unwrap(),
-            None => {
-                panic!(
-                    "Could not get the neighbors of {node_id}. The graph does not contain this node"
-                );
-            }
+            Some(neighbors) => Ok(Arc::into_inner(neighbors).unwrap().into_inner().unwrap()),
+            None => Err(GraphError::NodeNotInGraph(node)),
         }
     }
 
-    pub fn degree(&self, node_id: Node) -> Result<usize, String> {
-        match self.nodes.get(&node_id) {
+    pub fn degree(&self, node: Node) -> Result<usize, GraphError> {
+        match self.nodes.get(&node) {
             Some(neighbors) => Ok(neighbors.lock().unwrap().len()),
-            None => Err(format!(
-                "Error getting degree of {node_id}, it is not in the graph."
-            )),
+            None => Err(GraphError::NodeNotInGraph(node)),
         }
     }
 
@@ -553,10 +543,8 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Could not get the neighbors")]
     fn remove_neighbors_on_missing_node_panics() {
         let mut g = Graph::new(0);
-        // should panic
-        g.remove_neighbors(999);
+        assert!(g.remove_neighbors(999).is_err());
     }
 }

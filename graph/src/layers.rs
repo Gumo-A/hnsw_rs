@@ -5,6 +5,7 @@ use nohash_hasher::IntMap;
 use vectors::serializer::Serializer;
 
 use crate::{
+    errors::GraphError,
     graph::Graph,
     nodes::{Dist, Node},
 };
@@ -79,7 +80,20 @@ impl Layers {
     ) -> Result<(), String> {
         let layer = self.get_layer(&layer_nb);
         for (node, neighbors) in node_data.iter() {
-            layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id))?;
+            match layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id)) {
+                Ok(()) => {}
+                Err(e) => match e {
+                    GraphError::NodeNotInGraph(n) => panic!(
+                        "Trying to replace neighbors for {node}, node {n} wasn't found in the Graph"
+                    ),
+                    GraphError::SelfConnection(n) => panic!(
+                        "Trying to replace neighbors for {node}, node {n} tried doing a self connection"
+                    ),
+                    GraphError::WouldIsolateNode(n) => {
+                        panic!("Trying to replace neighbors for {node}, node {n} would be isolated")
+                    }
+                },
+            }
         }
         Ok(())
     }

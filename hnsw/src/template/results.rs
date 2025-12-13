@@ -1,3 +1,5 @@
+use core::panic;
+use graph::errors::GraphError;
 use graph::graph::Graph;
 use graph::nodes::{Dist, Node};
 use nohash_hasher::{IntMap, IntSet};
@@ -149,19 +151,16 @@ impl Results {
         points: &Points<T>,
         layer: &Graph,
     ) -> Result<(), String> {
-        // TODO which version is faster?
-        // let old_candidates = self.candidates.clone();
-        // for node in old_candidates.iter() {
-        //     for neighbor in layer.neighbors(node.0.id)? {
-        //         self.push_candidate(Node::new_with_dist(
-        //             points.distance(point.id, neighbor.id).unwrap(),
-        //             neighbor.id,
-        //         ));
-        //     }
-        // }
         let mut neighbors = Vec::new();
         for node in self.candidates.iter() {
-            for neighbor in layer.neighbors(node.id)? {
+            let node_neighbors = match layer.neighbors(node.id) {
+                Ok(n) => n,
+                Err(e) => match e {
+                    GraphError::NodeNotInGraph(n) => panic!("Node {n} is not in the Graph"),
+                    _ => panic!("Error while extending candidates"),
+                },
+            };
+            for neighbor in node_neighbors {
                 neighbors.push(neighbor)
             }
         }

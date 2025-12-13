@@ -1,5 +1,6 @@
-use graph::{graph::Graph, nodes::Dist};
-use nohash_hasher::IntSet;
+use core::panic;
+
+use graph::{errors::GraphError, graph::Graph, nodes::Dist};
 use points::{point::Point, point_collection::Points};
 use vectors::{VecBase, VecTrait};
 
@@ -31,7 +32,12 @@ impl Searcher {
             }
             let cand_neighbors = match layer.neighbors_vec(cand_dist.id) {
                 Ok(neighs) => neighs,
-                Err(msg) => return Err(format!("Error in search_layer: {msg}")),
+                Err(e) => match e {
+                    GraphError::NodeNotInGraph(n) => {
+                        return Err(format!("Error in search_layer: {n} not in Graph"))
+                    }
+                    _ => panic!("Error in search_layer: got an unexpected error"),
+                },
             };
 
             let q2cand_neighbors_dists: Vec<Dist> = cand_neighbors

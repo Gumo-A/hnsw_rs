@@ -9,6 +9,7 @@ use std::{
 
 use crate::{helpers::get_progress_bar, params::Params, template::searcher::Searcher};
 use graph::{
+    errors::GraphError,
     graph::Graph,
     layers::Layers,
     nodes::{Dist, Node},
@@ -180,7 +181,11 @@ impl<T: VecTrait> HNSW<T> {
                     .map(|x| *x);
 
                 for to_prune in nodes_to_prune {
-                    let to_prune_neighbors = layer.neighbors(to_prune.id)?;
+                    let id = to_prune.id;
+                    let to_prune_neighbors = match layer.neighbors(id) {
+                        Ok(n) => n,
+                        Err(_) => return Err("Could not get neighbors of {id}".to_string()),
+                    };
                     let to_prune_distances = to_prune_neighbors
                         .iter()
                         .map(|n| Dist::new(*n, self.distance(to_prune.id, *n).unwrap()));
@@ -196,7 +201,20 @@ impl<T: VecTrait> HNSW<T> {
         for (layer_nb, node_data) in results.iter_prune_results() {
             let layer = self.layers.get_layer(&layer_nb);
             for (node, neighbors) in node_data.iter() {
-                layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id))?;
+                match layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id)) {
+                    Ok(()) => {}
+                    Err(e) => match e {
+                        GraphError::SelfConnection(n) => {
+                            panic!("Could not replace neighbors, would self connect node {n}")
+                        }
+                        GraphError::WouldIsolateNode(n) => {
+                            panic!("Could not replace neighbors, would isolate node {n}")
+                        }
+                        GraphError::NodeNotInGraph(n) => {
+                            panic!("Could not replace neighbors, node {n} not in Graph")
+                        }
+                    },
+                };
             }
         }
 
@@ -334,6 +352,34 @@ impl<T: VecTrait + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
         self.store_points(points);
         let bar = get_progress_bar("layerzzz".to_string(), self.len(), true);
         let index_arc = Arc::new(self);
+
+        for layer_nb in (0..index_arc.layers.len()).rev().map(|x| x as u8) {
+            let layer = index_arc.layers.get_layer(&layer_nb);
+            let chunks = ((layer.nb_nodes() as f64) / (nb_threads as f64)).ceil() as usize;
+            let mut ids: Vec<Vec<Node>> = layer
+                .iter_nodes()
+                .filter(|id| index_arc.points.get_point(*id).unwrap().level == layer_nb)
+                .collect::<Vec<Node>>()
+                .chunks(chunks)
+                .map(|chunk| Vec::from(chunk))
+                .collect();
+
+            let mut handlers = Vec::new();
+            while let Some(ids_split) = ids.pop() {
+                let index_copy = Arc::clone(&index_arc);
+                let bar_ref = bar.clone();
+                handlers.push(std::thread::spawn(move || {
+                    let mut inserter = Inserter::new();
+                    for id in ids_split.iter() {
+                        index_copy.insert(*id, &mut inserter).unwrap();
+                        bar_ref.inc(1);
+                    }
+                }));
+            }
+            for handle in handlers {
+                handle.join().unwrap();
+            }
+        }
 
         for layer_nb in (0..index_arc.layers.len()).rev().map(|x| x as u8) {
             let layer = index_arc.layers.get_layer(&layer_nb);
