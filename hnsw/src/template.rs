@@ -221,12 +221,24 @@ impl<T: VecTrait> HNSW<T> {
         Ok(())
     }
 
+    fn check_points_dim(&self, points: &Points<T>) {
+        match points.dim() {
+            Some(points_d) => {
+                if points_d != self.params.dim {
+                    panic!("The current index dimension is {0}, but tried inserting points of dimension {points_d}", self.params.dim)
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Stores the points in the internal `points` field
     /// and adds them to the index's layers.
     ///
     /// This is only the storing part, no indexing can
     /// be done on these points after this operation,
     fn store_points(&mut self, points: Points<T>) {
+        self.check_points_dim(&points);
         let ids_levels = self.points.extend(points);
         for (point_id, level) in ids_levels {
             for layer_nb in 0..=level {
@@ -346,9 +358,14 @@ impl<T: VecTrait> HNSW<T> {
 }
 
 impl<T: VecTrait + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
-    pub fn insert_bulk(mut self, points: Points<T>, nb_threads: usize) -> Result<HNSW<T>, String> {
+    pub fn insert_bulk(
+        mut self,
+        points: Points<T>,
+        nb_threads: usize,
+        verbose: bool,
+    ) -> Result<HNSW<T>, String> {
         self.store_points(points);
-        let bar = get_progress_bar("layerzzz".to_string(), self.len(), true);
+        let bar = get_progress_bar("layerzzz".to_string(), self.len(), verbose);
         let index_arc = Arc::new(self);
 
         for layer_nb in (0..index_arc.layers.len()).rev().map(|x| x as u8) {
