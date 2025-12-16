@@ -56,10 +56,10 @@ impl Inserter {
         index: &HNSW<T>,
         point: &Point<T>,
     ) -> Result<(), String> {
-        let layers_len = index.layers.len() as u8;
+        let layers_len = index.layers.len();
 
-        for layer_nb in (point.level + 1..layers_len).rev() {
-            let layer = index.get_layer(&layer_nb);
+        for layer_nb in (point.level as usize + 1..layers_len).rev() {
+            let layer = index.get_layer(layer_nb);
             self.searcher
                 .search_layer(&mut self.results, layer, point, &index.points, 1)?;
         }
@@ -70,9 +70,9 @@ impl Inserter {
         index: &HNSW<T>,
         point: &Point<T>,
     ) -> Result<(), String> {
-        let bound = (point.level).min((index.layers.len() - 1) as u8);
-        for layer_nb in (0..=bound).rev().map(|x| x as u8) {
-            let layer = index.get_layer(&layer_nb);
+        let bound = (point.level as usize).min(index.layers.len() - 1);
+        for layer_nb in (0..=bound).rev() {
+            let layer = index.get_layer(layer_nb);
             self.searcher.search_layer(
                 &mut self.results,
                 layer,

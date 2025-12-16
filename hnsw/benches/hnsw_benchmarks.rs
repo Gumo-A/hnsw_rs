@@ -25,17 +25,22 @@ fn insert_at_10000_m12(c: &mut Criterion) {
     //     .measurement_time(Duration::from_secs(1000));
 
     for dim in GLOVE_DIMS.iter() {
-        let (_, embeddings) = load_glove_array(10_000, format!("glove.6B.{dim}d"), false).unwrap();
+        let (_, embeddings) =
+            load_glove_array(10_000, format!("glove.840B.{dim}d"), false).unwrap();
         let index = HNSW::new(M, None, embeddings[0].len());
         let index = index
-            .insert_bulk(Points::new_quant(embeddings[..9_999].to_vec(), ml), 1)
+            .insert_bulk(
+                Points::new_quant(embeddings[..9_999].to_vec(), ml),
+                1,
+                false,
+            )
             .unwrap();
         let vector = embeddings[9_999].clone();
         group.bench_function(BenchmarkId::from_parameter(dim), |b| {
             b.iter_batched(
                 || (index.clone(), vector.clone()),
                 move |(mut i, vect): (HNSW<LVQVec>, Vec<f32>)| {
-                    i.insert_point(Point::new_quant(0, 0, &vect)).unwrap();
+                    i.insert_point(Point::new_quant(9_999, 0, &vect)).unwrap();
                 },
                 criterion::BatchSize::LargeInput,
             )
@@ -53,13 +58,14 @@ fn build_10000_m12(c: &mut Criterion) {
         .measurement_time(Duration::from_secs(1000));
 
     for dim in GLOVE_DIMS.iter() {
-        let (_, embeddings) = load_glove_array(10_000, format!("glove.6B.{dim}d"), false).unwrap();
+        let (_, embeddings) =
+            load_glove_array(10_000, format!("glove.840B.{dim}d"), false).unwrap();
         group.bench_function(BenchmarkId::from_parameter(dim), |b| {
             b.iter_batched(
                 || embeddings.clone(),
                 move |embs| {
                     let index = HNSW::new(M, None, embs[0].len());
-                    let _ = index.insert_bulk(Points::new_quant(embs, ml), 1);
+                    let _ = index.insert_bulk(Points::new_quant(embs, ml), 1, false);
                 },
                 criterion::BatchSize::LargeInput,
             )

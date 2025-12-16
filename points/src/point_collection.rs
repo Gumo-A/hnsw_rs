@@ -198,24 +198,18 @@ impl<T: VecTrait> Points<T> {
 
     /// Updates means, adds points with correct IDs, returns vector
     /// with tuples of new IDs and levels.
-    pub fn extend(&mut self, other: Points<T>) -> Vec<(Node, u8)> {
+    pub fn extend(&mut self, other: Points<T>) -> Vec<(Node, usize)> {
         self.check_ids();
-        // for point in self.collection.iter_mut() {
-        //     point.decenter(self.means.as_ref().unwrap());
-        // }
         let mut ids_levels = Vec::with_capacity(other.len());
         let mut next_id = self.collection.len();
         for mut point in other.collection {
             point.id = next_id as Node;
-            ids_levels.push((point.id, point.level));
+            ids_levels.push((point.id, point.level as usize));
             self.collection.push(point);
             next_id += 1;
         }
 
         self.means = compute_means(&self.collection);
-        // for point in self.collection.iter_mut() {
-        //     point.center(self.means.as_ref().unwrap());
-        // }
         ids_levels
     }
 }

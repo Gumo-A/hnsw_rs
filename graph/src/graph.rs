@@ -12,6 +12,10 @@ type Neighbors = Arc<Mutex<IntSet<Node>>>;
 pub struct Graph {
     pub nodes: IntMap<Node, Neighbors>,
     pub level: u8,
+    // TODO: for fixed max nb of neighbors.
+    // this would help make disk ops by fixing the size of all
+    // neighbor lists on disk.
+    // pub m: u16
 }
 
 impl Graph {
@@ -39,8 +43,12 @@ impl Graph {
 
         let (a, b) = self.get_nodes_neighbors(node_a, node_b)?;
 
-        a.lock().unwrap().insert(node_b);
-        b.lock().unwrap().insert(node_a);
+        {
+            a.lock().unwrap().insert(node_b);
+        }
+        {
+            b.lock().unwrap().insert(node_a);
+        }
         Ok(())
     }
 
@@ -67,18 +75,19 @@ impl Graph {
     pub fn remove_edge(&self, node_a: Node, node_b: Node) -> Result<(), GraphError> {
         let (a, b) = self.get_nodes_neighbors(node_a, node_b)?;
 
-        let mut a_neighbors = a.lock().unwrap();
-        let mut b_neighbors = b.lock().unwrap();
-
-        if a_neighbors.len() == 1 {
+        if self.degree(node_a).unwrap() == 1 {
             return Err(GraphError::WouldIsolateNode(node_a));
         }
-        if b_neighbors.len() == 1 {
+        if self.degree(node_b).unwrap() == 1 {
             return Err(GraphError::WouldIsolateNode(node_b));
         }
 
-        a_neighbors.remove(&node_b);
-        b_neighbors.remove(&node_a);
+        {
+            a.lock().unwrap().remove(&node_b);
+        }
+        {
+            b.lock().unwrap().remove(&node_a);
+        }
 
         Ok(())
     }
@@ -98,8 +107,7 @@ impl Graph {
             }
         };
 
-        let neighbors = neighbors.lock().unwrap().iter().cloned().collect();
-        Ok(neighbors)
+        Ok(neighbors.lock().unwrap().iter().cloned().collect())
     }
 
     pub fn replace_neighbors<I>(&self, node: Node, new_neighbors: I) -> Result<(), GraphError>
@@ -231,19 +239,14 @@ impl Serializer for Graph {
         size
     }
 
-    /// Stores the length of the byte string to read in the
-    /// first 4 bytes.
-    ///
     /// Val          Bytes
-    /// length       4  // needed by the caller of `deserialize()`
-    /// nb_nodes     4
     /// level        1
+    /// nb_nodes     4
     /// adj_list     nb_nodes * variable
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.nb_nodes() * 4);
-        bytes.extend_from_slice(&(self.size() as u32).to_be_bytes());
-        bytes.extend_from_slice(&(self.nb_nodes() as u32).to_be_bytes());
         bytes.extend_from_slice(&[self.level]);
+        bytes.extend_from_slice(&(self.nb_nodes() as u32).to_be_bytes());
         for node in self.iter_nodes() {
             bytes.extend(self.serialize_adj_list(node));
         }
@@ -251,14 +254,14 @@ impl Serializer for Graph {
     }
 
     /// Val          Bytes
-    /// nb_nodes     4
     /// level        1
+    /// nb_nodes     4
     /// adj_list     nb_nodes * variable
     fn deserialize(data: Vec<u8>) -> Graph {
-        let mut i = 4;
-        let nb_nodes = u32::from_be_bytes(data[..i].try_into().unwrap());
-        let level = u8::from_be_bytes(data[i..i + 1].try_into().unwrap());
-        i += 1;
+        let mut i = 1;
+        let level = u8::from_be_bytes(data[..i].try_into().unwrap());
+        let nb_nodes = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
+        i += 4;
         let mut nodes = IntMap::default();
         for _ in 0..nb_nodes {
             let node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
@@ -500,12 +503,10 @@ mod test {
     fn serialization_round_trip() {
         let original = simple_graph();
         let original_bytes = original.serialize();
-        let original_size = u32::from_be_bytes(original_bytes[..4].try_into().unwrap()) as usize;
 
-        assert_eq!(original_size, original.size());
-        assert_eq!(original_size, original_bytes.len() - 4);
+        assert_eq!(original_bytes.len(), original.size());
 
-        let restored = Graph::deserialize(original_bytes[4..original_size + 4].try_into().unwrap());
+        let restored = Graph::deserialize(original_bytes.try_into().unwrap());
 
         assert_eq!(original.nb_nodes(), restored.nb_nodes());
         assert_eq!(original.level, restored.level);

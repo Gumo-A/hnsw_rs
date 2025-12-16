@@ -10,7 +10,7 @@ use vectors::{VecBase, VecTrait};
 
 type OrderedDists = BTreeSet<Dist>;
 pub type LayerResult = IntMap<Node, OrderedDists>;
-type LayersResults = IntMap<u8, LayerResult>;
+type LayersResults = IntMap<usize, LayerResult>;
 
 pub struct Results {
     pub selected: OrderedDists,
@@ -33,13 +33,13 @@ impl Results {
         }
     }
 
-    pub fn get_insertion_result(&mut self, layer_nb: u8) -> &mut LayerResult {
+    pub fn get_insertion_result(&mut self, layer_nb: usize) -> &mut LayerResult {
         self.insertion_results
             .entry(layer_nb)
             .or_insert(IntMap::default())
     }
 
-    pub fn get_prune_result(&mut self, layer_nb: u8) -> &mut LayerResult {
+    pub fn get_prune_result(&mut self, layer_nb: usize) -> &mut LayerResult {
         self.prune_results
             .entry(layer_nb)
             .or_insert(IntMap::default())
@@ -64,13 +64,13 @@ impl Results {
             .unwrap()
     }
 
-    pub fn save_layer_results(&mut self, layer_nb: u8, point_id: Node) {
+    pub fn save_layer_results(&mut self, layer_nb: usize, point_id: Node) {
         let point_neighbors = self.selected.clone();
         let layer_result = self.get_insertion_result(layer_nb);
         layer_result.insert(point_id, point_neighbors);
     }
 
-    pub fn insert_prune_result(&mut self, layer_nb: u8, node_id: Node, nearest: BTreeSet<Dist>) {
+    pub fn insert_prune_result(&mut self, layer_nb: usize, node_id: Node, nearest: BTreeSet<Dist>) {
         let layer_result = self.get_prune_result(layer_nb);
         layer_result.insert(node_id, nearest);
     }

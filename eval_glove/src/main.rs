@@ -53,11 +53,9 @@ fn main() -> std::io::Result<()> {
         .map(|(_, v)| v.clone())
         .collect();
 
-    let ef_cons = 100;
-
     let embs = Points::new_quant(train_set.clone(), get_default_ml(m));
     let s = Instant::now();
-    let mut store = HNSW::new(m, Some(ef_cons), embs.dim().unwrap());
+    let mut store = HNSW::new(m, None, embs.dim().unwrap());
     store = store.insert_bulk(embs, 8, true).unwrap();
     let e = s.elapsed().as_millis();
     println!(
@@ -196,8 +194,9 @@ fn estimate_recall(
                 .progress_chars(">>-"),
         );
 
-        let mut recall_100 = Vec::new();
         let start = Instant::now();
+        let mut total_neighbors = 0;
+        let mut total_hits = 0;
         for (idx, query) in test_set.iter().enumerate() {
             bar.inc(1);
             let anns: Vec<usize> = index
@@ -216,16 +215,13 @@ fn estimate_recall(
                     hits += 1;
                 }
             }
-            recall_100.push((hits as f32) / (n as f32));
+            total_neighbors += n;
+            total_hits += hits;
         }
         let mut query_time = (start.elapsed().as_nanos() as f32) / (test_set.len() as f32);
         query_time = query_time.trunc();
         query_time /= 1_000_000.0;
-        let mut avg_recall = 0.0;
-        for recall in recall_100.iter() {
-            avg_recall += recall;
-        }
-        avg_recall /= recall_100.len() as f32;
-        println!("ef={ef} Recall@10 {avg_recall}, Query Time: {query_time} ms");
+        let avg_recall = total_hits as f32 / total_neighbors as f32;
+        println!("ef={ef} Recall@10 {avg_recall} ({total_hits}/{total_neighbors}), Query Time: {query_time} ms");
     }
 }
