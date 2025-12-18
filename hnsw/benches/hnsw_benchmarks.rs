@@ -1,9 +1,3 @@
-use std::time::Duration;
-
-// TODO
-// write benchmarks for HNSW insertion algorithm,
-// both for the whole process and for the individual
-// functions that are called during insertion.
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::params::get_default_ml;
@@ -11,6 +5,7 @@ use hnsw::template::HNSW;
 use points::point::Point;
 use points::point_collection::Points;
 use rand::Rng;
+use std::time::Duration;
 use vectors::{LVQVec, VecBase};
 
 const DIMS: [usize; 1] = [300];

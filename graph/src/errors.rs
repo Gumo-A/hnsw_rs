@@ -5,4 +5,5 @@ pub enum GraphError {
     NodeNotInGraph(Node),
     WouldIsolateNode(Node),
     SelfConnection(Node),
+    DegreeLimitReached(Node),
 }

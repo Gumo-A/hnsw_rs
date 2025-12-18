@@ -94,7 +94,7 @@ impl<T: VecTrait> HNSW<T> {
             Err(e) => return Err(format!("Problem reading params file: {e}")),
         };
 
-        let mut layers = Layers::new();
+        let mut layers = Layers::new(params.m);
         let layers_dir = dir.join("layers");
         match layers_dir.read_dir() {
             Ok(dir) => {
@@ -141,7 +141,7 @@ impl<T: VecTrait> HNSW<T> {
         HNSW {
             params,
             points: Points::new(),
-            layers: Layers::new(),
+            layers: Layers::new(m),
         }
     }
 
@@ -239,6 +239,9 @@ impl<T: VecTrait> HNSW<T> {
                         }
                         GraphError::WouldIsolateNode(n) => {
                             panic!("Could not replace neighbors, would isolate node {n}")
+                        }
+                        GraphError::DegreeLimitReached(n) => {
+                            panic!("Could not replace neighbors, {n} would exceed the degree limit")
                         }
                         GraphError::NodeNotInGraph(n) => {
                             panic!("Could not replace neighbors, node {n} not in Graph")
@@ -598,7 +601,7 @@ mod test {
             {
                 println!("{0} {1} {2}", layer.level, loaded_layer.level, idx);
                 assert_eq!(layer.level, loaded_layer.level);
-                assert_eq!(layer.level, idx as u8);
+                assert_eq!(layer.level, idx);
             }
             std::fs::remove_dir_all(index_path).unwrap();
         }

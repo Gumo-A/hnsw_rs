@@ -11,18 +11,16 @@ type Neighbors = Arc<Mutex<IntSet<Node>>>;
 #[derive(Debug, Clone)]
 pub struct Graph {
     pub nodes: IntMap<Node, Neighbors>,
-    pub level: u8,
-    // TODO: for fixed max nb of neighbors.
-    // this would help make disk ops by fixing the size of all
-    // neighbor lists on disk.
-    // pub m: u16
+    pub level: usize,
+    pub m: usize,
 }
 
 impl Graph {
-    pub fn new(level: u8) -> Self {
+    pub fn new(level: usize, m: usize) -> Self {
         Graph {
             nodes: IntMap::default(),
             level,
+            m,
         }
     }
 
@@ -41,6 +39,8 @@ impl Graph {
             return Err(GraphError::SelfConnection(node_a));
         }
 
+        self.can_add_edge(node_a, node_b)?;
+
         let (a, b) = self.get_nodes_neighbors(node_a, node_b)?;
 
         {
@@ -49,6 +49,18 @@ impl Graph {
         {
             b.lock().unwrap().insert(node_a);
         }
+        Ok(())
+    }
+
+    fn can_add_edge(&self, node_a: Node, node_b: Node) -> Result<(), GraphError> {
+        if self.degree(node_a)? == self.m {
+            return Err(GraphError::DegreeLimitReached(node_a));
+        }
+
+        if self.degree(node_b)? == self.m {
+            return Err(GraphError::DegreeLimitReached(node_b));
+        }
+
         Ok(())
     }
 
@@ -202,28 +214,34 @@ impl Graph {
 
     /// Val          Bytes
     /// Node         4
-    /// nb_neighbors 2
-    /// neighbors    nb_neighbors * 4
+    /// neighbors    m * 4
     fn serialize_adj_list(&self, node_id: Node) -> Vec<u8> {
-        let neighbors = self.neighbors_vec(node_id).unwrap();
-        let mut bytes = Vec::with_capacity(neighbors.len() + 1);
+        let mut bytes = Vec::with_capacity(4 + (self.m * 4));
         bytes.extend_from_slice(&node_id.to_be_bytes());
-        bytes.extend_from_slice(&(neighbors.len() as u16).to_be_bytes());
+
+        let mut neighbors = self.neighbors_vec(node_id).unwrap();
+        while neighbors.len() < self.m {
+            neighbors.push(Node::MAX);
+        }
         for n in neighbors {
             bytes.extend_from_slice(&n.to_be_bytes());
         }
+
         bytes
     }
 
     /// Val          Bytes
-    /// neighbors    nb_neighbors * 4
+    /// neighbors    m * 4
     fn deserialize_neighbors(data: &[u8]) -> Vec<Node> {
-        let nb_neighbors = data.len() / 4;
-        let mut neighbors = Vec::with_capacity(nb_neighbors);
+        let m = data.len() / 4;
+        let mut neighbors = Vec::with_capacity(m);
         let mut i = 0;
-        for _ in 0..nb_neighbors {
+        for _ in 0..m {
             let n: Node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
             i += 4;
+            if n == Node::MAX {
+                break;
+            }
             neighbors.push(n);
         }
         neighbors
@@ -242,11 +260,13 @@ impl Serializer for Graph {
     /// Val          Bytes
     /// level        1
     /// nb_nodes     4
-    /// adj_list     nb_nodes * variable
+    /// m            2
+    /// adj_list     nb_nodes * m
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.nb_nodes() * 4);
-        bytes.extend_from_slice(&[self.level]);
+        bytes.extend_from_slice(&[self.level as u8]);
         bytes.extend_from_slice(&(self.nb_nodes() as u32).to_be_bytes());
+        bytes.extend_from_slice(&(self.m as u16).to_be_bytes());
         for node in self.iter_nodes() {
             bytes.extend(self.serialize_adj_list(node));
         }
@@ -256,29 +276,30 @@ impl Serializer for Graph {
     /// Val          Bytes
     /// level        1
     /// nb_nodes     4
-    /// adj_list     nb_nodes * variable
+    /// m            2
+    /// adj_list     nb_nodes * m
     fn deserialize(data: Vec<u8>) -> Graph {
         let mut i = 1;
-        let level = u8::from_be_bytes(data[..i].try_into().unwrap());
+        let level = u8::from_be_bytes(data[..i].try_into().unwrap()) as usize;
         let nb_nodes = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
         i += 4;
+        let m = u16::from_be_bytes(data[i..i + 2].try_into().unwrap()) as usize;
+        i += 2;
         let mut nodes = IntMap::default();
         for _ in 0..nb_nodes {
             let node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
             i += 4;
-            let nb_neighbors = u16::from_be_bytes(data[i..i + 2].try_into().unwrap()) as usize;
-            i += 2;
             let neighbors = IntSet::from_iter(
-                Graph::deserialize_neighbors(&data[i..i + (nb_neighbors * 4)])
+                Graph::deserialize_neighbors(&data[i..i + (m * 4)])
                     .iter()
                     .copied(),
             );
-            i += nb_neighbors * 4;
+            i += m * 4;
 
             nodes.insert(node, Arc::new(Mutex::new(neighbors)));
         }
 
-        Graph { nodes, level }
+        Graph { nodes, level, m }
     }
 }
 
@@ -286,7 +307,11 @@ pub fn make_rand_graph(n: usize, degree: usize) -> Graph {
     let mut rng = rand::thread_rng();
     let nodes =
         IntMap::from_iter((0..n).map(|id| (id as Node, Arc::new(Mutex::new(IntSet::default())))));
-    let graph = Graph { nodes, level: 0 };
+    let graph = Graph {
+        nodes,
+        level: 0,
+        m: 12,
+    };
     for node in 0..n {
         let neighbors = (0..n).choose_multiple(&mut rng, degree);
         for n in neighbors {
@@ -300,7 +325,7 @@ pub fn make_rand_graph(n: usize, degree: usize) -> Graph {
 }
 
 pub fn simple_graph() -> Graph {
-    let mut g = Graph::new(1);
+    let mut g = Graph::new(1, 12);
     for i in 0..5 {
         g.add_node(i as Node);
     }
@@ -343,7 +368,7 @@ mod test {
 
     #[test]
     fn add_node_and_contains() {
-        let mut g = Graph::new(0);
+        let mut g = Graph::new(0, 12);
         assert!(!g.contains(42));
         g.add_node(42);
         assert!(g.contains(42));
@@ -353,7 +378,7 @@ mod test {
 
     #[test]
     fn add_edge_rejects_missing_nodes() {
-        let mut g = Graph::new(0);
+        let mut g = Graph::new(0, 12);
         g.add_node(1);
         assert!(g.add_edge(1, 2).is_err());
         assert!(g.add_edge(999, 1000).is_err());
@@ -361,7 +386,7 @@ mod test {
 
     #[test]
     fn no_self_loops() {
-        let mut g = Graph::new(0);
+        let mut g = Graph::new(0, 12);
         g.add_node(5);
         assert!(g.add_edge(5, 5).is_err());
     }
@@ -381,7 +406,7 @@ mod test {
 
     #[test]
     fn can_not_leave_node_isolated() {
-        let mut g = Graph::new(0);
+        let mut g = Graph::new(0, 12);
         g.add_node(10);
         g.add_node(20);
         g.add_node(30);
@@ -411,7 +436,7 @@ mod test {
 
     #[test]
     fn replace_neighbors_full_replace() {
-        let mut g = Graph::new(0);
+        let mut g = Graph::new(0, 12);
         for i in 0..6 {
             g.add_node(i);
         }
@@ -444,7 +469,7 @@ mod test {
 
     #[test]
     fn replace_neighbors_on_isolated_node() {
-        let mut g = Graph::new(0);
+        let mut g = Graph::new(0, 12);
         g.add_node(100);
         for i in 200..205 {
             g.add_node(i);
@@ -495,7 +520,7 @@ mod test {
 
     #[test]
     fn degree_on_missing_node_errors() {
-        let g = Graph::new(0);
+        let g = Graph::new(0, 12);
         assert!(g.degree(999).is_err());
     }
 
@@ -547,7 +572,7 @@ mod test {
 
     #[test]
     fn remove_neighbors_on_missing_node_panics() {
-        let mut g = Graph::new(0);
+        let mut g = Graph::new(0, 12);
         assert!(g.remove_neighbors(999).is_err());
     }
 }
