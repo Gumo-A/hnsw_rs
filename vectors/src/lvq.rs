@@ -13,36 +13,6 @@ pub struct LVQVec {
 }
 
 impl LVQVec {
-    // Quantizes an already mean-centered vector
-    pub fn new(vector: &Vec<f32>) -> LVQVec {
-        let upper_bound: f32 = *vector
-            .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap();
-        let lower_bound: f32 = *vector
-            .iter()
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap();
-        let delta: f32 = (upper_bound - lower_bound) / (2.0f32.powi(BITS) - 1.0);
-
-        let quantized: Vec<u8> = vector
-            .iter()
-            .map(|x| {
-                let mut buffer: f32 = (x - lower_bound) / delta;
-                buffer += 0.5f32;
-                buffer.floor() as u8
-            })
-            .collect();
-
-        LVQVec {
-            delta,
-            lower: lower_bound,
-            quantized_vec: quantized,
-        }
-    }
-}
-
-impl LVQVec {
     // Have to read this: https://www.reidatcheson.com/hpc/architecture/performance/rust/c++/2019/10/19/measure-cache.html
     pub fn dist2vec(&self, vector: &Vec<f32>) -> f32 {
         let mut acc = [0.0f32; CHUNK_SIZE];
@@ -109,6 +79,32 @@ impl LVQVec {
 }
 
 impl VecBase for LVQVec {
+    fn new(vector: &Vec<f32>) -> LVQVec {
+        let upper_bound: f32 = *vector
+            .iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let lower_bound: f32 = *vector
+            .iter()
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let delta: f32 = (upper_bound - lower_bound) / (2.0f32.powi(BITS) - 1.0);
+
+        let quantized: Vec<u8> = vector
+            .iter()
+            .map(|x| {
+                let mut buffer: f32 = (x - lower_bound) / delta;
+                buffer += 0.5f32;
+                buffer.floor() as u8
+            })
+            .collect();
+
+        LVQVec {
+            delta,
+            lower: lower_bound,
+            quantized_vec: quantized,
+        }
+    }
     fn distance(&self, other: &impl VecBase) -> f32 {
         self.distance_unrolled_full(other.get_vals().chunks_exact(CHUNK_SIZE))
     }

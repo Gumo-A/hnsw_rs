@@ -58,34 +58,34 @@ fn main() -> std::io::Result<()> {
     let mut store = HNSW::new(m, None, embs.dim().unwrap());
     store = store.insert_bulk(embs, 8, true).unwrap();
     let e = s.elapsed().as_millis();
-    println!(
-        "took {0} ms to build index with {1} points and M {2}",
-        e,
-        store.len(),
-        store.params.m
-    );
+    // println!(
+    //     "took {0} ms to build index with {1} points and M {2}",
+    //     e,
+    //     store.len(),
+    //     store.params.m
+    // );
 
     let s = Instant::now();
-    store.save(Path::new("./index"));
+    // store.save(Path::new("./index"));
     let e = s.elapsed().as_millis();
-    println!(
-        "took {0} ms to save index with {1} points and M {2}",
-        e,
-        store.len(),
-        store.params.m
-    );
+    // println!(
+    //     "took {0} ms to save index with {1} points and M {2}",
+    //     e,
+    //     store.len(),
+    //     store.params.m
+    // );
 
     let s = Instant::now();
-    let store: HNSW<LVQVec> = HNSW::load(Path::new("./index")).unwrap();
+    // let store: HNSW<LVQVec> = HNSW::load(Path::new("./index")).unwrap();
     let e = s.elapsed().as_millis();
-    println!(
-        "took {0} ms to load index with {1} points and M {2}",
-        e,
-        store.len(),
-        store.params.m
-    );
+    // println!(
+    //     "took {0} ms to load index with {1} points and M {2}",
+    //     e,
+    //     store.len(),
+    //     store.params.m
+    // );
 
-    // store.layer_degrees(&0);
+    store.layer_degrees(0);
 
     // index.print_index();
     // println!(
@@ -93,7 +93,7 @@ fn main() -> std::io::Result<()> {
     //     start.elapsed().as_millis() - end.elapsed().as_millis()
     // );
 
-    estimate_recall(&store, &test_set, &bf_data);
+    // estimate_recall(&store, &test_set, &bf_data);
 
     // index.assert_param_compliance();
 
@@ -200,7 +200,7 @@ fn estimate_recall(
         for (idx, query) in test_set.iter().enumerate() {
             bar.inc(1);
             let anns: Vec<usize> = index
-                .ann_by_vector(&Point::new_quant(0, 0, &query.clone()), n, ef)
+                .ann_by_vector(&Point::new_with(0, 0, &query), n, ef)
                 .unwrap()
                 .iter()
                 .map(|x| *x as usize)

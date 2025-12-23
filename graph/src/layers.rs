@@ -51,46 +51,19 @@ impl Layers {
 
     fn add_level(&mut self, level: usize) {
         while self.len() <= level {
-            self.levels.push(Graph::new(self.len(), self.m));
+            let m = if self.len() == 0 { self.m * 2 } else { self.m };
+            self.levels.push(Graph::new(self.len(), m));
         }
     }
 
     /// Adds a Node to its layers, based on its maximum level
     /// Creates layers when needed.
-    pub fn add_node_with_level(&mut self, point_id: Node, layer_nb: usize) {
-        self.add_level(layer_nb);
+    pub fn add_node_with_level(&mut self, point_id: Node, level: usize) {
+        self.add_level(level);
         self.levels
             .iter_mut()
-            .take(layer_nb + 1)
+            .take(level + 1)
             .for_each(|layer| layer.add_node(point_id));
-    }
-
-    pub fn apply_insertion_results(
-        &self,
-        layer_nb: usize,
-        node_data: &IntMap<Node, BTreeSet<Dist>>,
-    ) -> Result<(), String> {
-        let layer = self.get_layer(layer_nb);
-        for (node, neighbors) in node_data.iter() {
-            match layer.replace_neighbors(*node, neighbors.iter().map(|dist| dist.id)) {
-                Ok(()) => {}
-                Err(e) => match e {
-                    GraphError::NodeNotInGraph(n) => panic!(
-                        "Trying to replace neighbors for {node}, node {n} wasn't found in the Graph"
-                    ),
-                    GraphError::SelfConnection(n) => panic!(
-                        "Trying to replace neighbors for {node}, node {n} tried doing a self connection"
-                    ),
-                    GraphError::DegreeLimitReached(n) => panic!(
-                        "Trying to replace neighbors for {node}, node {n} would exceed degree limit"
-                    ),
-                    GraphError::WouldIsolateNode(n) => {
-                        panic!("Trying to replace neighbors for {node}, node {n} would be isolated")
-                    }
-                },
-            }
-        }
-        Ok(())
     }
 }
 

@@ -2,19 +2,21 @@ use crate::VecBase;
 
 #[derive(Debug, Clone)]
 pub struct ByteVec {
-    pub vals: Vec<u8>,
+    pub vector: Vec<u8>,
 }
 
 impl ByteVec {
-    pub fn new(data: Vec<u8>) -> ByteVec {
-        ByteVec { vals: data }
-    }
     pub fn iter_vals_mut(&mut self) -> impl Iterator<Item = &mut u8> {
-        self.vals.iter_mut()
+        self.vector.iter_mut()
     }
 }
 
 impl VecBase for ByteVec {
+    fn new(vector: &Vec<f32>) -> ByteVec {
+        ByteVec {
+            vector: vector.iter().map(|x| *x as u8).collect(),
+        }
+    }
     fn distance(&self, other: &impl VecBase) -> f32 {
         self.iter_vals()
             .zip(other.iter_vals())
@@ -32,11 +34,11 @@ impl VecBase for ByteVec {
     }
 
     fn iter_vals(&self) -> impl Iterator<Item = f32> {
-        self.vals.iter().map(|x| *x as f32)
+        self.vector.iter().map(|x| *x as f32)
     }
 
     fn dim(&self) -> usize {
-        self.vals.len()
+        self.vector.len()
     }
     fn center(&mut self, _: &Vec<f32>) {}
     fn decenter(&mut self, _: &Vec<f32>) {}

@@ -14,6 +14,7 @@ use crate::serializer::Serializer;
 pub trait VecTrait: VecBase + Serializer + Clone {}
 
 pub trait VecBase {
+    fn new(vector: &Vec<f32>) -> Self;
     fn center(&mut self, means: &Vec<f32>);
     fn decenter(&mut self, means: &Vec<f32>);
     fn dim(&self) -> usize;

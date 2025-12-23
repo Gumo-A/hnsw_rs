@@ -6,8 +6,8 @@ fn dist_err_lt_one_percent() {
         let rand_a = gen_rand_vecs(128, 1)[0].clone();
         let rand_b = gen_rand_vecs(128, 1)[0].clone();
 
-        let a = FullVec::new(rand_a.clone());
-        let b = FullVec::new(rand_b.clone());
+        let a = FullVec::new(&rand_a.clone());
+        let b = FullVec::new(&rand_b.clone());
 
         let full2full_dist = a.distance(&b);
 

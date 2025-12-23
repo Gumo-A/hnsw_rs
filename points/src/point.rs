@@ -1,7 +1,5 @@
-use core::panic;
-
 use graph::nodes::Node;
-use vectors::{FullVec, LVQVec, VecBase, VecTrait, serializer::Serializer};
+use vectors::{FullVec, VecBase, VecTrait, serializer::Serializer};
 
 #[derive(Debug, Clone)]
 pub struct Point<T: VecTrait> {
@@ -25,7 +23,27 @@ impl<T: VecTrait> Point<T> {
     }
 }
 
+impl<T: VecTrait> Point<T> {
+    pub fn new_with(id: Node, level: usize, vector: &Vec<f32>) -> Point<T> {
+        let mut point = Self::new(vector);
+        point.id = id;
+        point.level = level as u8;
+        point
+    }
+}
+
 impl<T: VecTrait> VecBase for Point<T> {
+    /// Builds a point with ID 0 and level 0 by default.
+    /// Use new_with to specify these values.
+    fn new(vector: &Vec<f32>) -> Point<T> {
+        Point {
+            id: 0,
+            level: 0,
+            removed: false,
+            vector: T::new(vector),
+        }
+    }
+
     fn distance(&self, other: &impl VecBase) -> f32 {
         self.vector.distance(other)
     }
@@ -46,37 +64,13 @@ impl<T: VecTrait> VecBase for Point<T> {
     }
 }
 
-impl Point<LVQVec> {
-    pub fn new_quant(id: Node, level: u8, vector: &Vec<f32>) -> Point<LVQVec> {
-        Point {
-            id,
-            level,
-            removed: false,
-            vector: LVQVec::new(vector),
-        }
-    }
-}
-
 impl Point<FullVec> {
-    pub fn new_full(id: Node, level: u8, vector: Vec<f32>) -> Point<FullVec> {
-        Point {
-            id,
-            level,
-            removed: false,
-            vector: FullVec::new(vector),
-        }
-    }
-
     pub fn iter_vals_mut(&mut self) -> impl Iterator<Item = &mut f32> {
         self.vector.iter_vals_mut()
     }
 
     pub fn get_low_vector(&self) -> &Vec<f32> {
-        &self.vector.vals
-    }
-
-    pub fn quantized(&self) -> Point<LVQVec> {
-        Point::new_quant(self.id, self.level, self.get_low_vector())
+        &self.vector.vector
     }
 }
 
@@ -130,12 +124,12 @@ impl<T: VecTrait> VecTrait for Point<T> {}
 #[cfg(test)]
 mod test {
 
-    use vectors::gen_rand_vecs;
+    use vectors::{LVQVec, gen_rand_vecs};
 
     use super::*;
 
     #[test]
-    fn serialization() {
+    fn full_serialization() {
         let rand_vecs = gen_rand_vecs(128, 2);
 
         let a_id = 32;
@@ -146,8 +140,8 @@ mod test {
         let b_level = 1;
         let b_vector = rand_vecs[1].clone();
 
-        let a = Point::new_full(a_id, a_level, a_vector.clone());
-        let b = Point::new_full(b_id, b_level, b_vector.clone());
+        let a: Point<FullVec> = Point::new_with(a_id, a_level, &a_vector);
+        let b: Point<FullVec> = Point::new_with(b_id, b_level, &b_vector);
 
         let a_ser = a.serialize();
         let b_ser = b.serialize();
@@ -156,12 +150,46 @@ mod test {
         let b: Point<FullVec> = Point::deserialize(b_ser);
 
         assert_eq!(a_id, a.id);
-        assert_eq!(a_level, a.level);
+        assert_eq!(a_level, a.level as usize);
         assert_eq!(a_vector, a.vector.get_vals());
 
         assert_eq!(b_id, b.id);
-        assert_eq!(b_level, b.level);
+        assert_eq!(b_level, b.level as usize);
         assert_eq!(b_vector, b.vector.get_vals());
+    }
+
+    #[test]
+    fn quant_serialization() {
+        let rand_vecs = gen_rand_vecs(128, 2);
+
+        let a_id = 32;
+        let a_level = 2;
+        let a_vector = rand_vecs[0].clone();
+
+        let b_id = 16;
+        let b_level = 1;
+        let b_vector = rand_vecs[1].clone();
+
+        let a: Point<LVQVec> = Point::new_with(a_id, a_level, &a_vector);
+        let b: Point<LVQVec> = Point::new_with(b_id, b_level, &b_vector);
+
+        let a_ser = a.serialize();
+        let b_ser = b.serialize();
+
+        let a: Point<LVQVec> = Point::deserialize(a_ser);
+        let b: Point<LVQVec> = Point::deserialize(b_ser);
+
+        assert_eq!(a_id, a.id);
+        assert_eq!(a_level, a.level as usize);
+        let ratio = (a_vector[0] - a.vector.get_vals()[0]).abs() / a_vector[0];
+        println!("{ratio}");
+        assert!(ratio < 0.02);
+
+        assert_eq!(b_id, b.id);
+        assert_eq!(b_level, b.level as usize);
+        let ratio = (b_vector[0] - b.vector.get_vals()[0]).abs() / b_vector[0];
+        println!("{ratio}");
+        assert!(ratio < 0.02);
     }
 
     #[test]

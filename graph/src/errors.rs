@@ -3,7 +3,7 @@ use crate::nodes::Node;
 #[derive(Debug)]
 pub enum GraphError {
     NodeNotInGraph(Node),
-    WouldIsolateNode(Node),
+    IsolatedNode(Node),
     SelfConnection(Node),
-    DegreeLimitReached(Node),
+    MExceeded(Node),
 }
