@@ -1,9 +1,9 @@
-use crate::nodes::Node;
+use crate::nodes::NodeID;
 
 #[derive(Debug)]
 pub enum GraphError {
-    NodeNotInGraph(Node),
-    IsolatedNode(Node),
-    SelfConnection(Node),
-    MExceeded(Node),
+    NodeNotInGraph(NodeID),
+    IsolatedNode(NodeID),
+    SelfConnection(NodeID),
+    MExceeded(NodeID),
 }

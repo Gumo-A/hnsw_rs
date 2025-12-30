@@ -1,16 +1,16 @@
 use crate::errors::GraphError;
-use crate::nodes::Node;
+use crate::nodes::NodeID;
 
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
 use std::sync::{Arc, Mutex};
 use vectors::serializer::Serializer;
 
-type Neighbors = Arc<Mutex<IntSet<Node>>>;
+type Neighbors = Arc<Mutex<IntSet<NodeID>>>;
 
 #[derive(Debug, Clone)]
 pub struct Graph {
-    pub nodes: IntMap<Node, Neighbors>,
+    pub nodes: IntMap<NodeID, Neighbors>,
     pub level: usize,
     pub m: usize,
 }
@@ -24,17 +24,17 @@ impl Graph {
         }
     }
 
-    pub fn iter_nodes(&self) -> impl Iterator<Item = Node> {
+    pub fn iter_nodes(&self) -> impl Iterator<Item = NodeID> {
         self.nodes.keys().copied()
     }
 
-    pub fn add_node(&mut self, point_id: Node) {
+    pub fn add_node(&mut self, point_id: NodeID) {
         self.nodes
             .entry(point_id)
             .or_insert(Arc::new(Mutex::new(IntSet::default())));
     }
 
-    fn add_edge(&self, node_a: Node, node_b: Node) -> Result<(), GraphError> {
+    fn add_edge(&self, node_a: NodeID, node_b: NodeID) -> Result<(), GraphError> {
         if node_a == node_b {
             return Err(GraphError::SelfConnection(node_a));
         }
@@ -52,8 +52,8 @@ impl Graph {
 
     fn get_nodes_neighbors(
         &self,
-        node_a: Node,
-        node_b: Node,
+        node_a: NodeID,
+        node_b: NodeID,
     ) -> Result<(&Neighbors, &Neighbors), GraphError> {
         match (self.nodes.get(&node_a), self.nodes.get(&node_b)) {
             (Some(a), Some(b)) => Ok((a, b)),
@@ -68,7 +68,7 @@ impl Graph {
 
     /// Removes an edge from the Graph.
     /// Since the add_edge method won't allow for self-connecting nodes, we don't check that here.
-    fn remove_edge(&self, node_a: Node, node_b: Node) -> Result<(), GraphError> {
+    fn remove_edge(&self, node_a: NodeID, node_b: NodeID) -> Result<(), GraphError> {
         let (a, b) = self.get_nodes_neighbors(node_a, node_b)?;
 
         {
@@ -81,7 +81,7 @@ impl Graph {
         Ok(())
     }
 
-    fn isolate_node(&self, node: Node) -> Result<(), GraphError> {
+    fn isolate_node(&self, node: NodeID) -> Result<(), GraphError> {
         for neighbor in self.neighbors_vec(node)?.iter() {
             if self.degree(*neighbor)? == 1 {
                 continue;
@@ -91,14 +91,14 @@ impl Graph {
         Ok(())
     }
 
-    pub fn neighbors(&self, node: Node) -> Result<IntSet<Node>, GraphError> {
+    pub fn neighbors(&self, node: NodeID) -> Result<IntSet<NodeID>, GraphError> {
         match self.nodes.get(&node) {
             Some(neighbors) => Ok(neighbors.lock().unwrap().clone()),
             None => Err(GraphError::NodeNotInGraph(node)),
         }
     }
 
-    pub fn neighbors_vec(&self, node: Node) -> Result<Vec<Node>, GraphError> {
+    pub fn neighbors_vec(&self, node: NodeID) -> Result<Vec<NodeID>, GraphError> {
         let neighbors = match self.nodes.get(&node) {
             Some(neighbors) => neighbors,
             None => {
@@ -110,9 +110,9 @@ impl Graph {
     }
 
     /// Replaces the neighbors of node with new_neighbors.
-    pub fn replace_neighbors<I>(&self, node: Node, new_neighbors: I) -> Result<(), GraphError>
+    pub fn replace_neighbors<I>(&self, node: NodeID, new_neighbors: I) -> Result<(), GraphError>
     where
-        I: Iterator<Item = Node>,
+        I: Iterator<Item = NodeID>,
     {
         self.isolate_node(node)?;
         self.add_neighbors(node, new_neighbors)?;
@@ -120,9 +120,9 @@ impl Graph {
         Ok(())
     }
 
-    pub fn add_neighbors<I>(&self, node: Node, new_neighbors: I) -> Result<(), GraphError>
+    pub fn add_neighbors<I>(&self, node: NodeID, new_neighbors: I) -> Result<(), GraphError>
     where
-        I: Iterator<Item = Node>,
+        I: Iterator<Item = NodeID>,
     {
         for n in new_neighbors {
             self.add_edge(node, n)?;
@@ -131,7 +131,7 @@ impl Graph {
         Ok(())
     }
 
-    pub fn degree(&self, node: Node) -> Result<usize, GraphError> {
+    pub fn degree(&self, node: NodeID) -> Result<usize, GraphError> {
         match self.nodes.get(&node) {
             Some(neighbors) => Ok(neighbors.lock().unwrap().len()),
             None => Err(GraphError::NodeNotInGraph(node)),
@@ -142,20 +142,20 @@ impl Graph {
         self.nodes.len()
     }
 
-    pub fn contains(&self, node_id: Node) -> bool {
+    pub fn contains(&self, node_id: NodeID) -> bool {
         self.nodes.contains_key(&node_id)
     }
 
     /// Val          Bytes
     /// Node         4
     /// neighbors    m * 4
-    fn serialize_adj_list(&self, node_id: Node) -> Vec<u8> {
+    fn serialize_adj_list(&self, node_id: NodeID) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(4 + (self.m * 4));
         bytes.extend_from_slice(&node_id.to_be_bytes());
 
         let mut neighbors = self.neighbors_vec(node_id).unwrap();
         while neighbors.len() < self.m {
-            neighbors.push(Node::MAX);
+            neighbors.push(NodeID::MAX);
         }
         for n in neighbors {
             bytes.extend_from_slice(&n.to_be_bytes());
@@ -166,14 +166,14 @@ impl Graph {
 
     /// Val          Bytes
     /// neighbors    m * 4
-    fn deserialize_neighbors(data: &[u8]) -> Vec<Node> {
+    fn deserialize_neighbors(data: &[u8]) -> Vec<NodeID> {
         let m = data.len() / 4;
         let mut neighbors = Vec::with_capacity(m);
         let mut i = 0;
         for _ in 0..m {
-            let n: Node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
+            let n: NodeID = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
             i += 4;
-            if n == Node::MAX {
+            if n == NodeID::MAX {
                 break;
             }
             neighbors.push(n);
@@ -238,7 +238,7 @@ impl Serializer for Graph {
 pub fn make_rand_graph(n: usize, degree: usize) -> Graph {
     let mut rng = rand::thread_rng();
     let nodes =
-        IntMap::from_iter((0..n).map(|id| (id as Node, Arc::new(Mutex::new(IntSet::default())))));
+        IntMap::from_iter((0..n).map(|id| (id as NodeID, Arc::new(Mutex::new(IntSet::default())))));
     let graph = Graph {
         nodes,
         level: 0,
@@ -247,7 +247,7 @@ pub fn make_rand_graph(n: usize, degree: usize) -> Graph {
     for node in 0..n {
         let neighbors = (0..n).choose_multiple(&mut rng, degree);
         for n in neighbors {
-            match graph.add_edge(node as Node, n as Node) {
+            match graph.add_edge(node as NodeID, n as NodeID) {
                 Err(_) => continue,
                 Ok(_) => continue,
             }
@@ -259,7 +259,7 @@ pub fn make_rand_graph(n: usize, degree: usize) -> Graph {
 pub fn simple_graph() -> Graph {
     let mut g = Graph::new(1, 12);
     for i in 0..5 {
-        g.add_node(i as Node);
+        g.add_node(i as NodeID);
     }
     g.add_edge(0, 1).unwrap();
     g.add_edge(0, 2).unwrap();
@@ -274,7 +274,7 @@ pub fn simple_graph() -> Graph {
 mod test {
     use crate::{
         graph::{Graph, make_rand_graph, simple_graph},
-        nodes::Node,
+        nodes::NodeID,
     };
     use nohash_hasher::IntSet;
     use std::sync::Arc;
@@ -357,7 +357,7 @@ mod test {
         let neigh_set = g.neighbors(1).unwrap();
         let neigh_vec = g.neighbors_vec(1).unwrap();
 
-        let expected: IntSet<Node> = [0, 2, 4].into_iter().collect();
+        let expected: IntSet<NodeID> = [0, 2, 4].into_iter().collect();
         assert_eq!(neigh_set, expected);
 
         assert_eq!(neigh_vec.len(), 3);
@@ -435,8 +435,10 @@ mod test {
 
         for node in original.iter_nodes() {
             assert!(restored.contains(node));
-            let orig_neigh: IntSet<Node> = original.neighbors(node).unwrap().into_iter().collect();
-            let rest_neigh: IntSet<Node> = restored.neighbors(node).unwrap().into_iter().collect();
+            let orig_neigh: IntSet<NodeID> =
+                original.neighbors(node).unwrap().into_iter().collect();
+            let rest_neigh: IntSet<NodeID> =
+                restored.neighbors(node).unwrap().into_iter().collect();
             assert_eq!(orig_neigh, rest_neigh);
         }
     }

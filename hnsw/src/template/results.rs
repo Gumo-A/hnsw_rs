@@ -1,21 +1,21 @@
 use core::panic;
-use graph::errors::GraphError;
 use graph::graph::Graph;
-use graph::nodes::{Dist, Node};
+use graph::nodes::Dist;
+use graph::{errors::GraphError, nodes::NodeID};
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
-use points::point_collection::Points;
+use points::points::Points;
 use std::collections::BTreeSet;
 use vectors::{VecBase, VecTrait};
 
 type OrderedDists = BTreeSet<Dist>;
-pub type LayerResult = IntMap<Node, OrderedDists>;
+pub type LayerResult = IntMap<NodeID, OrderedDists>;
 type LayersResults = IntMap<usize, LayerResult>;
 
 pub struct Results {
     pub selected: OrderedDists,
     pub candidates: OrderedDists,
-    pub visited: IntSet<Node>,
+    pub visited: IntSet<NodeID>,
     pub visited_h: OrderedDists,
     pub insertion_results: LayersResults,
     pub prune_results: LayersResults,
@@ -54,7 +54,7 @@ impl Results {
         point: &Point<T>,
         points: &Points<T>,
     ) -> Dist {
-        let point_ids: Vec<Node> = self.selected.iter().map(|n| n.id).collect();
+        let point_ids: Vec<NodeID> = self.selected.iter().map(|n| n.id).collect();
         let selected_points = points.get_points_iter(point_ids.iter().copied());
         let distances = point.dist2many(selected_points);
         distances
@@ -64,13 +64,18 @@ impl Results {
             .unwrap()
     }
 
-    pub fn save_layer_results(&mut self, layer_nb: usize, point_id: Node) {
+    pub fn save_layer_results(&mut self, layer_nb: usize, point_id: NodeID) {
         let point_neighbors = self.selected.clone();
         let layer_result = self.get_insertion_result(layer_nb);
         layer_result.insert(point_id, point_neighbors);
     }
 
-    pub fn insert_prune_result(&mut self, layer_nb: usize, node_id: Node, nearest: BTreeSet<Dist>) {
+    pub fn insert_prune_result(
+        &mut self,
+        layer_nb: usize,
+        node_id: NodeID,
+        nearest: BTreeSet<Dist>,
+    ) {
         let layer_result = self.get_prune_result(layer_nb);
         layer_result.insert(node_id, nearest);
     }
@@ -79,7 +84,7 @@ impl Results {
         self.selected.insert(dist);
     }
 
-    pub fn insert_visited(&mut self, idx: Node) -> bool {
+    pub fn insert_visited(&mut self, idx: NodeID) -> bool {
         self.visited.insert(idx)
     }
 

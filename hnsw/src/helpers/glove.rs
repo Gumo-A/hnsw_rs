@@ -1,7 +1,8 @@
 use core::panic;
-use graph::nodes::{Dist, Node};
+use graph::nodes::{Dist, NodeID};
 use indicatif::{ProgressBar, ProgressStyle};
-use points::{point::Point, point_collection::Points};
+use points::point::Point;
+use points::points::Points;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
@@ -82,15 +83,15 @@ pub fn brute_force_nns(
     nb_nns: usize,
     train_set: Arc<Points<FullVec>>,
     test_set: Arc<Points<FullVec>>,
-    ids: Vec<Node>,
+    ids: Vec<NodeID>,
     bar: ProgressBar,
-) -> HashMap<Node, Vec<Node>> {
-    let mut brute_force_results: HashMap<Node, Vec<Node>> = HashMap::new();
+) -> HashMap<NodeID, Vec<NodeID>> {
+    let mut brute_force_results: HashMap<NodeID, Vec<NodeID>> = HashMap::new();
     for idx in ids.iter() {
         let query = test_set
-            .get_point(*idx as Node)
+            .get_point(*idx as NodeID)
             .expect("Point ID not found in collection.");
-        let nns: Vec<Node> = get_nn_bf(query, &train_set, nb_nns);
+        let nns: Vec<NodeID> = get_nn_bf(query, &train_set, nb_nns);
         assert_eq!(nb_nns, nns.len());
         brute_force_results.insert(*idx, nns);
         bar.inc(1);
@@ -99,7 +100,7 @@ pub fn brute_force_nns(
     brute_force_results
 }
 
-fn get_nn_bf(point: &Point<FullVec>, others: &Arc<Points<FullVec>>, nb_nns: usize) -> Vec<Node> {
+fn get_nn_bf(point: &Point<FullVec>, others: &Arc<Points<FullVec>>, nb_nns: usize) -> Vec<NodeID> {
     let sorted = sort_by_distance(point, others);
     sorted.iter().take(nb_nns).map(|x| x.id).collect()
 }

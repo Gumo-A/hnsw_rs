@@ -6,7 +6,7 @@ use nohash_hasher::IntMap;
 use crate::{
     errors::GraphError,
     graph::Graph,
-    nodes::{Dist, Node},
+    nodes::{Dist, NodeID},
 };
 
 #[derive(Debug, Clone)]
@@ -58,7 +58,7 @@ impl Layers {
 
     /// Adds a Node to its layers, based on its maximum level
     /// Creates layers when needed.
-    pub fn add_node_with_level(&mut self, point_id: Node, level: usize) {
+    pub fn add_node_with_level(&mut self, point_id: NodeID, level: usize) {
         self.add_level(level);
         self.levels
             .iter_mut()

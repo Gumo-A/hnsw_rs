@@ -1,13 +1,13 @@
-pub type Node = u32;
+pub type NodeID = u32;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Dist {
-    pub id: Node,
+    pub id: NodeID,
     pub dist: f32,
 }
 
 impl Dist {
-    pub fn new(id: Node, dist: f32) -> Self {
+    pub fn new(id: NodeID, dist: f32) -> Self {
         Dist { id, dist }
     }
 }

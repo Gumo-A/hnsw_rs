@@ -1,16 +1,17 @@
 use indicatif::{ProgressBar, ProgressStyle};
+use points::points::block::BlockID;
+use points::points::Points;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::thread;
 
-use graph::nodes::Node;
+use graph::nodes::NodeID;
 use rand::seq::IteratorRandom;
 
 use hnsw::helpers::args::parse_args_bf;
 use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
-use points::point_collection::Points;
 
 const NB_NNS: usize = 100;
 
@@ -37,15 +38,15 @@ fn main() -> std::io::Result<()> {
     let test_frac = 0.01;
     let (train_set, test_set, train_idx, test_idx) = split_glove(embeddings, test_frac);
 
-    let train_set = Points::new_full(train_set, 0.0);
-    let test_set = Points::new_full(test_set, 0.0);
+    let train_set = Points::new_full(train_set, 0.0, BlockID::MAX);
+    let test_set = Points::new_full(test_set, 0.0, BlockID::MAX);
 
     let train_arc = Arc::new(train_set);
     let test_arc = Arc::new(test_set);
 
     let nb_threads = std::thread::available_parallelism().unwrap().get();
-    let test_ids: Vec<Node> = test_arc.ids().collect();
-    let mut indices_split: Vec<Vec<Node>> = test_ids
+    let test_ids: Vec<NodeID> = test_arc.ids().collect();
+    let mut indices_split: Vec<Vec<NodeID>> = test_ids
         .chunks(((test_ids.len() as f32) / (nb_threads as f32)) as usize)
         .map(|chunk| Vec::from(chunk))
         .collect();

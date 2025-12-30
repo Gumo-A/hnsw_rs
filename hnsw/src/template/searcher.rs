@@ -1,7 +1,7 @@
 use core::panic;
 
 use graph::{errors::GraphError, graph::Graph, nodes::Dist};
-use points::{point::Point, point_collection::Points};
+use points::{point::Point, points::Points};
 use vectors::{VecBase, VecTrait};
 
 use crate::template::results::Results;
