@@ -26,11 +26,7 @@ impl Inserter {
         &mut self.results
     }
 
-    pub fn build_insertion_results<T: VecTrait>(
-        &mut self,
-        index: &HNSW<T>,
-        point: &Point<T>,
-    ) -> Result<(), String> {
+    pub fn build_insertion_results(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
         if point.id == index.params.ep {
             return Ok(());
         }
@@ -40,7 +36,7 @@ impl Inserter {
         Ok(())
     }
 
-    pub fn setup_insert<T: VecTrait>(&mut self, index: &HNSW<T>, point: &Point<T>) {
+    pub fn setup_insert(&mut self, index: &HNSW, point: &Point) {
         self.results.clear_all();
 
         let dist2ep = index
@@ -51,11 +47,7 @@ impl Inserter {
             .insert_selected(Dist::new(index.params.ep, dist2ep));
     }
 
-    pub fn traverse_layers_above<T: VecTrait>(
-        &mut self,
-        index: &HNSW<T>,
-        point: &Point<T>,
-    ) -> Result<(), String> {
+    pub fn traverse_layers_above(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
         let layers_len = index.layers.len();
 
         for layer_nb in (point.level as usize + 1..layers_len).rev() {
@@ -65,11 +57,7 @@ impl Inserter {
         }
         Ok(())
     }
-    pub fn traverse_layers_below<T: VecTrait>(
-        &mut self,
-        index: &HNSW<T>,
-        point: &Point<T>,
-    ) -> Result<(), String> {
+    pub fn traverse_layers_below(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
         let bound = (point.level as usize).min(index.layers.len() - 1);
         for layer_nb in (0..=bound).rev() {
             let layer = index.get_layer(layer_nb);

@@ -40,6 +40,4 @@ impl VecBase for ByteVec {
     fn dim(&self) -> usize {
         self.vector.len()
     }
-    fn center(&mut self, _: &Vec<f32>) {}
-    fn decenter(&mut self, _: &Vec<f32>) {}
 }

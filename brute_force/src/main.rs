@@ -1,6 +1,5 @@
 use indicatif::{ProgressBar, ProgressStyle};
-use points::points::block::BlockID;
-use points::points::Points;
+use points::points::{BlockPoints, Points};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
@@ -16,7 +15,7 @@ use hnsw::helpers::glove::{brute_force_nns, load_glove_array};
 const NB_NNS: usize = 100;
 
 fn main() -> std::io::Result<()> {
-    let (dim, lim) = match parse_args_bf() {
+    let (_dim, lim) = match parse_args_bf() {
         Ok(args) => args,
         Err(err) => {
             println!("Help: brute_force");
@@ -26,20 +25,19 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let file_name = format!("glove.840B.{dim}d");
-
+    let file_name = "glove-50d";
     let _ = create_dir_all(format!(
         "/home/gamal/glove_dataset/test_data/{file_name}_lim{lim}/"
     ));
 
-    let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) =
-        load_glove_array(lim, file_name.clone(), true).unwrap();
+    let file = File::open(format!("/home/gamal/glove_dataset/{file_name}.txt"))?;
+    let (_, embeddings): (Vec<String>, Vec<Vec<f32>>) = load_glove_array(lim, file, true).unwrap();
 
     let test_frac = 0.01;
     let (train_set, test_set, train_idx, test_idx) = split_glove(embeddings, test_frac);
 
-    let train_set = Points::new_full(train_set, 0.0, BlockID::MAX);
-    let test_set = Points::new_full(test_set, 0.0, BlockID::MAX);
+    let train_set = BlockPoints::new(train_set, 0.0);
+    let test_set = BlockPoints::new(test_set, 0.0);
 
     let train_arc = Arc::new(train_set);
     let test_arc = Arc::new(test_set);

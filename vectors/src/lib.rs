@@ -5,7 +5,7 @@ pub mod serializer;
 
 pub use bytes::ByteVec;
 pub use full::FullVec;
-pub use lvq::LVQVec;
+pub use lvq::QuantVec;
 
 use rand::Rng;
 
@@ -15,8 +15,6 @@ pub trait VecTrait: VecBase + Serializer + Clone {}
 
 pub trait VecBase {
     fn new(vector: &Vec<f32>) -> Self;
-    fn center(&mut self, means: &Vec<f32>);
-    fn decenter(&mut self, means: &Vec<f32>);
     fn dim(&self) -> usize;
     fn iter_vals(&self) -> impl Iterator<Item = f32>;
     fn distance(&self, other: &impl VecBase) -> f32;
@@ -31,10 +29,6 @@ pub trait VecBase {
 
     fn get_vals(&self) -> Vec<f32> {
         self.iter_vals().collect()
-    }
-
-    fn quantize(&self) -> LVQVec {
-        LVQVec::new(&self.get_vals())
     }
 }
 

@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::Path;
 use std::time::Instant;
 use std::{collections::HashSet, fs::remove_dir_all};
@@ -12,7 +13,7 @@ use hnsw::template::HNSW;
 use indicatif::{ProgressBar, ProgressStyle};
 use points::point::Point;
 use points::points::block::BlockID;
-use vectors::{LVQVec, VecBase, VecTrait};
+use vectors::{QuantVec, VecBase, VecTrait};
 
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -28,9 +29,9 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    let file_name = format!("glove.840B.{dim}d");
+    let file = File::open(format!("/home/gamal/glove_dataset/glove-50d.txt"))?;
 
-    let (words, embeddings) = load_glove_array(lim, file_name.clone(), true).unwrap();
+    let (words, embeddings) = load_glove_array(lim, file, true).unwrap();
     // let embs = load_sift_array(lim, true).unwrap();
 
     // let (bf_data, train_ids, test_ids) = match load_bf_data(lim, file_name.clone()) {
@@ -55,7 +56,7 @@ fn main() -> std::io::Result<()> {
     //     .collect();
 
     let s = Instant::now();
-    let mut store: HNSW<LVQVec> = HNSW::new(m, None, embeddings[0].len(), BlockID::MAX);
+    let mut store = HNSW::new(m, None, embeddings[0].len());
     store = store.insert_bulk(embeddings, 8, true).unwrap();
     let e = s.elapsed().as_millis();
     println!(
@@ -81,7 +82,7 @@ fn main() -> std::io::Result<()> {
     );
 
     let s = Instant::now();
-    let store: HNSW<LVQVec> = HNSW::load(path).unwrap();
+    let store = HNSW::load(path).unwrap();
     let e = s.elapsed().as_millis();
     println!(
         "took {0} ms to load index with {1} points and M {2}",
@@ -134,7 +135,7 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn show_nn_words<T: VecTrait>(words: &Vec<String>, store: &HNSW<T>, max: usize) {
+fn show_nn_words(words: &Vec<String>, store: &HNSW, max: usize) {
     let ef = 1000;
     let mut words: Vec<(usize, &String)> = words.iter().enumerate().collect();
     words.shuffle(&mut thread_rng());
@@ -155,11 +156,7 @@ fn show_nn_words<T: VecTrait>(words: &Vec<String>, store: &HNSW<T>, max: usize) 
     }
 }
 
-fn estimate_recall(
-    index: &HNSW<LVQVec>,
-    test_set: &Vec<Vec<f32>>,
-    bf_data: &HashMap<usize, Vec<usize>>,
-) {
+fn estimate_recall(index: &HNSW, test_set: &Vec<Vec<f32>>, bf_data: &HashMap<usize, Vec<usize>>) {
     let n = 100;
     for ef in (100..=1000).step_by(100) {
         let bar = ProgressBar::new(test_set.len() as u64);

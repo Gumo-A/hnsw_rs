@@ -1,13 +1,6 @@
 use core::panic;
-use std::collections::BTreeSet;
 
-use nohash_hasher::IntMap;
-
-use crate::{
-    errors::GraphError,
-    graph::Graph,
-    nodes::{Dist, NodeID},
-};
+use crate::{graph::Graph, nodes::NodeID};
 
 #[derive(Debug, Clone)]
 pub struct Layers {
@@ -52,7 +45,8 @@ impl Layers {
     fn add_level(&mut self, level: usize) {
         while self.len() <= level {
             let m = if self.len() == 0 { self.m * 2 } else { self.m };
-            self.levels.push(Graph::new(self.len(), m));
+            let g = Graph::new(self.len(), m);
+            self.add_layer(g);
         }
     }
 

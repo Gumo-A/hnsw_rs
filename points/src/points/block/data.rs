@@ -3,22 +3,17 @@ use vectors::{VecBase, VecTrait, serializer::Serializer};
 
 use crate::{
     point::Point,
-    points::block::{BlockID, header::BlockHeader},
+    points::block::{BlockID, MAX_PER_BLOCK, header::BlockHeader},
 };
 
 #[derive(Clone, Debug)]
-pub struct BlockData<T: VecTrait> {
-    pub data: Vec<Point<T>>,
-    pub max_points: usize,
+pub struct BlockData {
+    pub data: Vec<Point>,
 }
 
-impl<T: VecTrait> BlockData<T> {
-    pub fn new(max_points: BlockID) -> Self {
-        let max_points = max_points as usize;
-        BlockData {
-            data: Vec::new(),
-            max_points,
-        }
+impl BlockData {
+    pub fn new() -> Self {
+        BlockData { data: Vec::new() }
     }
 
     pub fn dim(&self) -> usize {
@@ -33,14 +28,14 @@ impl<T: VecTrait> BlockData<T> {
         self.data.iter().map(|p| p.id).collect()
     }
 
-    pub fn add_point(&mut self, point: Point<T>) {
-        if self.len() < self.max_points {
+    pub fn add_point(&mut self, point: Point) {
+        if self.len() < MAX_PER_BLOCK.into() {
             self.data.push(point);
         }
     }
 
-    pub fn get_point(&self, idx: NodeID) -> Option<&Point<T>> {
-        let pos = idx as usize % self.max_points;
+    pub fn get_point(&self, idx: NodeID) -> Option<&Point> {
+        let pos = idx % MAX_PER_BLOCK as NodeID;
         self.data.get(pos as usize)
     }
 
@@ -56,8 +51,7 @@ impl<T: VecTrait> BlockData<T> {
         let block_id = header.id as usize;
         let nb_points = header.nb_points as usize;
         let point_size = header.point_size as usize;
-        let max_points = header.max_points as usize;
-        let block_adder = block_id * max_points;
+        let block_adder: usize = block_id * MAX_PER_BLOCK as usize;
 
         let mut points = Vec::new();
         let mut i = 0;
@@ -68,10 +62,7 @@ impl<T: VecTrait> BlockData<T> {
             points.push(point);
             i += point_size;
         }
-        Self {
-            data: points,
-            max_points,
-        }
+        Self { data: points }
     }
 }
 
@@ -83,27 +74,25 @@ mod test {
 
     use crate::{
         point::Point,
-        points::block::{BlockID, data::BlockData, header::BlockHeader},
+        points::block::{BlockID, MAX_PER_BLOCK, data::BlockData, header::BlockHeader},
     };
-
-    const MAX_POINTS: BlockID = 16;
 
     #[test]
     fn max_points() {
-        let vectors = gen_rand_vecs(4, (MAX_POINTS as usize * 2) + 16);
-        let mut block: BlockData<FullVec> = BlockData::new(MAX_POINTS);
+        let vectors = gen_rand_vecs(4, (MAX_PER_BLOCK as usize * 2) + 16);
+        let mut block: BlockData = BlockData::new();
         for v in vectors {
             let point = Point::new(&v);
             block.add_point(point);
         }
-        assert_eq!(block.len(), MAX_POINTS as usize);
+        assert_eq!(block.len(), MAX_PER_BLOCK as usize);
     }
 
     #[test]
     fn pos_from_ids() {
         let n = 8;
         let vectors = gen_rand_vecs(4, n);
-        let mut block: BlockData<FullVec> = BlockData::new(MAX_POINTS);
+        let mut block = BlockData::new();
         for v in vectors.iter() {
             let point = Point::new_with(0, v);
             block.add_point(point);
@@ -112,7 +101,7 @@ mod test {
             let point = block.get_point(idx as NodeID);
             assert!(point.is_some());
             assert_eq!(
-                point.unwrap().get_low_vector(),
+                &point.unwrap().get_vals(),
                 vectors.get(idx as usize).unwrap()
             );
         }
@@ -122,7 +111,7 @@ mod test {
     fn serialization() {
         let n = 32;
         let vectors = gen_rand_vecs(4, n);
-        let mut block: BlockData<FullVec> = BlockData::new(MAX_POINTS);
+        let mut block = BlockData::new();
         for v in vectors {
             let point = Point::new(&v);
 
@@ -139,24 +128,23 @@ mod test {
         assert_block_with_id(4096, &block);
     }
 
-    fn assert_block_with_id(block_id: usize, block: &BlockData<FullVec>) {
+    fn assert_block_with_id(block_id: usize, block: &BlockData) {
         let header = BlockHeader {
             id: block_id as BlockID,
             nb_points: block.len() as BlockID,
             point_size: block.get_point(0).unwrap().size() as BlockID,
-            max_points: MAX_POINTS,
         };
 
         let ser = block.serialize_block_data();
-        let des: BlockData<FullVec> = BlockData::deserialize_block_data(&header, ser);
+        let des = BlockData::deserialize_block_data(&header, ser);
         assert_eq!(block.len(), des.len());
 
         for idx in 0..header.nb_points as usize {
             let point = block.get_point(idx as u32).unwrap();
             let point_des = des.get_point(idx as u32).unwrap();
-            assert_eq!(point.get_low_vector(), point_des.get_low_vector());
+            assert_eq!(point.get_vals(), point_des.get_vals());
 
-            let correct_id = (block_id * MAX_POINTS as usize) + idx;
+            let correct_id = (block_id * MAX_PER_BLOCK as usize) + idx;
             assert_eq!(point_des.id, correct_id as NodeID);
         }
     }

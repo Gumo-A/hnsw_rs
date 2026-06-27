@@ -4,9 +4,9 @@ use graph::nodes::Dist;
 use graph::{errors::GraphError, nodes::NodeID};
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
-use points::points::Points;
+use points::points::{BlockPoints, Points};
 use std::collections::BTreeSet;
-use vectors::{VecBase, VecTrait};
+use vectors::VecBase;
 
 type OrderedDists = BTreeSet<Dist>;
 pub type LayerResult = IntMap<NodeID, OrderedDists>;
@@ -49,11 +49,7 @@ impl Results {
         self.selected.iter().take(n).copied().collect()
     }
 
-    pub fn get_nearest_from_selected<T: VecTrait>(
-        &self,
-        point: &Point<T>,
-        points: &Points<T>,
-    ) -> Dist {
+    pub fn get_nearest_from_selected(&self, point: &Point, points: &BlockPoints) -> Dist {
         let point_ids: Vec<NodeID> = self.selected.iter().map(|n| n.id).collect();
         let selected_points = points.get_points_iter(point_ids.iter().copied());
         let distances = point.dist2many(selected_points);
@@ -104,10 +100,10 @@ impl Results {
         self.visited_h.insert(visited);
     }
 
-    pub fn extend_candidates_with_neighbors<T: VecTrait>(
+    pub fn extend_candidates_with_neighbors(
         &mut self,
-        point: &Point<T>,
-        points: &Points<T>,
+        point: &Point,
+        points: &BlockPoints,
         layer: &Graph,
     ) -> Result<(), String> {
         let mut neighbors = Vec::new();

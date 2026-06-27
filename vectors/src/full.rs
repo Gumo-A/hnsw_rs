@@ -68,24 +68,6 @@ impl VecBase for FullVec {
     fn dim(&self) -> usize {
         self.vector.len()
     }
-
-    fn center(&mut self, means: &Vec<f32>) {
-        if self.dim() != means.len() {
-            panic!("Vector dimensions are not equal")
-        }
-        self.iter_vals_mut()
-            .enumerate()
-            .for_each(|(idx, x)| *x -= means[idx]);
-    }
-
-    fn decenter(&mut self, means: &Vec<f32>) {
-        if self.dim() != means.len() {
-            panic!("Vector dimensions are not equal")
-        }
-        self.iter_vals_mut()
-            .enumerate()
-            .for_each(|(idx, x)| *x += means[idx]);
-    }
 }
 
 impl Serializer for FullVec {
@@ -193,31 +175,5 @@ mod tests {
         let dist2other = a.dist2other(&b);
         assert!(dist == 0.0);
         assert_eq!(dist, dist2other);
-    }
-
-    #[test]
-    fn center_decenter() {
-        let n = 128;
-        let means = gen_rand_vecs(n, 1)[0].clone();
-        let mut vectors: Vec<FullVec> = gen_rand_vecs(n, 4)
-            .iter()
-            .map(|v| FullVec::new(&v.clone()))
-            .collect();
-        let vectors_clone = vectors.clone();
-        for (v, vc) in vectors.iter_mut().zip(vectors_clone.iter()) {
-            v.center(&means);
-            for (idx, (v_val, vc_val)) in v.iter_vals().zip(vc.iter_vals()).enumerate() {
-                let err = (v_val - (vc_val - means[idx])).abs() / (vc_val - means[idx]);
-                assert!(err < 0.0001);
-            }
-        }
-
-        for (v, vc) in vectors.iter_mut().zip(vectors_clone.iter()) {
-            v.decenter(&means);
-            for (v_val, vc_val) in v.iter_vals().zip(vc.iter_vals()) {
-                let err = (v_val - vc_val).abs() / vc_val;
-                assert!(err < 0.0001);
-            }
-        }
     }
 }

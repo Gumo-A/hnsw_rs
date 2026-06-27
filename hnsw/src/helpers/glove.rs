@@ -2,21 +2,20 @@ use core::panic;
 use graph::nodes::{Dist, NodeID};
 use indicatif::{ProgressBar, ProgressStyle};
 use points::point::Point;
-use points::points::Points;
+use points::points::{BlockPoints, Points};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
 use std::str::FromStr;
 use std::sync::Arc;
-use vectors::{FullVec, VecBase};
+use vectors::VecBase;
 
 pub fn load_glove_array(
     lim: usize,
-    file_name: String,
+    file: File,
     verbose: bool,
 ) -> Result<(Vec<String>, Vec<Vec<f32>>)> {
-    let file = File::open(format!("/home/gamal/glove_dataset/{file_name}.txt"))?;
-    let reader = BufReader::new(file);
+    let reader = BufReader::new(file.try_clone().unwrap());
 
     let lim = if lim == 0 {
         reader.lines().count()
@@ -24,7 +23,6 @@ pub fn load_glove_array(
         lim
     };
 
-    let file = File::open(format!("/home/gamal/glove_dataset/{file_name}.txt"))?;
     let reader = BufReader::new(file);
 
     let mut embeddings: Vec<Vec<f32>> = Vec::new();
@@ -81,8 +79,8 @@ pub fn load_glove_array(
 
 pub fn brute_force_nns(
     nb_nns: usize,
-    train_set: Arc<Points<FullVec>>,
-    test_set: Arc<Points<FullVec>>,
+    train_set: Arc<BlockPoints>,
+    test_set: Arc<BlockPoints>,
     ids: Vec<NodeID>,
     bar: ProgressBar,
 ) -> HashMap<NodeID, Vec<NodeID>> {
@@ -100,13 +98,13 @@ pub fn brute_force_nns(
     brute_force_results
 }
 
-fn get_nn_bf(point: &Point<FullVec>, others: &Arc<Points<FullVec>>, nb_nns: usize) -> Vec<NodeID> {
+fn get_nn_bf(point: &Point, others: &Arc<BlockPoints>, nb_nns: usize) -> Vec<NodeID> {
     let sorted = sort_by_distance(point, others);
     sorted.iter().take(nb_nns).map(|x| x.id).collect()
 }
 
-fn sort_by_distance(point: &Point<FullVec>, others: &Arc<Points<FullVec>>) -> Vec<Dist> {
-    let points: Vec<&Point<FullVec>> = others.iter_points().collect();
+fn sort_by_distance(point: &Point, others: &Arc<BlockPoints>) -> Vec<Dist> {
+    let points: Vec<&Point> = others.iter_points().collect();
     let result = point.dist2many(points.iter().map(|p| *p));
     let mut dists = Vec::from_iter(
         result

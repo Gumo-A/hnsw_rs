@@ -1,8 +1,11 @@
 use core::panic;
 
 use graph::{errors::GraphError, graph::Graph, nodes::Dist};
-use points::{point::Point, points::Points};
-use vectors::{VecBase, VecTrait};
+use points::{
+    point::Point,
+    points::{BlockPoints, Points},
+};
+use vectors::VecBase;
 
 use crate::template::results::Results;
 
@@ -13,12 +16,12 @@ impl Searcher {
         Self {}
     }
 
-    pub fn search_layer<T: VecTrait>(
+    pub fn search_layer(
         &self,
         results: &mut Results,
         layer: &Graph,
-        point: &Point<T>,
-        points: &Points<T>,
+        point: &Point,
+        points: &BlockPoints,
         ef: usize,
     ) -> Result<(), String> {
         results.extend_candidates_with_selected();
@@ -75,12 +78,12 @@ impl Searcher {
         Ok(())
     }
 
-    pub fn select_heuristic<T: VecTrait>(
+    pub fn select_heuristic(
         &self,
         results: &mut Results,
         layer: &Graph,
-        point: &Point<T>,
-        points: &Points<T>,
+        point: &Point,
+        points: &BlockPoints,
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
