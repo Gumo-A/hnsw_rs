@@ -1,33 +1,24 @@
-pub mod block;
-
-use std::fs::File;
-use std::io::Read;
-use std::path::PathBuf;
-
-use crate::point::Point;
-use crate::points::block::data::BlockData;
-use crate::points::block::header::{BLOCK_HEADER_SIZE, BlockHeader};
-use crate::points::block::{BlockID, MAX_PER_BLOCK, PointsBlock};
+pub mod block_points;
 
 use vectors::VecBase;
 
 use graph::nodes::NodeID;
 use vectors::serializer::Serializer;
 
+use rand::Rng;
 use rand::rngs::ThreadRng;
-use rand::{Rng, thread_rng};
+
+use crate::point::Point;
 
 pub trait Points {
     fn new(vecs: Vec<Vec<f32>>, ml: f32) -> Self;
     fn len(&self) -> usize;
-    fn nb_blocks(&self) -> usize;
     fn ids(&self) -> impl Iterator<Item = NodeID>;
     fn dim(&self) -> Option<usize>;
     fn push(&mut self, point: Point) -> NodeID;
     fn extend(&mut self, other: Self) -> Vec<NodeID>;
     // fn remove(&mut self, index: Node) -> bool;
     fn get_point(&self, idx: NodeID) -> Option<&Point>;
-    fn get_points(&self, indices: &Vec<NodeID>) -> Vec<&Point>;
     fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point>
     where
         I: Iterator<Item = NodeID>;
@@ -36,67 +27,28 @@ pub trait Points {
     fn distance2point(&self, point: &Point, idx: NodeID) -> Option<f32>;
 }
 
-fn new_layer(ml: f32, rng: &mut ThreadRng) -> usize {
-    let mut rand_nb = 0.0;
-    loop {
-        if (rand_nb == 0.0) | (rand_nb == 1.0) {
-            rand_nb = rng.r#gen::<f32>();
-        } else {
-            break;
-        }
-    }
-
-    (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize
-}
-
 #[derive(Debug, Clone)]
-pub struct BlockPoints {
-    ml: f32,
-    pub collection: Vec<PointsBlock>,
+pub struct SimplePoints {
+    pub collection: Vec<Point>,
 }
 
-impl BlockPoints {
-    fn add_point_new_block(&mut self, point: Point) -> NodeID {
-        let new_id = self.collection.len() as BlockID;
-        let mut new_block = PointsBlock::new(new_id);
-        let node_id = new_block.add_point(&point).unwrap();
-        self.collection.push(new_block);
-        node_id
-    }
-}
-
-impl Points for BlockPoints {
-    fn new(mut vecs: Vec<Vec<f32>>, ml: f32) -> BlockPoints {
-        let mut collection = Vec::new();
-        let mut rng = thread_rng();
-        let mut block_idx = 0;
-        let mut block = PointsBlock::new(block_idx);
-        for v in vecs.drain(..) {
-            let point = Point::new_with(new_layer(ml, &mut rng), &v);
-            if block.is_full() {
-                collection.push(block);
-                block_idx += 1;
-                block = PointsBlock::new(block_idx);
-            }
-            block.add_point(&point);
+impl Points for SimplePoints {
+    fn new(vecs: Vec<Vec<f32>>, ml: f32) -> Self {
+        let mut rng = ThreadRng::default();
+        let i = vecs.iter().enumerate().map(|(idx, v)| {
+            let level = new_layer(ml, &mut rng);
+            Point::with_level_and_id(v, level, idx)
+        });
+        Self {
+            collection: Vec::from_iter(i),
         }
-
-        if block.len() > 0 {
-            collection.push(block);
-        }
-
-        BlockPoints { collection, ml }
     }
     fn len(&self) -> usize {
-        self.collection.iter().map(|block| block.len()).sum()
-    }
-
-    fn nb_blocks(&self) -> usize {
         self.collection.len()
     }
 
     fn ids(&self) -> impl Iterator<Item = NodeID> {
-        self.collection.iter().flat_map(|p| p.point_ids())
+        self.collection.iter().map(|p| p.id)
     }
 
     fn dim(&self) -> Option<usize> {
@@ -107,38 +59,20 @@ impl Points for BlockPoints {
     }
 
     fn push(&mut self, point: Point) -> NodeID {
-        if self.collection.len() == 0 {
-            self.add_point_new_block(point)
-        } else {
-            let last_block = self.collection.last_mut().unwrap();
-            match last_block.add_point(&point) {
-                Some(node_id) => node_id,
-                None => self.add_point_new_block(point),
-            }
-        }
+        let id = point.id;
+        self.collection.push(point);
+        id
     }
 
-    /// Removes a Point from the collection,
-    /// returning true if it was removed,
-    /// or false if it was already.
-    // pub fn remove(&mut self, index: Node) -> bool {
-    //     if index >= self.len() as Node {
-    //         false
-    //     } else {
-    //         self.collection
-    //             .get_mut(index as usize)
-    //             .unwrap()
-    //             .set_removed()
-    //     }
-    // }
-
     fn get_point(&self, idx: NodeID) -> Option<&Point> {
-        let block_id = (idx as f32 / MAX_PER_BLOCK as f32).floor() as usize;
-        let block = match self.collection.get(block_id) {
-            Some(b) => b,
-            None => return None,
-        };
-        block.get_point(idx)
+        self.collection.get(idx as usize)
+    }
+
+    fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point>
+    where
+        I: Iterator<Item = NodeID>,
+    {
+        indices.map(|idx| self.get_point(idx).unwrap())
     }
 
     fn distance(&self, a_idx: NodeID, b_idx: NodeID) -> Option<f32> {
@@ -158,150 +92,64 @@ impl Points for BlockPoints {
         }
     }
 
-    fn get_points(&self, indices: &Vec<NodeID>) -> Vec<&Point> {
-        indices
-            .iter()
-            .map(|idx| self.get_point(*idx).unwrap())
-            .collect()
-    }
-
-    fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point>
-    where
-        I: Iterator<Item = NodeID>,
-    {
-        indices.map(|idx| self.get_point(idx).unwrap())
-    }
-
-    fn extend(&mut self, mut other: BlockPoints) -> Vec<NodeID> {
+    fn extend(&mut self, other: Self) -> Vec<NodeID> {
         let mut ids = Vec::with_capacity(other.len());
-        for block in other.collection.drain(..) {
-            for point in block.block.data {
-                ids.push(self.push(point));
-            }
+        let mut other = other;
+        for point in other.collection.drain(..) {
+            ids.push(self.push(point));
         }
         ids
     }
 }
 
-impl<'a> BlockPoints {
+impl Serializer for SimplePoints {
+    fn size(&self) -> usize {
+        // how many points, size of each point, plus the points themselves
+        8 + 8 + (self.len() * self.get_point(0).unwrap().size())
+    }
+    fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.collection.len().to_be_bytes());
+        bytes.extend_from_slice(&self.get_point(0).unwrap().size().to_be_bytes());
+        for point in self.collection.iter() {
+            bytes.extend_from_slice(&point.serialize());
+        }
+        bytes
+    }
+
+    fn deserialize(data: Vec<u8>) -> Self {
+        let len = usize::from_be_bytes(data[0..8].try_into().unwrap());
+        let point_size = usize::from_be_bytes(data[8..16].try_into().unwrap());
+        let mut collection = Vec::new();
+        let mut idx = 16;
+        for _ in 0..len {
+            let point = Point::deserialize(data[idx..(idx + point_size)].to_vec());
+            collection.push(point);
+            idx += point_size
+        }
+        Self { collection }
+    }
+}
+
+fn new_layer(ml: f32, rng: &mut ThreadRng) -> usize {
+    let mut rand_nb = 0.0;
+    loop {
+        if (rand_nb == 0.0) | (rand_nb == 1.0) {
+            rand_nb = rng.r#gen::<f32>();
+        } else {
+            break;
+        }
+    }
+
+    (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize
+}
+
+impl<'a> SimplePoints {
     pub fn iter_points<'b: 'a>(&'b self) -> impl Iterator<Item = &'a Point> {
-        self.collection
-            .iter()
-            .flat_map(|block| block.block.data.iter())
+        self.collection.iter()
     }
     pub fn iter_points_mut<'b: 'a>(&mut self) -> impl Iterator<Item = &mut Point> {
-        self.collection
-            .iter_mut()
-            .flat_map(|block| block.block.data.iter_mut())
-    }
-}
-
-pub const POINTS_HEADER_SIZE: usize = 7;
-#[derive(Debug)]
-pub struct PointsHeader {
-    pub point_size: BlockID,
-    pub nb_blocks: BlockID,
-}
-
-impl PointsHeader {
-    pub fn new(points: &BlockPoints) -> Self {
-        let point_size = points.get_point(0).unwrap().size() as BlockID;
-        let nb_blocks = points.nb_blocks() as BlockID;
-        PointsHeader {
-            point_size,
-            nb_blocks,
-        }
-    }
-
-    pub fn from_path(file_path: PathBuf) -> Self {
-        let mut file_handle = File::open(file_path.clone()).expect("Could not open points file");
-        let mut data = [0; POINTS_HEADER_SIZE];
-        file_handle.read(&mut data).unwrap();
-        PointsHeader::deserialize(data.into())
-    }
-}
-
-impl Serializer for PointsHeader {
-    /// Val        Bytes
-    /// quantized  1
-    /// point_size 2
-    /// nb_blocks  2
-    fn size(&self) -> usize {
-        POINTS_HEADER_SIZE
-    }
-
-    fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&(self.point_size).to_be_bytes());
-        bytes.extend_from_slice(&(self.nb_blocks).to_be_bytes());
-        bytes.extend_from_slice(&MAX_PER_BLOCK.to_be_bytes());
-        bytes
-    }
-
-    fn deserialize(data: Vec<u8>) -> Self {
-        let quantized = u8::from_be_bytes(data[..1].try_into().unwrap()) != 0;
-        let point_size = BlockID::from_be_bytes(data[1..3].try_into().unwrap());
-        let nb_blocks = BlockID::from_be_bytes(data[3..5].try_into().unwrap());
-        PointsHeader {
-            point_size,
-            nb_blocks,
-        }
-    }
-}
-
-impl Serializer for BlockPoints {
-    /// Val        Bytes
-    /// header     header.size()
-    /// blocks     header.nb_blocks * variable
-    fn size(&self) -> usize {
-        let mut total = 0;
-        let header = PointsHeader::new(self);
-        total += header.size();
-        for block in self.collection.iter() {
-            total += block.header.size();
-            total += block.header.block_data_size();
-        }
-        total
-    }
-
-    fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        let header = PointsHeader::new(self);
-        bytes.extend(header.serialize());
-
-        for block in self.collection.iter() {
-            bytes.extend(block.header.serialize());
-            bytes.extend(block.block.serialize_block_data());
-        }
-
-        bytes
-    }
-
-    fn deserialize(data: Vec<u8>) -> Self {
-        let mut i = 0;
-        let header = PointsHeader::deserialize(data[i..i + POINTS_HEADER_SIZE].into());
-        i += POINTS_HEADER_SIZE;
-
-        let mut collection = Vec::new();
-        for _ in 0..header.nb_blocks {
-            let block_header = BlockHeader::deserialize(data[i..i + BLOCK_HEADER_SIZE].into());
-            i += BLOCK_HEADER_SIZE;
-            let block_data = BlockData::deserialize_block_data(
-                &block_header,
-                data[i..i + block_header.block_data_size()].into(),
-            );
-            i += block_header.block_data_size();
-            let block = PointsBlock {
-                header: block_header,
-                block: block_data,
-            };
-            collection.push(block);
-        }
-
-        BlockPoints {
-            collection,
-            ml: 0.0, // TODO
-        }
+        self.collection.iter_mut()
     }
 }
 
@@ -312,12 +160,12 @@ mod test {
 
     use super::*;
 
-    fn gen_rand_points(dim: usize, n: usize) -> BlockPoints {
+    fn gen_rand_points(dim: usize, n: usize) -> SimplePoints {
         let vectors = gen_rand_vecs(dim, n);
-        BlockPoints::new(vectors, 0.5)
+        SimplePoints::new(vectors, 0.5)
     }
 
-    fn get_collection_data(points: &BlockPoints) -> (f32, f32, u32, usize) {
+    fn get_collection_data(points: &SimplePoints) -> (f32, f32, u32, usize) {
         let dist = points
             .get_point(32)
             .unwrap()
@@ -327,8 +175,8 @@ mod test {
     }
 
     #[test]
-    fn build_points_multi_block() {
-        let points = gen_rand_points(4, 100_000);
+    fn build_simple_points() {
+        let points = gen_rand_points(4, 100);
 
         let point_0 = points.get_point(0).unwrap();
         assert_eq!(point_0.id, 0);
@@ -336,11 +184,8 @@ mod test {
         let point_1 = points.get_point(1).unwrap();
         assert_eq!(point_1.id, 1);
 
-        let point_256 = points.get_point(256).unwrap();
-        assert_eq!(point_256.id, 256);
-
-        let point_80_000 = points.get_point(80_000).unwrap();
-        assert_eq!(point_80_000.id, 80_000);
+        let point_80_000 = points.get_point(80).unwrap();
+        assert_eq!(point_80_000.id, 80);
     }
 
     #[test]
@@ -348,17 +193,16 @@ mod test {
         let points = gen_rand_points(4, 16);
 
         let dist = points.distance(12, 4);
-        assert!(dist.is_some());
         assert!(dist.unwrap() > 0.0);
     }
 
     #[test]
-    fn serialization_multi_block() {
+    fn serialization() {
         let points = gen_rand_points(128, 100);
         let (dist, val, len, size) = get_collection_data(&points);
 
         let points_ser = points.serialize();
-        let points_des = BlockPoints::deserialize(points_ser);
+        let points_des = SimplePoints::deserialize(points_ser);
         let (dist_ser, val_ser, len_ser, size_ser) = get_collection_data(&points_des);
 
         assert_eq!(dist, dist_ser);

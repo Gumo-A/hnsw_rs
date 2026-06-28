@@ -3,7 +3,7 @@ pub mod header;
 
 use crate::{
     point::Point,
-    points::block::{
+    points::block_points::block::{
         data::BlockData,
         header::{BLOCK_HEADER_SIZE, BlockHeader},
     },
@@ -106,7 +106,7 @@ mod test {
 
     use crate::{
         point::Point,
-        points::block::{BlockID, MAX_PER_BLOCK, PointsBlock},
+        points::block_points::block::{BlockID, MAX_PER_BLOCK, PointsBlock},
     };
 
     const N: usize = 128;

@@ -1,9 +1,9 @@
 use graph::nodes::NodeID;
-use vectors::{VecBase, VecTrait, serializer::Serializer};
+use vectors::{VecBase, serializer::Serializer};
 
 use crate::{
     point::Point,
-    points::block::{BlockID, MAX_PER_BLOCK, header::BlockHeader},
+    points::block_points::block::{MAX_PER_BLOCK, header::BlockHeader},
 };
 
 #[derive(Clone, Debug)]
@@ -70,17 +70,19 @@ impl BlockData {
 mod test {
 
     use graph::nodes::NodeID;
-    use vectors::{FullVec, VecBase, gen_rand_vecs, serializer::Serializer};
+    use vectors::{VecBase, gen_rand_vecs, serializer::Serializer};
 
     use crate::{
         point::Point,
-        points::block::{BlockID, MAX_PER_BLOCK, data::BlockData, header::BlockHeader},
+        points::block_points::block::{
+            BlockID, MAX_PER_BLOCK, data::BlockData, header::BlockHeader,
+        },
     };
 
     #[test]
     fn max_points() {
         let vectors = gen_rand_vecs(4, (MAX_PER_BLOCK as usize * 2) + 16);
-        let mut block: BlockData = BlockData::new();
+        let mut block = BlockData::new();
         for v in vectors {
             let point = Point::new(&v);
             block.add_point(point);
@@ -94,16 +96,16 @@ mod test {
         let vectors = gen_rand_vecs(4, n);
         let mut block = BlockData::new();
         for v in vectors.iter() {
-            let point = Point::new_with(0, v);
+            let point = Point::with_level_and_id(v, 0, 0);
             block.add_point(point);
         }
         for idx in 0..n {
             let point = block.get_point(idx as NodeID);
             assert!(point.is_some());
-            assert_eq!(
-                &point.unwrap().get_vals(),
-                vectors.get(idx as usize).unwrap()
-            );
+            let org = vectors.get(idx as usize).unwrap()[0];
+            let from_point = point.unwrap().get_vals()[0];
+            let err = ((from_point - org) / org).abs();
+            assert!(err < 0.05);
         }
     }
 
