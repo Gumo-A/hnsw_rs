@@ -5,3 +5,13 @@ edition = "2024"
 
 [dependencies]
 rand = "0.8.5"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[[bench]]
+name = "vector_benchmarks"
+harness = false
+
+[lib]
+bench = false
