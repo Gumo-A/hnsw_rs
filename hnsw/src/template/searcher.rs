@@ -3,14 +3,17 @@ use core::panic;
 use graph::{errors::GraphError, graph::Graph, nodes::Dist};
 use points::{
     point::Point,
-    points::{BlockPoints, Points},
+    points::{Points, SimplePoints},
 };
 use vectors::VecBase;
 
-use crate::template::results::Results;
+use crate::template::{results::Results, PointsType};
 
 pub struct Searcher {}
 
+/// The Searcher doesn't contain any data,
+/// its only purpose is to implement methods to traverse
+/// a Graph struct looking for nearest neighbors of some Point
 impl Searcher {
     pub fn new() -> Self {
         Self {}
@@ -21,7 +24,7 @@ impl Searcher {
         results: &mut Results,
         layer: &Graph,
         point: &Point,
-        points: &BlockPoints,
+        points: &PointsType,
         ef: usize,
     ) -> Result<(), String> {
         results.extend_candidates_with_selected();
@@ -71,11 +74,8 @@ impl Searcher {
         Ok(())
     }
 
-    pub fn select_simple(&self, results: &mut Results, m: usize) -> Result<(), String> {
-        while results.selected.len() > m {
-            results.selected.pop_last();
-        }
-        Ok(())
+    pub fn select_simple(&self, results: &mut Results, m: usize) {
+        results.select_simple(m);
     }
 
     pub fn select_heuristic(
@@ -83,7 +83,7 @@ impl Searcher {
         results: &mut Results,
         layer: &Graph,
         point: &Point,
-        points: &BlockPoints,
+        points: &SimplePoints,
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,

@@ -95,8 +95,8 @@ impl Serializer for Params {
         i += 8;
         let mmax0 = usize::from_be_bytes(data[i..i + 8].try_into().unwrap());
         i += 8;
-        let ml = f32::from_be_bytes(data[i..i + 8].try_into().unwrap());
-        i += 8;
+        let ml = f32::from_be_bytes(data[i..i + 4].try_into().unwrap());
+        i += 4;
         let ef_cons = usize::from_be_bytes(data[i..i + 8].try_into().unwrap());
         i += 8;
         let dim = usize::from_be_bytes(data[i..i + 8].try_into().unwrap());
