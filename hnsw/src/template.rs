@@ -13,11 +13,7 @@ use crate::{
     params::{get_default_ml, Params},
     template::searcher::Searcher,
 };
-use graph::{
-    graph::Graph,
-    layers::Layers,
-    nodes::{Dist, NodeID},
-};
+use graph::{dist::Dist, graph::Graph, layers::Layers, NodeID};
 use points::{
     point::Point,
     points::{Points, SimplePoints},
@@ -429,7 +425,7 @@ mod test {
         helpers::glove::load_glove_array,
         template::{make_rand_vectors, HNSW},
     };
-    use graph::nodes::{Dist, NodeID};
+    use graph::{dist::Dist, NodeID};
     use itertools::Itertools;
     use points::{point::Point, points::Points};
     use vectors::VecBase;

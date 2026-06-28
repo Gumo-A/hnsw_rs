@@ -1,7 +1,8 @@
 use core::panic;
+use graph::dist::Dist;
+use graph::errors::GraphError;
 use graph::graph::Graph;
-use graph::nodes::Dist;
-use graph::{errors::GraphError, nodes::NodeID};
+use graph::NodeID;
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
 use points::points::{Points, SimplePoints};
@@ -176,7 +177,7 @@ impl Results {
 
 #[cfg(test)]
 mod test {
-    use graph::nodes::Dist;
+    use graph::dist::Dist;
 
     use crate::template::results::Results;
 

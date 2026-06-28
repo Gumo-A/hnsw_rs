@@ -1,5 +1,4 @@
-use crate::errors::GraphError;
-use crate::nodes::NodeID;
+use crate::{NodeID, errors::GraphError};
 
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
@@ -273,8 +272,8 @@ pub fn simple_graph() -> Graph {
 #[cfg(test)]
 mod test {
     use crate::{
+        NodeID,
         graph::{Graph, make_rand_graph, simple_graph},
-        nodes::NodeID,
     };
     use nohash_hasher::IntSet;
     use std::sync::Arc;

@@ -8,7 +8,7 @@ use crate::{
         header::{BLOCK_HEADER_SIZE, BlockHeader},
     },
 };
-use graph::nodes::NodeID;
+use graph::NodeID;
 use vectors::serializer::Serializer;
 
 pub const MAX_PER_BLOCK: usize = 32;
@@ -101,7 +101,7 @@ impl Serializer for PointsBlock {
 #[cfg(test)]
 mod test {
 
-    use graph::nodes::NodeID;
+    use graph::NodeID;
     use vectors::{VecBase, gen_rand_vecs, serializer::Serializer};
 
     use crate::{

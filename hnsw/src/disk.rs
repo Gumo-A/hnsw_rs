@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use graph::{graph::Graph, nodes::NodeID};
+use graph::{graph::Graph, NodeID};
 use points::{
     point::Point,
     points::block_points::{

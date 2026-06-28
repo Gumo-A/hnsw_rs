@@ -1,4 +1,4 @@
-use graph::nodes::NodeID;
+use graph::NodeID;
 use vectors::{VecBase, serializer::Serializer};
 
 use crate::{
@@ -69,7 +69,7 @@ impl BlockData {
 #[cfg(test)]
 mod test {
 
-    use graph::nodes::NodeID;
+    use graph::NodeID;
     use vectors::{VecBase, gen_rand_vecs, serializer::Serializer};
 
     use crate::{

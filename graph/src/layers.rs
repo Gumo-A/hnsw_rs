@@ -1,6 +1,6 @@
 use core::panic;
 
-use crate::{graph::Graph, nodes::NodeID};
+use crate::{NodeID, graph::Graph};
 
 #[derive(Debug, Clone)]
 pub struct Layers {

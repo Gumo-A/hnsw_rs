@@ -1,8 +1,8 @@
 pub mod block_points;
 
+use graph::NodeID;
 use vectors::VecBase;
 
-use graph::nodes::NodeID;
 use vectors::serializer::Serializer;
 
 use rand::Rng;

@@ -1,8 +1,9 @@
 use core::panic;
-use graph::nodes::{Dist, NodeID};
+use graph::dist::Dist;
+use graph::NodeID;
 use indicatif::{ProgressBar, ProgressStyle};
 use points::point::Point;
-use points::points::{SimplePoints, Points};
+use points::points::{Points, SimplePoints};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};

@@ -1,6 +1,6 @@
 use core::panic;
 
-use graph::{errors::GraphError, graph::Graph, nodes::Dist};
+use graph::{dist::Dist, errors::GraphError, graph::Graph};
 use points::{
     point::Point,
     points::{Points, SimplePoints},

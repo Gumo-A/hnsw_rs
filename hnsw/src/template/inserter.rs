@@ -1,4 +1,4 @@
-use graph::nodes::Dist;
+use graph::dist::Dist;
 use points::point::Point;
 
 use crate::template::{results::Results, HNSW};

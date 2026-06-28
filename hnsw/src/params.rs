@@ -1,4 +1,4 @@
-use graph::nodes::NodeID;
+use graph::NodeID;
 use vectors::serializer::Serializer;
 
 #[derive(Debug, Clone)]

@@ -1,4 +1,4 @@
-pub type NodeID = u32;
+use crate::NodeID;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Dist {
@@ -27,6 +27,7 @@ impl PartialOrd for Dist {
 }
 
 use std::cmp::Ordering;
+
 impl Ord for Dist {
     fn cmp(&self, other: &Dist) -> Ordering {
         self.dist.partial_cmp(&other.dist).unwrap()

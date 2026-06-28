@@ -2,7 +2,7 @@ pub mod block;
 use block::data::BlockData;
 use block::header::{BLOCK_HEADER_SIZE, BlockHeader};
 use block::{BlockID, MAX_PER_BLOCK, PointsBlock};
-use graph::nodes::NodeID;
+use graph::NodeID;
 use rand::thread_rng;
 use std::fs::File;
 use std::io::Read;
