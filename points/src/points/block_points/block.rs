@@ -3,36 +3,36 @@ pub mod header;
 
 use crate::{
     point::Point,
-    points::block::{
+    points::block_points::block::{
         data::BlockData,
         header::{BLOCK_HEADER_SIZE, BlockHeader},
     },
 };
 use graph::nodes::NodeID;
-use vectors::{VecTrait, serializer::Serializer};
+use vectors::serializer::Serializer;
 
+pub const MAX_PER_BLOCK: usize = 32;
 pub type BlockID = u16;
 
 #[derive(Clone, Debug)]
-pub struct PointsBlock<T: VecTrait> {
+pub struct PointsBlock {
     pub header: BlockHeader,
-    pub block: BlockData<T>,
+    pub block: BlockData,
 }
 
-impl<T: VecTrait> PointsBlock<T> {
-    pub fn new(id: BlockID, max_points: BlockID) -> Self {
+impl PointsBlock {
+    pub fn new(id: BlockID) -> Self {
         let header = BlockHeader {
             id,
-            max_points,
             nb_points: 0,
             point_size: 0,
         };
-        let block = BlockData::new(max_points);
+        let block = BlockData::new();
 
         Self { header, block }
     }
 
-    pub fn from_parts(header: BlockHeader, block: BlockData<T>) -> Self {
+    pub fn from_parts(header: BlockHeader, block: BlockData) -> Self {
         Self { header, block }
     }
 
@@ -49,10 +49,10 @@ impl<T: VecTrait> PointsBlock<T> {
     }
 
     pub fn is_full(&self) -> bool {
-        self.block.len() as u16 == self.header.max_points
+        self.block.len() == MAX_PER_BLOCK
     }
 
-    pub fn add_point(&mut self, point: &Point<T>) -> Option<NodeID> {
+    pub fn add_point(&mut self, point: &Point) -> Option<NodeID> {
         if self.is_full() {
             return None;
         }
@@ -62,7 +62,7 @@ impl<T: VecTrait> PointsBlock<T> {
         }
 
         let mut point = point.clone();
-        let point_id = (self.header.id as u32 * self.header.max_points as u32) + self.len() as u32;
+        let point_id = (self.header.id as u32 * MAX_PER_BLOCK as u32) + self.len() as u32;
         point.id = point_id;
         self.block.add_point(point);
         self.header.nb_points += 1;
@@ -70,12 +70,12 @@ impl<T: VecTrait> PointsBlock<T> {
         Some(point_id)
     }
 
-    pub fn get_point(&self, idx: NodeID) -> Option<&Point<T>> {
+    pub fn get_point(&self, idx: NodeID) -> Option<&Point> {
         self.block.get_point(idx)
     }
 }
 
-impl<T: VecTrait> Serializer for PointsBlock<T> {
+impl Serializer for PointsBlock {
     fn size(&self) -> usize {
         BLOCK_HEADER_SIZE + (self.header.block_data_size())
     }
@@ -102,19 +102,18 @@ impl<T: VecTrait> Serializer for PointsBlock<T> {
 mod test {
 
     use graph::nodes::NodeID;
-    use vectors::{FullVec, VecBase, gen_rand_vecs, serializer::Serializer};
+    use vectors::{VecBase, gen_rand_vecs, serializer::Serializer};
 
     use crate::{
         point::Point,
-        points::block::{BlockID, PointsBlock},
+        points::block_points::block::{BlockID, MAX_PER_BLOCK, PointsBlock},
     };
 
-    const MAX_POINTS: BlockID = 16;
     const N: usize = 128;
 
-    fn gen_rand_block(id: usize, n: usize) -> PointsBlock<FullVec> {
+    fn gen_rand_block(id: usize, n: usize) -> PointsBlock {
         let vectors = gen_rand_vecs(4, n);
-        let mut block = PointsBlock::new(id as BlockID, MAX_POINTS);
+        let mut block = PointsBlock::new(id as BlockID);
         for v in vectors.iter() {
             let point = Point::new(v);
             block.add_point(&point);
@@ -125,10 +124,10 @@ mod test {
     #[test]
     fn nb_points() {
         let block = gen_rand_block(0, N * 2);
-        assert_eq!(block.len(), MAX_POINTS as usize);
+        assert_eq!(block.len(), MAX_PER_BLOCK as usize);
 
         let block = gen_rand_block(0, N);
-        assert_eq!(block.len(), MAX_POINTS as usize);
+        assert_eq!(block.len(), MAX_PER_BLOCK as usize);
 
         let block = gen_rand_block(0, 4);
         assert_eq!(block.len(), 4);
@@ -147,12 +146,12 @@ mod test {
     // The point holds this value when it is in memory,
     // but it doesn't store it on disk, because we can infer it based on
     // its block's ID and its position within the block.
-    fn point_ids_from_block(block: PointsBlock<FullVec>) {
+    fn point_ids_from_block(block: PointsBlock) {
         let block_id = block.header.id;
         let n = block.len();
 
         for idx in 0..n {
-            let idx = (block_id as usize * block.header.max_points as usize) + idx;
+            let idx = (block_id as usize * MAX_PER_BLOCK as usize) + idx;
             let point_option = block.get_point(idx as NodeID);
 
             assert!(point_option.is_some());
@@ -163,7 +162,7 @@ mod test {
 
     #[test]
     fn serialization() {
-        let block = gen_rand_block(1, MAX_POINTS as usize);
+        let block = gen_rand_block(1, MAX_PER_BLOCK as usize);
         let ser = block.serialize();
         let block_des = PointsBlock::deserialize(ser);
 
@@ -171,11 +170,11 @@ mod test {
         assert_eq!(block.len(), block_des.len());
         assert_eq!(block.is_full(), block_des.is_full());
 
-        let id = MAX_POINTS as NodeID + 2;
+        let id = MAX_PER_BLOCK as NodeID + 2;
         assert!(block.get_point(id).is_some());
         assert_eq!(
-            block.get_point(id).unwrap().get_low_vector(),
-            block_des.get_point(id).unwrap().get_low_vector()
+            block.get_point(id).unwrap().get_vals(),
+            block_des.get_point(id).unwrap().get_vals()
         );
     }
 }

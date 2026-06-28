@@ -20,10 +20,10 @@ use graph::{
 };
 use points::{
     point::Point,
-    points::{block::BlockID, Points},
+    points::{Points, SimplePoints},
 };
 use rand::Rng;
-use vectors::{serializer::Serializer, FullVec, VecTrait};
+use vectors::serializer::Serializer;
 
 mod searcher;
 
@@ -33,23 +33,16 @@ use results::Results;
 mod inserter;
 use inserter::Inserter;
 
-fn select_simple<I>(candidate_dists: I, m: usize) -> Result<BTreeSet<Dist>, String>
-where
-    I: Iterator<Item = Dist>,
-{
-    let mut cands = Vec::from_iter(candidate_dists);
-    cands.sort();
-    Ok(BTreeSet::from_iter(cands.iter().copied().take(m)))
-}
+type PointsType = SimplePoints;
 
 #[derive(Debug, Clone)]
-pub struct HNSW<T: VecTrait> {
+pub struct HNSW {
     pub params: Params,
     layers: Layers,
-    points: Points<T>,
+    points: PointsType,
 }
 
-impl<T: VecTrait> HNSW<T> {
+impl HNSW {
     pub fn save(&self, dir: &Path) {
         if !dir.exists() {
             match create_dir(dir) {
@@ -90,7 +83,7 @@ impl<T: VecTrait> HNSW<T> {
         let points = match File::open(dir.join("points")) {
             Ok(f) => {
                 let reader = BufReader::new(f);
-                Points::deserialize(reader.bytes().map(|b| b.unwrap()).collect())
+                PointsType::deserialize(reader.bytes().map(|b| b.unwrap()).collect())
             }
             Err(e) => return Err(format!("Problem reading points file: {e}")),
         };
@@ -140,14 +133,14 @@ impl<T: VecTrait> HNSW<T> {
         })
     }
 
-    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize, max_per_block: BlockID) -> Self {
+    pub fn new(m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
         let params = if ef_cons.is_some() {
-            Params::from_m_efcons(m, ef_cons.unwrap(), dim, max_per_block)
+            Params::from_m_efcons(m, ef_cons.unwrap(), dim)
         } else {
-            Params::from_m(m, dim, max_per_block)
+            Params::from_m(m, dim)
         };
         HNSW {
-            points: Points::new(Vec::new(), params.ml, max_per_block),
+            points: PointsType::new(Vec::new(), params.ml),
             params,
             layers: Layers::new(m),
         }
@@ -161,7 +154,7 @@ impl<T: VecTrait> HNSW<T> {
         self.points.distance(a, b)
     }
 
-    pub fn get_point(&self, point_id: NodeID) -> Option<&Point<T>> {
+    pub fn get_point(&self, point_id: NodeID) -> Option<&Point> {
         self.points.get_point(point_id)
     }
 
@@ -172,14 +165,14 @@ impl<T: VecTrait> HNSW<T> {
         }
     }
 
-    pub fn insert_point(&mut self, point: Point<T>) -> Result<bool, String> {
+    pub fn insert_point(&mut self, point: Point) -> Result<bool, String> {
         let point_id = point.id;
         self.points.push(point);
         self.insert(point_id, &mut Inserter::new())
     }
 
-    // not really insertion, this only determines neighbors
-    // of a point already in the points store and in the layers
+    /// Determines and sets the neighbors of a point that has been stored in
+    /// the layered graph and in the points field
     fn insert(&self, point_id: NodeID, inserter: &mut Inserter) -> Result<bool, String> {
         let point = self
             .points
@@ -250,7 +243,7 @@ impl<T: VecTrait> HNSW<T> {
         Ok(())
     }
 
-    fn check_points_dim(&self, points: &Points<T>) {
+    fn check_points_dim(&self, points: &PointsType) {
         match points.dim() {
             Some(points_d) => {
                 if points_d != self.params.dim {
@@ -266,10 +259,10 @@ impl<T: VecTrait> HNSW<T> {
     ///
     /// This is only the storing part, no indexing can
     /// be done on these points after this operation,
-    fn store_points(&mut self, points: Points<T>) {
+    fn store_points(&mut self, points: PointsType) {
         self.check_points_dim(&points);
-        let ids_levels = self.points.extend(points);
-        for point_id in ids_levels {
+        let ids = self.points.extend(points);
+        for point_id in ids {
             let level = self.points.get_point(point_id).unwrap().level;
             self.layers.add_node_with_level(point_id, level as usize);
         }
@@ -284,7 +277,7 @@ impl<T: VecTrait> HNSW<T> {
         self.params.ep = new_ep;
     }
 
-    // fn get_nearest<I>(&self, point: &Point<T>, others: I) -> Node
+    // fn get_nearest<I>(&self, point: &Point, others: I) -> Node
     // where
     //     I: Iterator<Item = Node>,
     // {
@@ -295,12 +288,7 @@ impl<T: VecTrait> HNSW<T> {
     //         .id
     // }
 
-    pub fn ann_by_vector(
-        &self,
-        point: &Point<T>,
-        n: usize,
-        ef: usize,
-    ) -> Result<Vec<NodeID>, String> {
+    pub fn ann_by_vector(&self, point: &Point, n: usize, ef: usize) -> Result<Vec<NodeID>, String> {
         let mut results = Results::new();
         let searcher = Searcher::new();
         results.insert_selected(Dist::new(
@@ -379,24 +367,18 @@ impl<T: VecTrait> HNSW<T> {
     }
 }
 
-impl<T: VecTrait + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
+impl HNSW {
     pub fn insert_bulk(
         mut self,
         vectors: Vec<Vec<f32>>,
         nb_threads: usize,
         verbose: bool,
-    ) -> Result<HNSW<T>, String> {
-        let points = Points::new(
-            vectors,
-            get_default_ml(self.params.m),
-            self.params.max_per_block,
-        );
-        self.store_points(points);
-        let bar_arc = Arc::new(get_progress_bar(
-            "layerzzz".to_string(),
-            self.len(),
-            verbose,
-        ));
+    ) -> Result<HNSW, String> {
+        self.store_points(PointsType::new(vectors, get_default_ml(self.params.m)));
+
+        let bar = get_progress_bar("Building HNSW index".to_string(), self.len(), verbose);
+        let bar_arc = Arc::new(bar);
+
         let index_arc = Arc::new(self);
 
         for layer_nb in (0..index_arc.layers.len()).rev() {
@@ -441,37 +423,30 @@ impl<T: VecTrait + std::marker::Send + std::marker::Sync + 'static> HNSW<T> {
 #[cfg(test)]
 mod test {
 
-    use std::{collections::HashSet, path::Path};
+    use std::{collections::HashSet, fs::File, path::Path};
 
     use crate::{
         helpers::glove::load_glove_array,
-        params::get_default_ml,
         template::{make_rand_vectors, HNSW},
     };
     use graph::nodes::{Dist, NodeID};
     use itertools::Itertools;
-    use points::{
-        point::Point,
-        points::{block::BlockID, Points},
-    };
-    use vectors::{FullVec, LVQVec, VecBase};
+    use points::{point::Point, points::Points};
+    use vectors::VecBase;
 
     const DIM: usize = 10;
     const N: usize = 100;
     const M: usize = 12;
-    const NB_STORED: usize = 1_000;
-    const NB_QUERIES: usize = 100;
-    const MAX_PER_BLOCK: BlockID = BlockID::MAX;
 
     #[test]
     fn hnsw_init() {
-        let _index: HNSW<FullVec> = HNSW::new(12, None, 128, MAX_PER_BLOCK);
+        let _index: HNSW = HNSW::new(12, None, 128);
     }
 
     #[test]
     fn hnsw_build() {
         let vectors = make_rand_vectors(N, DIM);
-        let index: HNSW<FullVec> = HNSW::new(12, None, DIM, MAX_PER_BLOCK);
+        let index: HNSW = HNSW::new(12, None, DIM);
         let index = index.insert_bulk(vectors, 1, false).unwrap();
         assert_eq!(index.len(), N);
     }
@@ -479,7 +454,7 @@ mod test {
     #[test]
     #[should_panic]
     fn can_not_add_different_dim() {
-        let index: HNSW<FullVec> = HNSW::new(12, None, 128, MAX_PER_BLOCK);
+        let index = HNSW::new(12, None, 128);
 
         let vectors = make_rand_vectors(10, 128);
         let index = index.insert_bulk(vectors, 1, false).unwrap();
@@ -489,23 +464,22 @@ mod test {
     }
 
     #[test]
-    fn hnsw_full_glove_build_eval() {
-        let (_, vectors) = load_glove_array(NB_STORED + NB_QUERIES, format!("glove.50d"), false)
-            .expect("Could not load glove");
+    fn hnsw_glove_build_eval() {
+        let file = File::open("/home/gamal/repos/vector-store/test-data/store.txt").unwrap();
+        let (_, stored) = load_glove_array(0, file, false).expect("Could not load store vectors");
+        let file = File::open("/home/gamal/repos/vector-store/test-data/queries.txt").unwrap();
+        let (_, queries) = load_glove_array(0, file, false).expect("Could not load query vectors");
+        let nb_queries = queries.len();
 
-        let stored = vectors[NB_QUERIES..].iter().cloned().collect();
-
-        let index: HNSW<FullVec> = HNSW::new(12, Some(512), 50, MAX_PER_BLOCK);
-        let index = index.insert_bulk(stored, 1, false).unwrap();
+        let index = HNSW::new(M, None, 50);
+        let index = index.insert_bulk(stored.clone(), 1, false).unwrap();
 
         let points = &index.points;
 
-        let queries: Vec<Vec<f32>> = vectors[..NB_QUERIES].iter().cloned().collect();
-
-        let mut queries_nn: Vec<HashSet<NodeID>> = Vec::new();
+        let mut queries_nn: Vec<Vec<NodeID>> = Vec::new();
         for query in queries.iter() {
-            let query_point = Point::new_with(0, query);
-            let query_true_nn = (0..NB_STORED as NodeID)
+            let query_point = Point::new(query);
+            let query_true_nn = (0..stored.len() as NodeID)
                 .map(|idx| Dist::new(idx, points.distance2point(&query_point, idx).unwrap()))
                 .sorted()
                 .map(|dist| dist.id)
@@ -516,67 +490,17 @@ mod test {
 
         let mut total_hits = 0;
         for (idx, query) in queries.iter().enumerate() {
-            let query_point = Point::new_with(0, query);
+            let query_point = Point::new(query);
             let query_ann = index.ann_by_vector(&query_point, 10, 100).unwrap();
             let query_ann: HashSet<NodeID> = HashSet::from_iter(query_ann.iter().copied());
 
-            let query_true_nn = queries_nn.get(idx).unwrap();
+            let query_true_nn = HashSet::from_iter(queries_nn.get(idx).unwrap().iter().copied());
             let hits = query_true_nn.intersection(&query_ann).count();
             total_hits += hits;
         }
-        let final_acc = total_hits as f32 / (NB_QUERIES * 10) as f32;
+        let final_acc = total_hits as f32 / (nb_queries * 10) as f32;
         println!("Final accuracy was {final_acc}");
-        assert!(final_acc > 0.8);
-
-        for layer in index.layers.iter_layers() {
-            for node in layer.iter_nodes() {
-                if layer.nb_nodes() <= 1 {
-                    continue;
-                }
-                let degree = layer.degree(node).unwrap();
-                assert!(degree > 0);
-            }
-        }
-    }
-
-    #[test]
-    fn hnsw_quant_glove_build_eval() {
-        let (_, vectors) = load_glove_array(NB_STORED + NB_QUERIES, format!("glove.50d"), false)
-            .expect("Could not load glove");
-
-        let stored = vectors[NB_QUERIES..].iter().cloned().collect();
-        let queries: Vec<Vec<f32>> = vectors[..NB_QUERIES].iter().cloned().collect();
-
-        let index: HNSW<LVQVec> = HNSW::new(M, Some(512), 50, MAX_PER_BLOCK);
-        let index = index.insert_bulk(stored, 1, false).unwrap();
-
-        let points = &index.points;
-
-        let mut queries_nn: Vec<HashSet<NodeID>> = Vec::new();
-        for query in queries.iter() {
-            let query_point = Point::new_with(0, query);
-            let query_true_nn = (0..NB_STORED as NodeID)
-                .map(|idx| Dist::new(idx, points.distance2point(&query_point, idx).unwrap()))
-                .sorted()
-                .map(|dist| dist.id)
-                .take(10)
-                .collect();
-            queries_nn.push(query_true_nn);
-        }
-
-        let mut total_hits = 0;
-        for (idx, query) in queries.iter().enumerate() {
-            let query_point = Point::new_with(0, query);
-            let query_ann = index.ann_by_vector(&query_point, 10, 100).unwrap();
-            let query_ann: HashSet<NodeID> = HashSet::from_iter(query_ann.iter().copied());
-
-            let query_true_nn = queries_nn.get(idx).unwrap();
-            let hits = query_true_nn.intersection(&query_ann).count();
-            total_hits += hits;
-        }
-        let final_acc = total_hits as f32 / (NB_QUERIES * 10) as f32;
-        println!("Final accuracy was {final_acc}");
-        assert!(final_acc > 0.8);
+        assert!(final_acc > 0.99);
 
         for layer in index.layers.iter_layers() {
             let mut min_degree = usize::MAX;
@@ -598,41 +522,10 @@ mod test {
     }
 
     #[test]
-    fn hnsw_serialize_full() {
-        let vectors = make_rand_vectors(10_000, DIM);
-        let index: HNSW<FullVec> = HNSW::new(12, None, DIM, MAX_PER_BLOCK);
-        let index = index.insert_bulk(vectors, 1, false).unwrap();
-
-        let index_path = Path::new("./ser_test_full");
-        if index_path.exists() {
-            std::fs::remove_dir_all(index_path).unwrap();
-        }
-        index.save(index_path);
-        let loaded_index: HNSW<FullVec> = HNSW::load(index_path).unwrap();
-
-        assert_eq!(index.len(), loaded_index.len());
-
-        for (idx, (layer, loaded_layer)) in index
-            .iter_layers()
-            .zip(loaded_index.iter_layers())
-            .enumerate()
-        {
-            assert_eq!(layer.level, loaded_layer.level);
-            assert_eq!(layer.level, idx);
-
-            let layer_nodes: HashSet<NodeID> = HashSet::from_iter(layer.iter_nodes());
-            let loaded_nodes: HashSet<NodeID> = HashSet::from_iter(loaded_layer.iter_nodes());
-
-            assert_eq!(layer_nodes, loaded_nodes);
-        }
-        std::fs::remove_dir_all(index_path).unwrap();
-    }
-
-    #[test]
     fn hnsw_serialize_quant() {
         for _ in 0..100 {
             let vectors = make_rand_vectors(N, DIM);
-            let index: HNSW<LVQVec> = HNSW::new(12, None, DIM, MAX_PER_BLOCK);
+            let index = HNSW::new(12, None, DIM);
             let index = index.insert_bulk(vectors, 1, false).unwrap();
 
             let index_path = Path::new("./ser_test_quant");
@@ -640,7 +533,7 @@ mod test {
                 std::fs::remove_dir_all(index_path).unwrap();
             }
             index.save(index_path);
-            let loaded_index: HNSW<LVQVec> = HNSW::load(index_path).unwrap();
+            let loaded_index = HNSW::load(index_path).unwrap();
 
             std::fs::remove_dir_all(index_path).unwrap();
 
@@ -649,9 +542,18 @@ mod test {
     }
 }
 
-pub fn make_rand_index_full(n: usize, dim: usize, max_per_block: BlockID) -> HNSW<FullVec> {
+fn select_simple<I>(candidate_dists: I, m: usize) -> Result<BTreeSet<Dist>, String>
+where
+    I: Iterator<Item = Dist>,
+{
+    let mut cands = Vec::from_iter(candidate_dists);
+    cands.sort();
+    Ok(BTreeSet::from_iter(cands.iter().copied().take(m)))
+}
+
+pub fn make_rand_index_full(n: usize, dim: usize) -> HNSW {
     let vectors = make_rand_vectors(n, dim);
-    let index = HNSW::new(12, None, dim, max_per_block);
+    let index = HNSW::new(12, None, dim);
     let index = index.insert_bulk(vectors, 1, false).unwrap();
     index
 }

@@ -1,6 +1,4 @@
-use crate::{VecBase, VecTrait, serializer::Serializer};
-
-const CHUNK_SIZE: usize = 8;
+use crate::{VecBase, serializer::Serializer};
 
 #[derive(Debug, Clone)]
 pub struct FullVec {
@@ -23,42 +21,15 @@ impl VecBase for FullVec {
         }
     }
     fn distance(&self, other: &impl VecBase) -> f32 {
-        let other = other.get_vals();
-        let mut acc = [0.0f32; CHUNK_SIZE];
-        let vector_chunks = other.chunks_exact(CHUNK_SIZE);
-        let chunks_iter = self.vector.chunks_exact(CHUNK_SIZE);
-        let self_rem = chunks_iter.remainder();
-        let other_rem = vector_chunks.remainder();
-
-        for (chunkx, chunky) in chunks_iter.zip(vector_chunks) {
-            let acc_iter = chunkx.iter().zip(chunky);
-            for (idx, (x, y)) in acc_iter.enumerate() {
-                acc[idx] += (x - y).powi(2);
-            }
-        }
-        for (x, y) in self_rem.iter().zip(other_rem) {
-            acc[0] += (x - y).powi(2);
-        }
-        acc.iter().sum::<f32>().sqrt()
+        self.iter_vals()
+            .zip(other.iter_vals())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
     }
 
     fn dist2other(&self, other: &Self) -> f32 {
-        let mut acc = [0.0f32; CHUNK_SIZE];
-        let chunks_iter = self.vector.chunks_exact(CHUNK_SIZE);
-        let vector_chunks = other.vector.chunks_exact(CHUNK_SIZE);
-        let self_rem = chunks_iter.remainder();
-        let other_rem = vector_chunks.remainder();
-        for (chunkx, chunky) in chunks_iter.zip(vector_chunks) {
-            let acc_iter = chunkx.iter().zip(chunky);
-            for (idx, (x, y)) in acc_iter.enumerate() {
-                acc[idx] += (x - y).powi(2);
-            }
-        }
-        for (x, y) in self_rem.iter().zip(other_rem) {
-            acc[0] += (x - y).powi(2);
-        }
-        let dist = acc.iter().sum::<f32>().sqrt();
-        dist
+        self.distance(other)
     }
 
     fn iter_vals(&self) -> impl Iterator<Item = f32> {
@@ -67,24 +38,6 @@ impl VecBase for FullVec {
 
     fn dim(&self) -> usize {
         self.vector.len()
-    }
-
-    fn center(&mut self, means: &Vec<f32>) {
-        if self.dim() != means.len() {
-            panic!("Vector dimensions are not equal")
-        }
-        self.iter_vals_mut()
-            .enumerate()
-            .for_each(|(idx, x)| *x -= means[idx]);
-    }
-
-    fn decenter(&mut self, means: &Vec<f32>) {
-        if self.dim() != means.len() {
-            panic!("Vector dimensions are not equal")
-        }
-        self.iter_vals_mut()
-            .enumerate()
-            .for_each(|(idx, x)| *x += means[idx]);
     }
 }
 
@@ -115,8 +68,6 @@ impl Serializer for FullVec {
         FullVec::new(&vals)
     }
 }
-
-impl VecTrait for FullVec {}
 
 #[cfg(test)]
 mod tests {
@@ -193,31 +144,5 @@ mod tests {
         let dist2other = a.dist2other(&b);
         assert!(dist == 0.0);
         assert_eq!(dist, dist2other);
-    }
-
-    #[test]
-    fn center_decenter() {
-        let n = 128;
-        let means = gen_rand_vecs(n, 1)[0].clone();
-        let mut vectors: Vec<FullVec> = gen_rand_vecs(n, 4)
-            .iter()
-            .map(|v| FullVec::new(&v.clone()))
-            .collect();
-        let vectors_clone = vectors.clone();
-        for (v, vc) in vectors.iter_mut().zip(vectors_clone.iter()) {
-            v.center(&means);
-            for (idx, (v_val, vc_val)) in v.iter_vals().zip(vc.iter_vals()).enumerate() {
-                let err = (v_val - (vc_val - means[idx])).abs() / (vc_val - means[idx]);
-                assert!(err < 0.0001);
-            }
-        }
-
-        for (v, vc) in vectors.iter_mut().zip(vectors_clone.iter()) {
-            v.decenter(&means);
-            for (v_val, vc_val) in v.iter_vals().zip(vc.iter_vals()) {
-                let err = (v_val - vc_val).abs() / vc_val;
-                assert!(err < 0.0001);
-            }
-        }
     }
 }

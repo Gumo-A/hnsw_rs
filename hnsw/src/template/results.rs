@@ -4,14 +4,23 @@ use graph::nodes::Dist;
 use graph::{errors::GraphError, nodes::NodeID};
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
-use points::points::Points;
+use points::points::{Points, SimplePoints};
 use std::collections::BTreeSet;
-use vectors::{VecBase, VecTrait};
+use vectors::VecBase;
 
 type OrderedDists = BTreeSet<Dist>;
 pub type LayerResult = IntMap<NodeID, OrderedDists>;
 type LayersResults = IntMap<usize, LayerResult>;
 
+/// A wrapper around many helper data structures
+/// such as BTreeSet and IntMap.
+///
+/// The Results struct is used to store the visited nodes
+/// during traversal, and it uses BTreeSets to keep an ordered
+/// trace of the distances to those nodes.
+///
+/// It uses these structures to provide an interface for quick
+/// retrieval of best and worst candidates during insertion
 pub struct Results {
     pub selected: OrderedDists,
     pub candidates: OrderedDists,
@@ -33,13 +42,13 @@ impl Results {
         }
     }
 
-    pub fn get_insertion_result(&mut self, layer_nb: usize) -> &mut LayerResult {
+    fn get_insertion_result(&mut self, layer_nb: usize) -> &mut LayerResult {
         self.insertion_results
             .entry(layer_nb)
             .or_insert(IntMap::default())
     }
 
-    pub fn get_prune_result(&mut self, layer_nb: usize) -> &mut LayerResult {
+    fn get_prune_result(&mut self, layer_nb: usize) -> &mut LayerResult {
         self.prune_results
             .entry(layer_nb)
             .or_insert(IntMap::default())
@@ -49,17 +58,18 @@ impl Results {
         self.selected.iter().take(n).copied().collect()
     }
 
-    pub fn get_nearest_from_selected<T: VecTrait>(
-        &self,
-        point: &Point<T>,
-        points: &Points<T>,
-    ) -> Dist {
-        let point_ids: Vec<NodeID> = self.selected.iter().map(|n| n.id).collect();
-        let selected_points = points.get_points_iter(point_ids.iter().copied());
+    pub fn select_simple(&mut self, m: usize) {
+        while self.selected.len() > m {
+            self.selected.pop_last();
+        }
+    }
+
+    pub fn get_nearest_from_selected(&self, point: &Point, points: &SimplePoints) -> Dist {
+        let selected_points = points.get_points_iter(self.selected.iter().map(|n| n.id));
         let distances = point.dist2many(selected_points);
         distances
-            .zip(point_ids.iter())
-            .map(|(dist, id)| Dist::new(*id, dist))
+            .zip(self.selected.iter().map(|n| n.id))
+            .map(|(dist, id)| Dist::new(id, dist))
             .min()
             .unwrap()
     }
@@ -104,10 +114,10 @@ impl Results {
         self.visited_h.insert(visited);
     }
 
-    pub fn extend_candidates_with_neighbors<T: VecTrait>(
+    pub fn extend_candidates_with_neighbors(
         &mut self,
-        point: &Point<T>,
-        points: &Points<T>,
+        point: &Point,
+        points: &SimplePoints,
         layer: &Graph,
     ) -> Result<(), String> {
         let mut neighbors = Vec::new();
@@ -142,24 +152,16 @@ impl Results {
         }
     }
 
-    pub fn iter_selected(&self) -> impl Iterator<Item = &Dist> {
-        self.selected.iter()
-    }
-
     pub fn clear_candidates(&mut self) {
         self.candidates.clear();
     }
+
     pub fn clear_prune(&mut self) {
         self.prune_results.clear();
     }
+
     pub fn clear_visited(&mut self) {
         self.visited.clear();
-    }
-    pub fn clear_selected(&mut self) {
-        self.selected.clear();
-    }
-    pub fn clear_visited_heuristic(&mut self) {
-        self.visited_h.clear();
     }
 
     pub fn clear_all(&mut self) {

@@ -3,10 +3,10 @@ use hnsw::helpers::glove::load_glove_array;
 use hnsw::params::get_default_ml;
 use hnsw::template::HNSW;
 use points::point::Point;
-use points::point_collection::Points;
+use points::point_collection::BlockPoints;
 use rand::Rng;
 use std::time::Duration;
-use vectors::{LVQVec, VecBase};
+use vectors::{QuantVec, VecBase};
 
 const DIMS: [usize; 1] = [300];
 const GLOVE_DIMS: [usize; 1] = [300];
@@ -34,7 +34,7 @@ fn insert_at_10000_m12(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(dim), |b| {
             b.iter_batched(
                 || (index.clone(), vector.clone()),
-                move |(mut i, vect): (HNSW<LVQVec>, Vec<f32>)| {
+                move |(mut i, vect): (HNSW<QuantVec>, Vec<f32>)| {
                     i.insert_point(Point::new_quant(9_999, 0, &vect)).unwrap();
                 },
                 criterion::BatchSize::LargeInput,
