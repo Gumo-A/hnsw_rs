@@ -1,7 +1,7 @@
 const BITS: i32 = 8;
 const CHUNK_SIZE: usize = 8;
 
-use crate::{VecBase, VecTrait, serializer::Serializer};
+use crate::{VecBase, serializer::Serializer};
 
 #[derive(Debug, Clone)]
 pub struct QuantVec {
@@ -123,8 +123,6 @@ impl Serializer for QuantVec {
         }
     }
 }
-
-impl VecTrait for QuantVec {}
 
 #[cfg(test)]
 mod tests {

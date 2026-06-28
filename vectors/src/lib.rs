@@ -1,17 +1,11 @@
-mod bytes;
 mod full;
-mod lvq;
+mod quant;
 pub mod serializer;
 
-pub use bytes::ByteVec;
 pub use full::FullVec;
-pub use lvq::QuantVec;
+pub use quant::QuantVec;
 
 use rand::Rng;
-
-use crate::serializer::Serializer;
-
-pub trait VecTrait: VecBase + Serializer + Clone {}
 
 pub trait VecBase {
     fn new(vector: &Vec<f32>) -> Self;
