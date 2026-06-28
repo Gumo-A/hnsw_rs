@@ -5,3 +5,7 @@ target/
 *.ann
 
 index_eval_test/
+hnsw/read_point_test
+hnsw/read_point_test
+hnsw/ser_test_full
+hnsw/ser_test_quant
