@@ -1,17 +1,18 @@
 use graph::nodes::NodeID;
-use vectors::{FullVec, QuantVec, VecBase, VecTrait, serializer::Serializer};
+use vectors::{QuantVec, VecBase, serializer::Serializer};
 
+type VecType = QuantVec;
 #[derive(Debug, Clone)]
 pub struct Point {
     pub id: NodeID,
     pub level: u8,
-    vector: QuantVec,
+    vector: VecType,
 }
 
 impl Point {
-    pub fn new_with(level: usize, vector: &Vec<f32>) -> Point {
+    pub fn with_level_and_id(vector: &Vec<f32>, level: usize, id: usize) -> Point {
         let mut point = Self::new(vector);
-        point.id = 0;
+        point.id = id as NodeID;
         point.level = level as u8;
         point
     }
@@ -24,7 +25,7 @@ impl VecBase for Point {
         Point {
             id: 0,
             level: 0,
-            vector: QuantVec::new(vector),
+            vector: VecType::new(vector),
         }
     }
 
@@ -62,10 +63,10 @@ impl Serializer for Point {
     }
 
     // When we deserialize, we dont get the ID, it is inferred
-    // from its position within its block and the block ID.
+    // from its position.
     fn deserialize(data: Vec<u8>) -> Self {
         let level = u8::from_be_bytes(data[..1].try_into().unwrap());
-        let vector = QuantVec::deserialize(data[1..].try_into().unwrap());
+        let vector = VecType::deserialize(data[1..].try_into().unwrap());
         Point {
             id: 0,
             level,
@@ -80,7 +81,7 @@ mod test {
     // Cannot test for ID serialization here,
     // it is done at the block level
 
-    use vectors::{QuantVec, gen_rand_vecs};
+    use vectors::gen_rand_vecs;
 
     use super::*;
 
@@ -91,10 +92,10 @@ mod test {
         let a_level = 2;
         let b_level = 1;
 
-        let a = Point::new_with(a_level, &rand_vecs[0]);
+        let a = Point::with_level_and_id(&rand_vecs[0], a_level, 0);
         let a_vector = a.get_vals();
 
-        let b = Point::new_with(b_level, &rand_vecs[1]);
+        let b = Point::with_level_and_id(&rand_vecs[0], b_level, 0);
         let b_vector = b.get_vals();
 
         let a_ser = a.serialize();
