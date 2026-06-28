@@ -1,8 +1,7 @@
 target/
-*.txt
 *.csv
 *.py
 *.ods
 *.ann
 
-index_eval_test
+index_eval_test/
