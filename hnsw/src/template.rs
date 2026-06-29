@@ -16,9 +16,9 @@ use crate::{
 use graph::{dist::Dist, graph::Graph, layers::Layers, NodeID};
 use points::{
     point::Point,
-    points::{Points, SimplePoints},
+    points::{new_layer, Points, SimplePoints},
 };
-use rand::Rng;
+use rand::{rngs::ThreadRng, Rng};
 use vectors::serializer::Serializer;
 
 mod searcher;
@@ -161,26 +161,28 @@ impl HNSW {
         }
     }
 
-    pub fn insert_point(&mut self, point: Point) -> Result<bool, String> {
-        let point_id = point.id;
-        self.points.push(point);
-        self.insert(point_id, &mut Inserter::new())
+    pub fn insert_vec(&mut self, vector: &Vec<f32>) -> Result<NodeID, String> {
+        let point_id = self.points.push(vector, self.params.ml);
+        let point = self.get_point(point_id).unwrap();
+        self.layers
+            .add_node_with_level(point.id, point.level as usize);
+        self.insert(point_id, &mut Inserter::new())?;
+        Ok(point_id)
     }
 
     /// Determines and sets the neighbors of a point that has been stored in
     /// the layered graph and in the points field
-    fn insert(&self, point_id: NodeID, inserter: &mut Inserter) -> Result<bool, String> {
+    fn insert(&self, point_id: NodeID, inserter: &mut Inserter) -> Result<(), String> {
         let point = self
             .points
             .get_point(point_id)
-            .expect("Point ID not found in collection.");
+            .expect(format!("Point {point_id} not found in collection.").as_str());
 
         inserter.build_insertion_results(&self, point)?;
         self.make_connections(inserter.get_results())?;
         self.fix_connexions(inserter.get_results_mut())?;
         self.write_results_prune(inserter.get_results())?;
-
-        Ok(true)
+        Ok(())
     }
 
     pub fn get_layer(&self, layer_nb: usize) -> &Graph {
@@ -257,7 +259,7 @@ impl HNSW {
     /// be done on these points after this operation,
     fn store_points(&mut self, points: PointsType) {
         self.check_points_dim(&points);
-        let ids = self.points.extend(points);
+        let ids = self.points.extend(points, self.params.ml);
         for point_id in ids {
             let level = self.points.get_point(point_id).unwrap().level;
             self.layers.add_node_with_level(point_id, level as usize);
@@ -448,6 +450,34 @@ mod test {
     }
 
     #[test]
+    fn hnsw_insert_one_after_build() {
+        let vectors = make_rand_vectors(N, DIM);
+        let index: HNSW = HNSW::new(12, None, DIM);
+        let mut index = index.insert_bulk(vectors, 1, false).unwrap();
+
+        assert_eq!(index.len(), N);
+
+        let vector = make_rand_vectors(1, DIM)[0].clone();
+        index.insert_vec(&vector).unwrap();
+
+        assert_eq!(index.len(), N + 1);
+    }
+
+    #[test]
+    fn hnsw_insert_many_after_build() {
+        let index: HNSW = HNSW::new(12, None, DIM);
+        let vectors = make_rand_vectors(N, DIM);
+        let index = index.insert_bulk(vectors, 1, false).unwrap();
+
+        assert_eq!(index.len(), N);
+
+        let vectors = make_rand_vectors(N, DIM);
+        let index = index.insert_bulk(vectors, 1, false).unwrap();
+
+        assert_eq!(index.len(), N * 2);
+    }
+
+    #[test]
     #[should_panic]
     fn can_not_add_different_dim() {
         let index = HNSW::new(12, None, 128);
@@ -513,18 +543,17 @@ mod test {
             println!("Min degree {min_degree}");
             println!("Max degree {max_degree}");
             assert!(min_degree > 0);
-            // assert!(max_degree <= layer.m);
         }
     }
 
     #[test]
-    fn hnsw_serialize_quant() {
+    fn hnsw_serialize() {
         for _ in 0..100 {
             let vectors = make_rand_vectors(N, DIM);
             let index = HNSW::new(12, None, DIM);
             let index = index.insert_bulk(vectors, 1, false).unwrap();
 
-            let index_path = Path::new("./ser_test_quant");
+            let index_path = Path::new("./serialization_test");
             if index_path.exists() {
                 std::fs::remove_dir_all(index_path).unwrap();
             }
@@ -534,6 +563,25 @@ mod test {
             std::fs::remove_dir_all(index_path).unwrap();
 
             assert_eq!(N, loaded_index.len());
+            for id in index.points.ids() {
+                dbg!(id);
+                let index_neighs = index.layers.get_layer(0).neighbors(id).unwrap();
+                let loaded_neighs = loaded_index.layers.get_layer(0).neighbors(id).unwrap();
+
+                let index_diff_loaded: Vec<&NodeID> =
+                    index_neighs.difference(&loaded_neighs).collect();
+                dbg!(&index_diff_loaded);
+                assert_eq!(index_diff_loaded.len(), 0);
+
+                let loaded_diff_index: Vec<&NodeID> =
+                    loaded_neighs.difference(&index_neighs).collect();
+                assert_eq!(loaded_diff_index.len(), 0);
+
+                assert_eq!(
+                    index.get_point(id).unwrap().get_vals(),
+                    loaded_index.get_point(id).unwrap().get_vals()
+                );
+            }
         }
     }
 }

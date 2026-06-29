@@ -15,8 +15,8 @@ pub trait Points {
     fn len(&self) -> usize;
     fn ids(&self) -> impl Iterator<Item = NodeID>;
     fn dim(&self) -> Option<usize>;
-    fn push(&mut self, point: Point) -> NodeID;
-    fn extend(&mut self, other: Self) -> Vec<NodeID>;
+    fn push(&mut self, v: &Vec<f32>, ml: f32) -> NodeID;
+    fn extend(&mut self, other: Self, ml: f32) -> Vec<NodeID>;
     // fn remove(&mut self, index: Node) -> bool;
     fn get_point(&self, idx: NodeID) -> Option<&Point>;
     fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point>
@@ -58,10 +58,11 @@ impl Points for SimplePoints {
         }
     }
 
-    fn push(&mut self, point: Point) -> NodeID {
-        let id = point.id;
+    fn push(&mut self, v: &Vec<f32>, ml: f32) -> NodeID {
+        let id = self.len();
+        let point = Point::with_level_and_id(v, new_layer(ml, &mut ThreadRng::default()), id);
         self.collection.push(point);
-        id
+        id as NodeID
     }
 
     fn get_point(&self, idx: NodeID) -> Option<&Point> {
@@ -92,11 +93,11 @@ impl Points for SimplePoints {
         }
     }
 
-    fn extend(&mut self, other: Self) -> Vec<NodeID> {
+    fn extend(&mut self, other: Self, ml: f32) -> Vec<NodeID> {
         let mut ids = Vec::with_capacity(other.len());
         let mut other = other;
         for point in other.collection.drain(..) {
-            ids.push(self.push(point));
+            ids.push(self.push(&point.get_vals(), ml));
         }
         ids
     }
@@ -131,7 +132,7 @@ impl Serializer for SimplePoints {
     }
 }
 
-fn new_layer(ml: f32, rng: &mut ThreadRng) -> usize {
+pub fn new_layer(ml: f32, rng: &mut ThreadRng) -> usize {
     let mut rand_nb = 0.0;
     loop {
         if (rand_nb == 0.0) | (rand_nb == 1.0) {

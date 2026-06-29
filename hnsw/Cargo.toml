@@ -13,9 +13,6 @@ panic = "abort"
 [build]
 rustflags = ["-C", "target-cpu=native"]
 
-[lib]
-bench = false
-
 [dependencies]
 graph = {path = "../graph"}
 vectors = {path = "../vectors"}
@@ -35,3 +32,6 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 [[bench]]
 name = "hnsw_benchmarks"
 harness = false
+
+[lib]
+bench = false

@@ -3,6 +3,7 @@ use block::data::BlockData;
 use block::header::{BLOCK_HEADER_SIZE, BlockHeader};
 use block::{BlockID, MAX_PER_BLOCK, PointsBlock};
 use graph::NodeID;
+use rand::rngs::ThreadRng;
 use rand::thread_rng;
 use std::fs::File;
 use std::io::Read;
@@ -70,7 +71,9 @@ impl Points for BlockPoints {
         }
     }
 
-    fn push(&mut self, point: Point) -> NodeID {
+    fn push(&mut self, v: &Vec<f32>, ml: f32) -> NodeID {
+        let id = self.len();
+        let point = Point::with_level_and_id(v, new_layer(ml, &mut ThreadRng::default()), id);
         if self.collection.len() == 0 {
             self.add_point_new_block(point)
         } else {
@@ -129,11 +132,11 @@ impl Points for BlockPoints {
         indices.map(|idx| self.get_point(idx).unwrap())
     }
 
-    fn extend(&mut self, mut other: BlockPoints) -> Vec<NodeID> {
+    fn extend(&mut self, mut other: BlockPoints, ml: f32) -> Vec<NodeID> {
         let mut ids = Vec::with_capacity(other.len());
         for block in other.collection.drain(..) {
             for point in block.block.data {
-                ids.push(self.push(point));
+                ids.push(self.push(&point.get_vals(), ml));
             }
         }
         ids
