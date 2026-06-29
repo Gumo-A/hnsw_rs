@@ -1,41 +1,28 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hnsw::helpers::glove::load_glove_array;
-use hnsw::params::get_default_ml;
 use hnsw::template::HNSW;
 use points::point::Point;
-use points::point_collection::BlockPoints;
-use rand::Rng;
+use std::fs::File;
 use std::time::Duration;
-use vectors::{QuantVec, VecBase};
 
-const DIMS: [usize; 1] = [300];
-const GLOVE_DIMS: [usize; 1] = [300];
-const M: usize = 12;
+const M: [usize; 3] = [32, 64, 128];
+const FILE_NAME: &str = "/home/gamal/glove_dataset/glove.6B/glove.6B.300d.txt";
 
-fn insert_at_10000_m12(c: &mut Criterion) {
-    let ml = get_default_ml(M);
-    let mut group = c.benchmark_group("Insert @ 10_000 nodes, m12");
-    // group
-    //     .sample_size(1000)
-    //     .measurement_time(Duration::from_secs(1000));
-
-    for dim in GLOVE_DIMS.iter() {
-        let (_, embeddings) =
-            load_glove_array(10_000, format!("glove.840B.{dim}d"), false).unwrap();
-        let index = HNSW::new(M, None, embeddings[0].len());
+fn insert_at_10k(c: &mut Criterion) {
+    let mut group = c.benchmark_group(format!("Insert @ 10k nodes"));
+    for m in M {
+        let file = File::open(FILE_NAME).unwrap();
+        let (_, embeddings) = load_glove_array(10_000, file, false).unwrap();
+        let index = HNSW::new(m, None, embeddings[0].len());
         let index = index
-            .insert_bulk(
-                Points::new_quant(embeddings[..9_999].to_vec(), ml),
-                1,
-                false,
-            )
+            .insert_bulk(embeddings[..9_999].to_vec(), 1, false)
             .unwrap();
         let vector = embeddings[9_999].clone();
-        group.bench_function(BenchmarkId::from_parameter(dim), |b| {
+        group.bench_function(BenchmarkId::from_parameter(m), |b| {
             b.iter_batched(
                 || (index.clone(), vector.clone()),
-                move |(mut i, vect): (HNSW<QuantVec>, Vec<f32>)| {
-                    i.insert_point(Point::new_quant(9_999, 0, &vect)).unwrap();
+                move |(mut i, vect): (HNSW, Vec<f32>)| {
+                    i.insert_vec(&vect).unwrap();
                 },
                 criterion::BatchSize::LargeInput,
             )
@@ -44,23 +31,18 @@ fn insert_at_10000_m12(c: &mut Criterion) {
     group.finish();
 }
 
-fn build_10000_m12(c: &mut Criterion) {
-    let ml = get_default_ml(M);
-    let mut group = c.benchmark_group("Build GloVe 10k m12");
-    group
-        .sample_size(1000)
-        .warm_up_time(Duration::from_secs(5))
-        .measurement_time(Duration::from_secs(1000));
-
-    for dim in GLOVE_DIMS.iter() {
-        let (_, embeddings) =
-            load_glove_array(10_000, format!("glove.840B.{dim}d"), false).unwrap();
-        group.bench_function(BenchmarkId::from_parameter(dim), |b| {
+fn build_10k(c: &mut Criterion) {
+    let mut group = c.benchmark_group(format!("Build GloVe 10k"));
+    group.sample_size(10);
+    for m in M {
+        let file = File::open(FILE_NAME).unwrap();
+        let (_, embeddings) = load_glove_array(10_000, file, false).unwrap();
+        group.bench_function(BenchmarkId::from_parameter(m), |b| {
             b.iter_batched(
                 || embeddings.clone(),
                 move |embs| {
-                    let index = HNSW::new(M, None, embs[0].len());
-                    let _ = index.insert_bulk(Points::new_quant(embs, ml), 1, false);
+                    let index = HNSW::new(m, None, embs[0].len());
+                    let _ = index.insert_bulk(embs, 1, false);
                 },
                 criterion::BatchSize::LargeInput,
             )
@@ -69,79 +51,5 @@ fn build_10000_m12(c: &mut Criterion) {
     group.finish();
 }
 
-fn quantize_various_sizes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Quantize with varying dimensions");
-    // group
-    //     .sample_size(1000)
-    //     .measurement_time(Duration::from_secs(1000));
-
-    for dim in DIMS.iter() {
-        let mut rng = rand::thread_rng();
-        let vector = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point = Point::new_full(0, 0, vector);
-        group.bench_with_input(BenchmarkId::from_parameter(dim), &point, |b, i| {
-            b.iter(|| i.quantized());
-        });
-    }
-    group.finish();
-}
-
-fn dist_computation_quantized_various_sizes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Dist comp. of quantized vecs by dim");
-    // group
-    //     .sample_size(1000)
-    //     .measurement_time(Duration::from_secs(1000));
-
-    for dim in DIMS.iter() {
-        let mut rng = rand::thread_rng();
-        let vector1 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point1 = Point::new_quant(0, 0, &vector1);
-
-        let vector2 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point2 = Point::new_quant(0, 0, &vector2);
-
-        group.bench_with_input(
-            BenchmarkId::from_parameter(dim),
-            &(&point1, &point2),
-            |b, i| {
-                b.iter(|| i.0.distance(i.1));
-            },
-        );
-    }
-    group.finish();
-}
-
-fn dist_computation_full_various_sizes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Dist comp. of full vecs by dim");
-    // group
-    //     .sample_size(1000)
-    //     .measurement_time(Duration::from_secs(1000));
-
-    for dim in DIMS.iter() {
-        let mut rng = rand::thread_rng();
-        let vector1 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point1 = Point::new_full(0, 0, vector1);
-
-        let vector2 = (0..*dim).map(|_| rng.gen::<f32>()).collect();
-        let point2 = Point::new_full(0, 0, vector2);
-
-        group.bench_with_input(
-            BenchmarkId::from_parameter(dim),
-            &(&point1, &point2),
-            |b, i| {
-                b.iter(|| i.0.distance(i.1));
-            },
-        );
-    }
-    group.finish();
-}
-
-criterion_group!(
-    benches,
-    insert_at_10000_m12,
-    build_10000_m12,
-    quantize_various_sizes,
-    dist_computation_quantized_various_sizes,
-    dist_computation_full_various_sizes
-);
+criterion_group!(benches, insert_at_10k, build_10k,);
 criterion_main!(benches);
