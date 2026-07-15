@@ -1,12 +1,15 @@
 pub mod block_points;
 
+use std::fmt::Debug;
+
 use graph::NodeID;
+use log::{debug, trace};
 use vectors::VecBase;
 
 use vectors::serializer::Serializer;
 
-use rand::Rng;
-use rand::rngs::ThreadRng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 use crate::point::Point;
 
@@ -15,14 +18,14 @@ pub trait Points {
     fn len(&self) -> usize;
     fn ids(&self) -> impl Iterator<Item = NodeID>;
     fn dim(&self) -> Option<usize>;
-    fn push(&mut self, v: &Vec<f32>, ml: f32) -> NodeID;
-    fn extend(&mut self, other: Self, ml: f32) -> Vec<NodeID>;
+    fn push(&mut self, point: Point) -> NodeID;
+    // extends collection and returns all new ids
+    fn extend(&mut self, other: Self) -> Vec<NodeID>;
     // fn remove(&mut self, index: Node) -> bool;
     fn get_point(&self, idx: NodeID) -> Option<&Point>;
     fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point>
     where
         I: Iterator<Item = NodeID>;
-    // extends collection and returns all new ids
     fn distance(&self, a_idx: NodeID, b_idx: NodeID) -> Option<f32>;
     fn distance2point(&self, point: &Point, idx: NodeID) -> Option<f32>;
 }
@@ -34,7 +37,7 @@ pub struct SimplePoints {
 
 impl Points for SimplePoints {
     fn new(vecs: Vec<Vec<f32>>, ml: f32) -> Self {
-        let mut rng = ThreadRng::default();
+        let mut rng = StdRng::seed_from_u64(0);
         let i = vecs.iter().enumerate().map(|(idx, v)| {
             let level = new_layer(ml, &mut rng);
             Point::with_level_and_id(v, level, idx)
@@ -58,11 +61,15 @@ impl Points for SimplePoints {
         }
     }
 
-    fn push(&mut self, v: &Vec<f32>, ml: f32) -> NodeID {
-        let id = self.len();
-        let point = Point::with_level_and_id(v, new_layer(ml, &mut ThreadRng::default()), id);
+    fn push(&mut self, mut point: Point) -> NodeID {
+        point.id = self.len() as NodeID;
+        let id = point.id;
+        trace!(
+            "Pushing new point to collection with ID {} and level {}",
+            point.id, point.level
+        );
         self.collection.push(point);
-        id as NodeID
+        id
     }
 
     fn get_point(&self, idx: NodeID) -> Option<&Point> {
@@ -93,11 +100,17 @@ impl Points for SimplePoints {
         }
     }
 
-    fn extend(&mut self, other: Self, ml: f32) -> Vec<NodeID> {
+    fn extend(&mut self, other: Self) -> Vec<NodeID> {
+        debug!("Extending current points struct from another");
+        debug!(
+            "Current points has length {0}, other has {1}",
+            self.len(),
+            other.len()
+        );
         let mut ids = Vec::with_capacity(other.len());
         let mut other = other;
         for point in other.collection.drain(..) {
-            ids.push(self.push(&point.get_vals(), ml));
+            ids.push(self.push(point));
         }
         ids
     }
@@ -132,7 +145,7 @@ impl Serializer for SimplePoints {
     }
 }
 
-pub fn new_layer(ml: f32, rng: &mut ThreadRng) -> usize {
+pub fn new_layer(ml: f32, rng: &mut StdRng) -> usize {
     let mut rand_nb = 0.0;
     loop {
         if (rand_nb == 0.0) | (rand_nb == 1.0) {
@@ -142,7 +155,8 @@ pub fn new_layer(ml: f32, rng: &mut ThreadRng) -> usize {
         }
     }
 
-    (-rand_nb.log(std::f32::consts::E) * ml).floor() as usize
+    let level = (-rand_nb.ln() * ml).floor() as usize;
+    level
 }
 
 impl<'a> SimplePoints {

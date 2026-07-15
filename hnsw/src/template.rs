@@ -1,6 +1,7 @@
 use core::panic;
+use log::{info, trace, warn};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     fs::{self, create_dir, File},
     io::{BufReader, Read, Write},
     path::Path,
@@ -16,10 +17,10 @@ use crate::{
 use graph::{dist::Dist, graph::Graph, layers::Layers, NodeID};
 use points::{
     point::Point,
-    points::{new_layer, Points, SimplePoints},
+    points::{Points, SimplePoints},
 };
-use rand::{rngs::ThreadRng, Rng};
-use vectors::serializer::Serializer;
+use rand::Rng;
+use vectors::{serializer::Serializer, VecBase};
 
 mod searcher;
 
@@ -162,10 +163,10 @@ impl HNSW {
     }
 
     pub fn insert_vec(&mut self, vector: &Vec<f32>) -> Result<NodeID, String> {
-        let point_id = self.points.push(vector, self.params.ml);
+        let point_id = self.store_points(vec![vector.clone()])[0];
+        trace!("Adding new vector to the index with ID {point_id}");
         let point = self.get_point(point_id).unwrap();
-        self.layers
-            .add_node_with_level(point.id, point.level as usize);
+        self.layers.add_node(point.id, point.level as usize);
         self.insert(point_id, &mut Inserter::new())?;
         Ok(point_id)
     }
@@ -173,6 +174,7 @@ impl HNSW {
     /// Determines and sets the neighbors of a point that has been stored in
     /// the layered graph and in the points field
     fn insert(&self, point_id: NodeID, inserter: &mut Inserter) -> Result<(), String> {
+        info!("Inserting node {point_id}");
         let point = self
             .points
             .get_point(point_id)
@@ -182,6 +184,7 @@ impl HNSW {
         self.make_connections(inserter.get_results())?;
         self.fix_connexions(inserter.get_results_mut())?;
         self.write_results_prune(inserter.get_results())?;
+        info!("Finished inserting node {point_id}");
         Ok(())
     }
 
@@ -257,12 +260,18 @@ impl HNSW {
     ///
     /// This is only the storing part, no indexing can
     /// be done on these points after this operation,
-    fn store_points(&mut self, points: PointsType) {
+    fn store_points(&mut self, vectors: Vec<Vec<f32>>) -> Vec<u32> {
+        let points = PointsType::new(vectors, get_default_ml(self.params.m));
+        let new_points_len = points.len();
+        info!(
+            "Storing {} points, EP is {}",
+            new_points_len, self.params.ep
+        );
         self.check_points_dim(&points);
-        let ids = self.points.extend(points, self.params.ml);
-        for point_id in ids {
-            let level = self.points.get_point(point_id).unwrap().level;
-            self.layers.add_node_with_level(point_id, level as usize);
+        let ids = self.points.extend(points);
+        for point_id in ids.iter() {
+            let level = self.points.get_point(*point_id).unwrap().level;
+            self.layers.add_node(*point_id, level as usize);
         }
 
         let max_layer_nb = self.layers.len() - 1;
@@ -273,6 +282,8 @@ impl HNSW {
         // needs to be connected in all the layers.
         // self.insert(new_ep, &mut Inserter::new()).unwrap();
         self.params.ep = new_ep;
+        info!("Stored {new_points_len} points, the new EP is {new_ep}");
+        ids
     }
 
     // fn get_nearest<I>(&self, point: &Point, others: I) -> Node
@@ -286,12 +297,18 @@ impl HNSW {
     //         .id
     // }
 
-    pub fn ann_by_vector(&self, point: &Point, n: usize, ef: usize) -> Result<Vec<NodeID>, String> {
+    pub fn ann_by_vector(
+        &self,
+        vector: &Vec<f32>,
+        n: usize,
+        ef: usize,
+    ) -> Result<Vec<NodeID>, String> {
+        let point = Point::new(vector);
         let mut results = Results::new();
         let searcher = Searcher::new();
         results.insert_selected(Dist::new(
             self.params.ep,
-            self.points.distance2point(point, self.params.ep).unwrap(),
+            self.points.distance2point(&point, self.params.ep).unwrap(),
         ));
         let nb_layers = self.layers.len();
 
@@ -372,7 +389,9 @@ impl HNSW {
         nb_threads: usize,
         verbose: bool,
     ) -> Result<HNSW, String> {
-        self.store_points(PointsType::new(vectors, get_default_ml(self.params.m)));
+        info!("inserting {0} vectors to index in bulk", vectors.len());
+        let mut stored_ids: HashSet<NodeID> = HashSet::new();
+        stored_ids.extend(self.store_points(vectors).iter());
 
         let bar = get_progress_bar("Building HNSW index".to_string(), self.len(), verbose);
         let bar_arc = Arc::new(bar);
@@ -381,10 +400,14 @@ impl HNSW {
 
         for layer_nb in (0..index_arc.layers.len()).rev() {
             let layer = index_arc.layers.get_layer(layer_nb);
+            info!("Connecting nodes in layer {layer_nb}, using {nb_threads} threads",);
             let chunks = ((layer.nb_nodes() as f64) / (nb_threads as f64)).ceil() as usize;
             let mut ids: Vec<Vec<NodeID>> = layer
                 .iter_nodes()
-                .filter(|id| index_arc.points.get_point(*id).unwrap().level == layer_nb as u8)
+                .filter(|id| {
+                    stored_ids.contains(id)
+                        & (index_arc.points.get_point(*id).unwrap().level == layer_nb as u8)
+                })
                 .collect::<Vec<NodeID>>()
                 .chunks(chunks)
                 .map(|chunk| Vec::from(chunk))
@@ -393,10 +416,11 @@ impl HNSW {
             let mut handlers = Vec::new();
             let mut idx = 0;
             while let Some(ids_split) = ids.pop() {
+                info!("Sending {} node IDs to thread {idx}", ids_split.len());
                 let index_copy = Arc::clone(&index_arc);
                 let bar_ref = bar_arc.clone();
-                let builder = Builder::new().name(format!("worker {idx}"));
-                let thread = builder
+                let thread = Builder::new()
+                    .name(format!("worker {idx}"))
                     .spawn(move || {
                         let mut inserter = Inserter::new();
                         for id in ids_split.iter() {
@@ -516,8 +540,7 @@ mod test {
 
         let mut total_hits = 0;
         for (idx, query) in queries.iter().enumerate() {
-            let query_point = Point::new(query);
-            let query_ann = index.ann_by_vector(&query_point, 10, 100).unwrap();
+            let query_ann = index.ann_by_vector(query, 10, 100).unwrap();
             let query_ann: HashSet<NodeID> = HashSet::from_iter(query_ann.iter().copied());
 
             let query_true_nn = HashSet::from_iter(queries_nn.get(idx).unwrap().iter().copied());

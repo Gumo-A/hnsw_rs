@@ -1,5 +1,7 @@
 use core::panic;
 
+use log::trace;
+
 use crate::{NodeID, graph::Graph};
 
 #[derive(Debug, Clone)]
@@ -35,6 +37,7 @@ impl Layers {
     }
 
     pub fn add_layer(&mut self, graph: Graph) {
+        trace!("Adding a new Graph to the LayeredGraph");
         self.levels.push(graph);
     }
 
@@ -46,13 +49,19 @@ impl Layers {
         while self.len() <= level {
             let m = if self.len() == 0 { self.m * 2 } else { self.m };
             let g = Graph::new(self.len(), m);
+            trace!(
+                "LayeredGraph has {0} levels, the requested level is {1}",
+                self.len(),
+                level
+            );
             self.add_layer(g);
         }
     }
 
     /// Adds a Node to its layers, based on its maximum level
     /// Creates layers when needed.
-    pub fn add_node_with_level(&mut self, point_id: NodeID, level: usize) {
+    pub fn add_node(&mut self, point_id: NodeID, level: usize) {
+        trace!("Adding node {point_id} with level {level}");
         self.add_level(level);
         self.levels
             .iter_mut()
