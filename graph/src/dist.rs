@@ -1,4 +1,5 @@
 use crate::NodeID;
+use std::cmp::Ordering;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Dist {
@@ -14,7 +15,7 @@ impl Dist {
 
 impl PartialEq for Dist {
     fn eq(&self, other: &Dist) -> bool {
-        self.dist == other.dist
+        (self.id == other.id) & (self.dist == other.dist)
     }
 }
 
@@ -26,10 +27,12 @@ impl PartialOrd for Dist {
     }
 }
 
-use std::cmp::Ordering;
-
 impl Ord for Dist {
     fn cmp(&self, other: &Dist) -> Ordering {
-        self.dist.partial_cmp(&other.dist).unwrap()
+        match self.dist.partial_cmp(&other.dist).unwrap() {
+            Ordering::Less => Ordering::Less,
+            Ordering::Greater => Ordering::Greater,
+            Ordering::Equal => self.id.cmp(&other.id),
+        }
     }
 }

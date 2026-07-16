@@ -63,10 +63,10 @@ impl Layers {
     pub fn add_node(&mut self, point_id: NodeID, level: usize) {
         trace!("Adding node {point_id} with level {level}");
         self.add_level(level);
-        self.levels
-            .iter_mut()
-            .take(level + 1)
-            .for_each(|layer| layer.add_node(point_id));
+        self.levels.iter_mut().take(level + 1).for_each(|layer| {
+            trace!("Adding node {point_id} to level {}", layer.level);
+            layer.add_node(point_id)
+        });
     }
 }
 

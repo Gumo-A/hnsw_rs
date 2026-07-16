@@ -1,5 +1,5 @@
 use core::panic;
-use log::{info, trace, warn};
+use log::{info, trace};
 use std::{
     collections::{BTreeSet, HashSet},
     fs::{self, create_dir, File},
@@ -163,8 +163,9 @@ impl HNSW {
     }
 
     pub fn insert_vec(&mut self, vector: &Vec<f32>) -> Result<NodeID, String> {
+        info!("Adding new vector to the index");
         let point_id = self.store_points(vec![vector.clone()])[0];
-        trace!("Adding new vector to the index with ID {point_id}");
+        info!("Stored the vector with ID {point_id}");
         let point = self.get_point(point_id).unwrap();
         self.layers.add_node(point.id, point.level as usize);
         self.insert(point_id, &mut Inserter::new())?;
@@ -182,8 +183,8 @@ impl HNSW {
 
         inserter.build_insertion_results(&self, point)?;
         self.make_connections(inserter.get_results())?;
-        self.fix_connexions(inserter.get_results_mut())?;
-        self.write_results_prune(inserter.get_results())?;
+        self.prune_connections(inserter.get_results_mut())?;
+        self.make_pruned_connections(inserter.get_results())?;
         info!("Finished inserting node {point_id}");
         Ok(())
     }
@@ -193,6 +194,7 @@ impl HNSW {
     }
 
     fn make_connections(&self, results: &Results) -> Result<(), String> {
+        info!("Making connections using results");
         for (layer_nb, node_data) in results.insertion_results.iter() {
             let layer = self.get_layer(*layer_nb);
             for (node, neighbors) in node_data.iter() {
@@ -200,10 +202,12 @@ impl HNSW {
                 layer.add_neighbors(*node, neighbors).unwrap();
             }
         }
+        info!("Finished making connections");
         Ok(())
     }
 
-    fn fix_connexions(&self, searcher: &mut Results) -> Result<(), String> {
+    fn prune_connections(&self, searcher: &mut Results) -> Result<(), String> {
+        trace!("Begin pruning connections");
         searcher.clear_prune();
 
         for (layer_nb, node_data) in searcher.insertion_results.clone().iter() {
@@ -229,10 +233,12 @@ impl HNSW {
                 }
             }
         }
+        trace!("Finised pruning connections");
         Ok(())
     }
 
-    fn write_results_prune(&self, results: &Results) -> Result<(), String> {
+    fn make_pruned_connections(&self, results: &Results) -> Result<(), String> {
+        info!("Begin making pruned connections");
         for (layer_nb, node_data) in results.prune_results.iter() {
             let layer = self.layers.get_layer(*layer_nb);
             for (node, neighbors) in node_data.iter() {
@@ -240,7 +246,7 @@ impl HNSW {
                 layer.replace_neighbors(*node, neighbors).unwrap();
             }
         }
-
+        info!("Finished making pruned connections");
         Ok(())
     }
 
@@ -303,6 +309,7 @@ impl HNSW {
         n: usize,
         ef: usize,
     ) -> Result<Vec<NodeID>, String> {
+        info!("Start ANN search");
         let point = Point::new(vector);
         let mut results = Results::new();
         let searcher = Searcher::new();
@@ -313,22 +320,17 @@ impl HNSW {
         let nb_layers = self.layers.len();
 
         for layer_nb in (1..nb_layers).rev() {
-            searcher.search_layer(
-                &mut results,
-                self.get_layer(layer_nb),
-                &point,
-                &self.points,
-                1,
-            )?;
+            searcher.search_layer(&mut results, self.get_layer(layer_nb), &point, self, 1)?;
         }
 
-        searcher.search_layer(&mut results, &self.get_layer(0), &point, &self.points, ef)?;
+        searcher.search_layer(&mut results, &self.get_layer(0), &point, &self, ef)?;
 
         let anns: Vec<NodeID> = results
             .get_top_selected(n)
             .iter()
             .map(|dist| dist.id)
             .collect();
+        info!("Finished ANN search");
         Ok(anns)
     }
 
@@ -521,7 +523,7 @@ mod test {
         let (_, queries) = load_glove_array(0, file, false).expect("Could not load query vectors");
         let nb_queries = queries.len();
 
-        let index = HNSW::new(M, None, 50);
+        let index = HNSW::new(M, None, queries[0].len());
         let index = index.insert_bulk(stored.clone(), 1, false).unwrap();
 
         let points = &index.points;

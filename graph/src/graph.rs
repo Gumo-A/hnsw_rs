@@ -1,5 +1,6 @@
 use crate::{NodeID, errors::GraphError};
 
+use log::trace;
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
 use std::sync::{Arc, Mutex};
@@ -46,6 +47,7 @@ impl Graph {
         {
             b.lock().unwrap().insert(node_a);
         }
+        trace!("Added edge ({node_a}, {node_b})");
         Ok(())
     }
 
@@ -76,11 +78,12 @@ impl Graph {
         {
             b.lock().unwrap().remove(&node_a);
         }
-
+        trace!("Removed edge ({node_a}, {node_b})");
         Ok(())
     }
 
     fn isolate_node(&self, node: NodeID) -> Result<(), GraphError> {
+        // for neighbor in self.neighbors_lock(node)?.lock().unwrap().iter() {
         for neighbor in self.neighbors_vec(node)?.iter() {
             if self.degree(*neighbor)? == 1 {
                 continue;
@@ -98,6 +101,7 @@ impl Graph {
     }
 
     pub fn neighbors_vec(&self, node: NodeID) -> Result<Vec<NodeID>, GraphError> {
+        trace!("Getting neighbors of {node}");
         let neighbors = match self.nodes.get(&node) {
             Some(neighbors) => neighbors,
             None => {
@@ -108,11 +112,24 @@ impl Graph {
         Ok(neighbors.lock().unwrap().iter().cloned().collect())
     }
 
+    pub fn neighbors_lock(&self, node: NodeID) -> Result<Arc<Mutex<IntSet<u32>>>, GraphError> {
+        trace!("Getting neighbors of {node}");
+        let neighbors = match self.nodes.get(&node) {
+            Some(neighbors) => neighbors,
+            None => {
+                return Err(GraphError::NodeNotInGraph(node));
+            }
+        };
+
+        Ok(neighbors.clone())
+    }
+
     /// Replaces the neighbors of node with new_neighbors.
     pub fn replace_neighbors<I>(&self, node: NodeID, new_neighbors: I) -> Result<(), GraphError>
     where
         I: Iterator<Item = NodeID>,
     {
+        trace!("Replacing {node}'s neighbors");
         self.isolate_node(node)?;
         self.add_neighbors(node, new_neighbors)?;
 

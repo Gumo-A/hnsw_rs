@@ -1,13 +1,14 @@
 use core::panic;
 
 use graph::{dist::Dist, errors::GraphError, graph::Graph};
+use log::trace;
 use points::{
     point::Point,
     points::{Points, SimplePoints},
 };
 use vectors::VecBase;
 
-use crate::template::{results::Results, PointsType};
+use crate::template::{results::Results, PointsType, HNSW};
 
 pub struct Searcher {}
 
@@ -24,16 +25,21 @@ impl Searcher {
         results: &mut Results,
         layer: &Graph,
         point: &Point,
-        points: &PointsType,
+        index: &HNSW,
         ef: usize,
     ) -> Result<(), String> {
+        trace!("Searching Layer");
         results.extend_candidates_with_selected();
         results.extend_visited_with_selected();
 
         while !results.candidates.is_empty() {
+            trace!("Begin loop");
             let cand_dist = results.candidates.pop_first().unwrap();
             let furthest2q_dist = results.selected.last().unwrap();
+            trace!("Best candidate: {cand_dist:?}");
+            trace!("Worst selected: {furthest2q_dist:?}");
             if cand_dist > *furthest2q_dist {
+                trace!("Best candidate is further away than worst selected, breaking from loop");
                 break;
             }
             let cand_neighbors = match layer.neighbors_vec(cand_dist.id) {
@@ -45,30 +51,51 @@ impl Searcher {
                     _ => panic!("Error in search_layer: got an unexpected error"),
                 },
             };
+            trace!("{0} has {1} neighbors", cand_dist.id, cand_neighbors.len());
 
+            trace!(
+                "Getting distances from query {0} to {1}'s neighbors",
+                point.id,
+                cand_dist.id
+            );
             let q2cand_neighbors_dists: Vec<Dist> = cand_neighbors
                 .iter()
                 .filter(|node| results.insert_visited(**node))
                 .copied()
                 .map(|node| {
-                    let other = points
-                        .get_point(node)
-                        .expect("Point ID not found in collection.");
-                    Dist::new(other.id, point.dist2other(&other))
+                    let dist = index
+                        .distance(point.id, node)
+                        .expect("Could not compute distance between points");
+                    Dist::new(node, dist)
                 })
                 .collect();
+            trace!("Selecting among the best of the candidate's neighbors");
             for n2q_dist in q2cand_neighbors_dists {
                 let f2q_dist = results.selected.last().unwrap();
-                if (n2q_dist < *f2q_dist) | (results.selected.len() < ef as usize) {
+
+                if results.selected.len() < ef as usize {
+                    trace!("Need to fill selected struct, inserting {n2q_dist:?}");
+                    results.insert_selected(n2q_dist);
+                    results.insert_candidate(n2q_dist);
+                    continue;
+                }
+
+                if n2q_dist < *f2q_dist {
+                    trace!("Candidate's neighbor {n2q_dist:?} is better than worst selected {f2q_dist:?}, inserting it");
                     results.insert_selected(n2q_dist);
                     results.insert_candidate(n2q_dist);
 
                     if results.selected.len() > ef as usize {
-                        results.selected.pop_last();
+                        let removed = results.selected.pop_last().unwrap();
+                        trace!("Selected was too full, removed {removed:?}");
                     }
                 }
             }
         }
+        trace!(
+            "Finished traversing the Layer. Selected: {:?}",
+            results.selected
+        );
         results.clear_candidates();
         results.clear_visited();
         Ok(())
@@ -88,6 +115,7 @@ impl Searcher {
         extend_cands: bool,
         keep_pruned: bool,
     ) -> Result<(), String> {
+        trace!("Begin select_heuristic, selected is {:?}", results.selected);
         results.select_setup();
         if extend_cands {
             results.extend_candidates_with_neighbors(point, points, layer)?;
@@ -116,6 +144,10 @@ impl Searcher {
             }
         }
 
+        trace!(
+            "Finished select_heuristic, selected is {:?}",
+            results.selected
+        );
         Ok(())
     }
 }

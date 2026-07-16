@@ -3,6 +3,7 @@ use graph::dist::Dist;
 use graph::errors::GraphError;
 use graph::graph::Graph;
 use graph::NodeID;
+use log::trace;
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
 use points::points::{Points, SimplePoints};
@@ -76,6 +77,7 @@ impl Results {
     }
 
     pub fn save_layer_results(&mut self, layer_nb: usize, point_id: NodeID) {
+        trace!("Saving layer results for Layer {layer_nb} and point {point_id}");
         let point_neighbors = self.selected.clone();
         let layer_result = self.get_insertion_result(layer_nb);
         layer_result.insert(point_id, point_neighbors);
@@ -92,6 +94,7 @@ impl Results {
     }
 
     pub fn insert_selected(&mut self, dist: Dist) {
+        trace!("Inserting distance to selected: {dist:?}");
         self.selected.insert(dist);
     }
 
@@ -107,8 +110,9 @@ impl Results {
         self.selected.clear();
     }
 
-    pub fn insert_candidate(&mut self, candidate: Dist) {
-        self.candidates.insert(candidate);
+    pub fn insert_candidate(&mut self, dist: Dist) {
+        trace!("Inserting distance to candidates: {dist:?}");
+        self.candidates.insert(dist);
     }
 
     pub fn insert_visited_h(&mut self, visited: Dist) {
@@ -142,15 +146,25 @@ impl Results {
     }
 
     pub fn extend_candidates_with_selected(&mut self) {
+        trace!("Extending candidates from selected");
+        trace!("Selected: {:?}", self.selected);
+        trace!("Candidates: {:?}", self.candidates);
         for node in self.selected.iter() {
             self.candidates.insert(node.clone());
         }
+        trace!("Extended candidates");
+        trace!("Candidates: {:?}", self.candidates);
     }
 
     pub fn extend_visited_with_selected(&mut self) {
+        trace!("Extending visited from selected");
+        trace!("Selected: {:?}", self.selected);
+        trace!("Visited: {:?}", self.visited);
         for node in self.selected.iter() {
             self.visited.insert(node.id);
         }
+        trace!("Extended visited");
+        trace!("Visited: {:?}", self.visited);
     }
 
     pub fn clear_candidates(&mut self) {
@@ -166,6 +180,7 @@ impl Results {
     }
 
     pub fn clear_all(&mut self) {
+        trace!("Clearing all Results' structures");
         self.selected.clear();
         self.candidates.clear();
         self.visited.clear();
@@ -203,5 +218,15 @@ mod test {
             );
         }
         assert_eq!(r.selected.len(), r.candidates.len());
+    }
+
+    #[test]
+    fn equal_dists_diff_ids_are_added() {
+        let mut r = Results::new();
+        r.insert_selected(Dist::new(0, 0.5));
+        r.insert_selected(Dist::new(1, 0.5));
+        r.insert_selected(Dist::new(2, 0.0));
+        r.insert_selected(Dist::new(4, 0.0));
+        assert_eq!(r.selected.len(), 4);
     }
 }
