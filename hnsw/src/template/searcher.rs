@@ -64,8 +64,9 @@ impl Searcher {
                 .copied()
                 .map(|node| {
                     let dist = index
-                        .distance(point.id, node)
-                        .expect("Could not compute distance between points");
+                        .get_point(node)
+                        .expect(format!("Could get point {node}").as_str())
+                        .dist2other(point);
                     Dist::new(node, dist)
                 })
                 .collect();
