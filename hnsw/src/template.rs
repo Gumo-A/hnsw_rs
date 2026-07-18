@@ -1,5 +1,6 @@
 use core::panic;
 use log::{info, trace};
+use nohash_hasher::IntSet;
 use std::{
     collections::{BTreeSet, HashSet},
     fs::{self, create_dir, File},
@@ -215,20 +216,22 @@ impl HNSW {
             for (_, neighbors) in node_data.iter() {
                 let nodes_to_prune = neighbors
                     .iter()
-                    .filter(|x| layer.degree(x.id).unwrap() > layer.m)
-                    .map(|x| *x);
+                    .filter(|id| layer.degree(**id).unwrap() > layer.m);
 
                 for to_prune in nodes_to_prune {
-                    let id = to_prune.id;
-                    let to_prune_neighbors = match layer.neighbors_vec(id) {
+                    let to_prune_neighbors = match layer.neighbors_lock(*to_prune) {
                         Ok(n) => n,
                         Err(_) => return Err("Could not get neighbors of {id}".to_string()),
                     };
-                    let to_prune_distances = to_prune_neighbors
-                        .iter()
-                        .map(|n| Dist::new(*n, self.distance(to_prune.id, *n).unwrap()));
-                    let nearest = select_simple(to_prune_distances, layer.m)?;
-                    searcher.insert_prune_result(*layer_nb, to_prune.id, nearest);
+                    let nearest = select_simple(
+                        to_prune_neighbors
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(|n| Dist::new(*n, self.distance(*to_prune, *n).unwrap())),
+                        layer.m,
+                    );
+                    searcher.insert_prune_result(*layer_nb, *to_prune, nearest);
                 }
             }
         }
@@ -241,8 +244,9 @@ impl HNSW {
         for (layer_nb, node_data) in results.prune_results.iter() {
             let layer = self.layers.get_layer(*layer_nb);
             for (node, neighbors) in node_data.iter() {
-                let neighbors = neighbors.iter().map(|n| n.id);
-                layer.replace_neighbors(*node, neighbors).unwrap();
+                layer
+                    .replace_neighbors(*node, neighbors.iter().copied())
+                    .unwrap();
             }
         }
         info!("Finished making pruned connections");

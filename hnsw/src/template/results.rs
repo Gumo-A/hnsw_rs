@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use vectors::VecBase;
 
 type OrderedDists = BTreeSet<Dist>;
-pub type LayerResult = IntMap<NodeID, OrderedDists>;
+pub type LayerResult = IntMap<NodeID, IntSet<NodeID>>;
 type LayersResults = IntMap<usize, LayerResult>;
 
 /// A wrapper around many helper data structures
@@ -78,7 +78,7 @@ impl Results {
 
     pub fn save_layer_results(&mut self, layer_nb: usize, point_id: NodeID) {
         trace!("Saving layer results for Layer {layer_nb} and point {point_id}");
-        let point_neighbors = self.selected.clone();
+        let point_neighbors = IntSet::from_iter(self.selected.iter().map(|dist| dist.id));
         let layer_result = self.get_insertion_result(layer_nb);
         layer_result.insert(point_id, point_neighbors);
     }
@@ -87,7 +87,7 @@ impl Results {
         &mut self,
         layer_nb: usize,
         node_id: NodeID,
-        nearest: BTreeSet<Dist>,
+        nearest: IntSet<NodeID>,
     ) {
         let layer_result = self.get_prune_result(layer_nb);
         layer_result.insert(node_id, nearest);
