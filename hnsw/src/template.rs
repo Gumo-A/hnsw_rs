@@ -465,6 +465,10 @@ mod test {
     const N: usize = 100;
     const M: usize = 12;
 
+    fn init_logs() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
     #[test]
     fn hnsw_init() {
         let _index: HNSW = HNSW::new(12, None, 128);
@@ -472,6 +476,7 @@ mod test {
 
     #[test]
     fn hnsw_build() {
+        init_logs();
         let vectors = make_rand_vectors(N, DIM);
         let index: HNSW = HNSW::new(12, None, DIM);
         let index = index.insert_bulk(vectors, 1, false).unwrap();
@@ -480,6 +485,7 @@ mod test {
 
     #[test]
     fn hnsw_insert_one_after_build() {
+        init_logs();
         let vectors = make_rand_vectors(N, DIM);
         let index: HNSW = HNSW::new(12, None, DIM);
         let mut index = index.insert_bulk(vectors, 1, false).unwrap();
@@ -494,6 +500,7 @@ mod test {
 
     #[test]
     fn hnsw_insert_many_after_build() {
+        init_logs();
         let index: HNSW = HNSW::new(12, None, DIM);
         let vectors = make_rand_vectors(N, DIM);
         let index = index.insert_bulk(vectors, 1, false).unwrap();
@@ -509,6 +516,7 @@ mod test {
     #[test]
     #[should_panic]
     fn can_not_add_different_dim() {
+        init_logs();
         let index = HNSW::new(12, None, 128);
 
         let vectors = make_rand_vectors(10, 128);
@@ -577,6 +585,7 @@ mod test {
     #[test]
     fn hnsw_serialize() {
         for _ in 0..100 {
+        init_logs();
             let vectors = make_rand_vectors(N, DIM);
             let index = HNSW::new(12, None, DIM);
             let index = index.insert_bulk(vectors, 1, false).unwrap();
