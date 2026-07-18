@@ -48,27 +48,25 @@ impl HNSW {
             }
         }
 
-        let mut points_file =
-            File::create(dir.join("points")).expect("Could not create points file");
-        let mut params_file =
-            File::create(dir.join("params")).expect("Could not create params file");
+        self.save_part(dir, self.params.serialize(), "params");
+        self.save_part(dir, self.points.serialize(), "points");
+        self.save_layers(dir);
+    }
 
-        points_file
-            .write_all(&self.points.serialize())
-            .expect("Could not write bytes to point file");
-        params_file
-            .write_all(&self.params.serialize())
-            .expect("Could not write bytes to params file");
+    fn save_part(&self, dir: &Path, data: Vec<u8>, part: &str) {
+        File::create(dir.join(part))
+            .expect(format!("Could not create {part} file").as_str())
+            .write_all(&data)
+            .expect(format!("Could not write bytes to {part} file").as_str());
+    }
 
+    fn save_layers(&self, dir: &Path) {
         let layers_dir = dir.join("layers");
-        fs::create_dir(layers_dir.clone()).expect("Could not create layers dir");
-
+        if !layers_dir.exists() {
+            fs::create_dir(layers_dir.clone()).expect("Could not create layers dir");
+        }
         for (idx, layer) in self.layers.iter_layers().enumerate() {
-            let mut layer_file = File::create(layers_dir.join(idx.to_string()))
-                .expect("Could not create file for layer {idx}");
-            layer_file
-                .write_all(&layer.serialize())
-                .expect("Could not write bytes to layer {idx}");
+            self.save_part(&layers_dir, layer.serialize(), format!("{idx}").as_str());
         }
     }
 
@@ -198,8 +196,9 @@ impl HNSW {
         for (layer_nb, node_data) in results.insertion_results.iter() {
             let layer = self.get_layer(*layer_nb);
             for (node, neighbors) in node_data.iter() {
-                let neighbors = neighbors.iter().map(|n| n.id);
-                layer.add_neighbors(*node, neighbors).unwrap();
+                layer
+                    .add_neighbors(*node, neighbors.iter().copied())
+                    .unwrap();
             }
         }
         info!("Finished making connections");
