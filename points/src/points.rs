@@ -132,12 +132,13 @@ impl Serializer for SimplePoints {
     }
 
     fn deserialize(data: Vec<u8>) -> Self {
-        let len = usize::from_be_bytes(data[0..8].try_into().unwrap());
+        let nb_points = usize::from_be_bytes(data[0..8].try_into().unwrap()) as u32;
         let point_size = usize::from_be_bytes(data[8..16].try_into().unwrap());
         let mut collection = Vec::new();
         let mut idx = 16;
-        for _ in 0..len {
-            let point = Point::deserialize(data[idx..(idx + point_size)].to_vec());
+        for id in 0..nb_points {
+            let mut point = Point::deserialize(data[idx..(idx + point_size)].to_vec());
+            point.id = id;
             collection.push(point);
             idx += point_size
         }
