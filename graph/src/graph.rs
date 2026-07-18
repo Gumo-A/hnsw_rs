@@ -1,6 +1,6 @@
 use crate::{NodeID, errors::GraphError};
 
-use log::trace;
+use log::{trace, warn};
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
 use std::sync::{Arc, Mutex};
@@ -42,10 +42,23 @@ impl Graph {
         let (a, b) = self.get_nodes_neighbors(node_a, node_b)?;
 
         {
-            a.lock().unwrap().insert(node_b);
+            let mut a = a.lock().unwrap();
+            a.insert(node_b);
+            if a.len() > self.m {
+                warn!("Edge ({node_a}, {node_b}) made {node_a} exceed M");
+                // a.remove(&node_b);
+                // return Err(GraphError::MaxNeighbors(node_a));
+            }
         }
         {
-            b.lock().unwrap().insert(node_a);
+            let mut b = b.lock().unwrap();
+            b.insert(node_a);
+            if b.len() > self.m {
+                warn!("Edge ({node_a}, {node_b}) made {node_b} exceed M");
+                // b.remove(&node_a);
+                // a.lock().unwrap().remove(&node_b);
+                // return Err(GraphError::MaxNeighbors(node_b));
+            }
         }
         trace!("Added edge ({node_a}, {node_b})");
         Ok(())
@@ -68,28 +81,26 @@ impl Graph {
     }
 
     /// Removes an edge from the Graph.
-    /// Since the add_edge method won't allow for self-connecting nodes, we don't check that here.
     fn remove_edge(&self, node_a: NodeID, node_b: NodeID) -> Result<(), GraphError> {
         let (a, b) = self.get_nodes_neighbors(node_a, node_b)?;
 
         {
-            a.lock().unwrap().remove(&node_b);
+            let mut a = a.lock().unwrap();
+            a.remove(&node_b);
+            if a.len() == 0 {
+                a.insert(node_b);
+                return Err(GraphError::IsolatedNode(node_a));
+            }
         }
         {
-            b.lock().unwrap().remove(&node_a);
+            let mut b = b.lock().unwrap();
+            b.remove(&node_a);
+            if b.len() == 0 {
+                b.insert(node_a);
+                return Err(GraphError::IsolatedNode(node_b));
+            }
         }
         trace!("Removed edge ({node_a}, {node_b})");
-        Ok(())
-    }
-
-    fn isolate_node(&self, node: NodeID) -> Result<(), GraphError> {
-        // for neighbor in self.neighbors_lock(node)?.lock().unwrap().iter() {
-        for neighbor in self.neighbors_vec(node)?.iter() {
-            if self.degree(*neighbor)? == 1 {
-                continue;
-            }
-            self.remove_edge(node, *neighbor)?;
-        }
         Ok(())
     }
 
@@ -130,9 +141,12 @@ impl Graph {
         I: Iterator<Item = NodeID>,
     {
         trace!("Replacing {node}'s neighbors");
-        self.isolate_node(node)?;
-        self.add_neighbors(node, new_neighbors)?;
-
+        let current_neighbors = self.neighbors(node)?;
+        let new_neighbors = IntSet::from_iter(new_neighbors);
+        let to_remove = current_neighbors.difference(&new_neighbors).copied();
+        let to_add = new_neighbors.difference(&current_neighbors).copied();
+        self.add_neighbors(node, to_add)?;
+        self.remove_neighbors(node, to_remove)?;
         Ok(())
     }
 
@@ -141,7 +155,34 @@ impl Graph {
         I: Iterator<Item = NodeID>,
     {
         for n in new_neighbors {
-            self.add_edge(node, n)?;
+            match self.add_edge(node, n) {
+                Ok(()) => (),
+                Err(e) => match e {
+                    GraphError::MaxNeighbors(a) => warn!(
+                        "Edge ({node}, {n}) not added, would exceed max allowed neighbors for {a}"
+                    ),
+                    _ => return Err(e),
+                },
+            };
+        }
+
+        Ok(())
+    }
+
+    pub fn remove_neighbors<I>(&self, node: NodeID, old_neighbors: I) -> Result<(), GraphError>
+    where
+        I: Iterator<Item = NodeID>,
+    {
+        for n in old_neighbors {
+            match self.remove_edge(node, n) {
+                Ok(()) => (),
+                Err(e) => match e {
+                    GraphError::IsolatedNode(a) => {
+                        warn!("Was going to remove edge ({node}, {n}), but {a} would be isolated");
+                    }
+                    _ => return Err(e),
+                },
+            };
         }
 
         Ok(())
@@ -170,6 +211,7 @@ impl Graph {
         bytes.extend_from_slice(&node_id.to_be_bytes());
 
         let mut neighbors = self.neighbors_vec(node_id).unwrap();
+        assert!(neighbors.len() <= self.m);
         while neighbors.len() < self.m {
             neighbors.push(NodeID::MAX);
         }
@@ -290,6 +332,7 @@ pub fn simple_graph() -> Graph {
 mod test {
     use crate::{
         NodeID,
+        errors::GraphError,
         graph::{Graph, make_rand_graph, simple_graph},
     };
     use nohash_hasher::IntSet;
@@ -364,7 +407,7 @@ mod test {
         g.add_edge(20, 30).unwrap();
 
         // Can't remove edge, it would leave 30 isolated
-        assert!(g.remove_edge(20, 30).is_ok());
+        assert!(g.remove_edge(20, 30).is_err());
     }
 
     #[test]
@@ -400,13 +443,16 @@ mod test {
         assert_eq!(g.degree(0).unwrap(), 3);
 
         // Replace with completely different neighbors
-        g.replace_neighbors(0, 4..=5).unwrap();
+        g.replace_neighbors(0, [4, 5].iter().copied()).unwrap();
 
         let new_neigh = g.neighbors(0).unwrap();
+        dbg!(&new_neigh);
         assert_eq!(new_neigh.len(), 2);
         assert!(new_neigh.contains(&4));
         assert!(new_neigh.contains(&5));
         assert!(!new_neigh.contains(&1));
+        assert!(!new_neigh.contains(&2));
+        assert!(!new_neigh.contains(&3));
 
         // Old neighbors should no longer point back (symmetry preserved)
         assert!(!g.neighbors(1).unwrap().contains(&0));

@@ -5,5 +5,5 @@ pub enum GraphError {
     NodeNotInGraph(NodeID),
     IsolatedNode(NodeID),
     SelfConnection(NodeID),
-    MExceeded(NodeID),
+    MaxNeighbors(NodeID),
 }
