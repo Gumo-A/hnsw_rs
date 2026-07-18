@@ -450,16 +450,21 @@ impl HNSW {
 #[cfg(test)]
 mod test {
 
-    use std::{collections::HashSet, fs::File, path::Path};
+    use std::{
+        collections::{BTreeMap, HashSet},
+        fs::File,
+        path::Path,
+    };
 
     use crate::{
         helpers::glove::load_glove_array,
-        template::{make_rand_vectors, HNSW},
+        params::Params,
+        template::{make_rand_vectors, PointsType, HNSW},
     };
-    use graph::{dist::Dist, NodeID};
+    use graph::{dist::Dist, graph::Graph, NodeID};
     use itertools::Itertools;
     use points::{point::Point, points::Points};
-    use vectors::VecBase;
+    use vectors::{serializer::Serializer, VecBase};
 
     const DIM: usize = 10;
     const N: usize = 100;
@@ -526,23 +531,19 @@ mod test {
         let _index = index.insert_bulk(vectors, 1, false).unwrap();
     }
 
-    #[test]
-    fn hnsw_glove_build_eval() {
+    fn get_glove_data() -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
         let file = File::open("/home/gamal/repos/vector-store/test-data/store.txt").unwrap();
         let (_, stored) = load_glove_array(0, file, false).expect("Could not load store vectors");
         let file = File::open("/home/gamal/repos/vector-store/test-data/queries.txt").unwrap();
         let (_, queries) = load_glove_array(0, file, false).expect("Could not load query vectors");
-        let nb_queries = queries.len();
+        return (stored, queries);
+    }
 
-        let index = HNSW::new(M, None, queries[0].len());
-        let index = index.insert_bulk(stored.clone(), 1, false).unwrap();
-
-        let points = &index.points;
-
+    fn get_actual_nn(queries: &Vec<Vec<f32>>, points: &PointsType) -> Vec<Vec<NodeID>> {
         let mut queries_nn: Vec<Vec<NodeID>> = Vec::new();
         for query in queries.iter() {
             let query_point = Point::new(query);
-            let query_true_nn = (0..stored.len() as NodeID)
+            let query_true_nn = (0..points.len() as NodeID)
                 .map(|idx| Dist::new(idx, points.distance2point(&query_point, idx).unwrap()))
                 .sorted()
                 .map(|dist| dist.id)
@@ -550,6 +551,17 @@ mod test {
                 .collect();
             queries_nn.push(query_true_nn);
         }
+        queries_nn
+    }
+
+    #[test]
+    fn hnsw_glove_accuracy() {
+        init_logs();
+        let (stored, queries) = get_glove_data();
+        let index = HNSW::new(M, None, queries[0].len());
+        let index = index.insert_bulk(stored.clone(), 1, false).unwrap();
+
+        let queries_nn = get_actual_nn(&queries, &index.points);
 
         let mut total_hits = 0;
         for (idx, query) in queries.iter().enumerate() {
@@ -560,34 +572,47 @@ mod test {
             let hits = query_true_nn.intersection(&query_ann).count();
             total_hits += hits;
         }
-        let final_acc = total_hits as f32 / (nb_queries * 10) as f32;
+        let final_acc = total_hits as f32 / (queries.len() * 10) as f32;
         println!("Final accuracy was {final_acc}");
         assert!(final_acc > 0.99);
+    }
 
+    #[test]
+    fn hnsw_glove_no_isolated_nodes() {
+        init_logs();
+        let (stored, queries) = get_glove_data();
+        let index = HNSW::new(M, None, queries[0].len());
+        let index = index.insert_bulk(stored.clone(), 1, false).unwrap();
         for layer in index.layers.iter_layers() {
-            let mut min_degree = usize::MAX;
-            let mut max_degree = usize::MIN;
+            let mut degree_count: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
             for node in layer.iter_nodes() {
                 if layer.nb_nodes() <= 1 {
                     continue;
                 }
-                let degree = layer.degree(node).unwrap();
-                min_degree = min_degree.min(degree);
-                max_degree = max_degree.max(degree);
+                degree_count
+                    .entry(layer.degree(node).unwrap())
+                    .and_modify(|v| v.push(node))
+                    .or_insert(vec![node]);
             }
-            println!("Layer {0}: limit is {1}", layer.level, layer.m);
-            println!("Min degree {min_degree}");
-            println!("Max degree {max_degree}");
+            println!(
+                "Layer {0}: M is {1}, nb. nodes is {2}",
+                layer.level,
+                layer.m,
+                layer.nb_nodes()
+            );
+            println!("Degrees:");
+            println!("{degree_count:?}");
+            let min_degree = *degree_count.first_key_value().unwrap().0;
             assert!(min_degree > 0);
         }
     }
 
     #[test]
-    fn hnsw_serialize() {
         for _ in 0..100 {
+    fn hnsw_save_load() {
         init_logs();
             let vectors = make_rand_vectors(N, DIM);
-            let index = HNSW::new(12, None, DIM);
+            let index = HNSW::new(m, None, DIM);
             let index = index.insert_bulk(vectors, 1, false).unwrap();
 
             let index_path = Path::new("./serialization_test");
@@ -601,13 +626,11 @@ mod test {
 
             assert_eq!(N, loaded_index.len());
             for id in index.points.ids() {
-                dbg!(id);
                 let index_neighs = index.layers.get_layer(0).neighbors(id).unwrap();
                 let loaded_neighs = loaded_index.layers.get_layer(0).neighbors(id).unwrap();
 
                 let index_diff_loaded: Vec<&NodeID> =
                     index_neighs.difference(&loaded_neighs).collect();
-                dbg!(&index_diff_loaded);
                 assert_eq!(index_diff_loaded.len(), 0);
 
                 let loaded_diff_index: Vec<&NodeID> =
@@ -618,6 +641,43 @@ mod test {
                     index.get_point(id).unwrap().get_vals(),
                     loaded_index.get_point(id).unwrap().get_vals()
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn hnsw_serialize_parts() {
+        init_logs();
+        for _ in 1..100 {
+            let vectors = make_rand_vectors(N, DIM);
+            let index = HNSW::new(12, None, DIM);
+            let index = index.insert_bulk(vectors, 1, false).unwrap();
+
+            let params = Params::deserialize(index.params.serialize());
+            assert_eq!(params.ep, index.params.ep);
+            assert_eq!(params.m, index.params.m);
+            assert_eq!(params.mmax, index.params.mmax);
+            assert_eq!(params.mmax0, index.params.mmax0);
+            assert_eq!(params.ml, index.params.ml);
+            assert_eq!(params.ef_cons, index.params.ef_cons);
+            assert_eq!(params.dim, index.params.dim);
+
+            let points = PointsType::deserialize(index.points.serialize());
+            for (p, s_p) in index.points.iter_points().zip(points.iter_points()) {
+                assert_eq!(p.id, s_p.id);
+                assert_eq!(p.level, s_p.level);
+                assert_eq!(p.dist2other(s_p), 0.0);
+            }
+
+            for layer in index.layers.iter_layers() {
+                let layer_ser = Graph::deserialize(layer.serialize());
+                for node in layer.iter_nodes() {
+                    assert!(layer_ser.contains(node));
+                    assert_eq!(
+                        layer.neighbors(node).unwrap(),
+                        layer_ser.neighbors(node).unwrap()
+                    );
+                }
             }
         }
     }
