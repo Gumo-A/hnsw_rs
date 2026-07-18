@@ -623,13 +623,13 @@ mod test {
     }
 }
 
-fn select_simple<I>(candidate_dists: I, m: usize) -> Result<BTreeSet<Dist>, String>
+fn select_simple<I>(candidate_dists: I, m: usize) -> IntSet<NodeID>
 where
     I: Iterator<Item = Dist>,
 {
     let mut cands = Vec::from_iter(candidate_dists);
     cands.sort();
-    Ok(BTreeSet::from_iter(cands.iter().copied().take(m)))
+    IntSet::from_iter(cands.iter().take(m).map(|dist| dist.id))
 }
 
 pub fn make_rand_index_full(n: usize, dim: usize) -> HNSW {
