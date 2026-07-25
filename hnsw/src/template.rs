@@ -1,8 +1,8 @@
 use core::panic;
-use log::{info, trace};
+use log::info;
 use nohash_hasher::IntSet;
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::HashSet,
     fs::{self, create_dir, File},
     io::{BufReader, Read, Write},
     path::Path,
@@ -182,8 +182,6 @@ impl HNSW {
 
         inserter.build_insertion_results(&self, point)?;
         self.make_connections(inserter.get_results())?;
-        self.prune_connections(inserter.get_results_mut())?;
-        self.make_pruned_connections(inserter.get_results())?;
         info!("Finished inserting node {point_id}");
         Ok(())
     }
@@ -200,56 +198,21 @@ impl HNSW {
                 layer
                     .add_neighbors(*node, neighbors.iter().copied())
                     .unwrap();
-            }
-        }
-        info!("Finished making connections");
-        Ok(())
-    }
-
-    fn prune_connections(&self, searcher: &mut Results) -> Result<(), String> {
-        trace!("Begin pruning connections");
-        searcher.clear_prune();
-
-        for (layer_nb, node_data) in searcher.insertion_results.clone().iter() {
-            let layer = self.get_layer(*layer_nb);
-
-            for (_, neighbors) in node_data.iter() {
-                let nodes_to_prune = neighbors
-                    .iter()
-                    .filter(|id| layer.degree(**id).unwrap() > layer.m);
-
-                for to_prune in nodes_to_prune {
-                    let to_prune_neighbors = match layer.neighbors_lock(*to_prune) {
-                        Ok(n) => n,
-                        Err(_) => return Err("Could not get neighbors of {id}".to_string()),
-                    };
-                    let nearest = select_simple(
-                        to_prune_neighbors
-                            .lock()
-                            .unwrap()
-                            .iter()
-                            .map(|n| Dist::new(*n, self.distance(*to_prune, *n).unwrap())),
-                        layer.m,
-                    );
-                    searcher.insert_prune_result(*layer_nb, *to_prune, nearest);
+                for n in neighbors {
+                    if layer.degree(*n).unwrap() > layer.m {
+                        let query = self.get_point(*n).unwrap();
+                        let neighs = layer.neighbors(*n).unwrap();
+                        let candidate_dists = neighs.iter().copied().map(|id| {
+                            let point = self.get_point(id).unwrap();
+                            Dist::new(id, point.distance(query))
+                        });
+                        let new = select_simple(candidate_dists, layer.m);
+                        layer.replace_neighbors(*n, new.iter().copied()).unwrap();
+                    }
                 }
             }
         }
-        trace!("Finised pruning connections");
-        Ok(())
-    }
-
-    fn make_pruned_connections(&self, results: &Results) -> Result<(), String> {
-        info!("Begin making pruned connections");
-        for (layer_nb, node_data) in results.prune_results.iter() {
-            let layer = self.layers.get_layer(*layer_nb);
-            for (node, neighbors) in node_data.iter() {
-                layer
-                    .replace_neighbors(*node, neighbors.iter().copied())
-                    .unwrap();
-            }
-        }
-        info!("Finished making pruned connections");
+        info!("Finished making connections");
         Ok(())
     }
 
