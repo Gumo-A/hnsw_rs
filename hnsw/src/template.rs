@@ -361,7 +361,7 @@ impl HNSW {
         let mut stored_ids: HashSet<NodeID> = HashSet::new();
         stored_ids.extend(self.store_points(vectors).iter());
 
-        let bar = get_progress_bar("Building HNSW index".to_string(), self.len(), verbose);
+        let bar = get_progress_bar("Building HNSW index".to_string(), stored_ids.len(), verbose);
         let bar_arc = Arc::new(bar);
 
         let index_arc = Arc::new(self);
