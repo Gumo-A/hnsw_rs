@@ -34,7 +34,7 @@ fn main() -> std::io::Result<()> {
         .and_then(|nb_threads| nb_threads.parse::<usize>().ok())
         .unwrap_or(DEFAULT_HNSW_THREADS);
 
-    let file = File::open(format!("/home/gamal/glove_dataset/glove-50d.txt"))?;
+    let file = File::open(format!("/home/gamal/glove/300d.txt"))?;
     // let file = File::open(format!(
     //     "/home/gamal/repos/vector-store/test-data/store.txt"
     // ))?;
@@ -45,6 +45,17 @@ fn main() -> std::io::Result<()> {
     store = store
         .insert_bulk(embeddings.clone(), nb_threads, true)
         .unwrap();
+    // let chunk_size = 10_000;
+    // let mut i = 0;
+    // let nb_chunks = embeddings.len() / chunk_size;
+    // for _ in 0..nb_chunks {
+    //     let j = i + chunk_size;
+    //     println!("Inserting up to {j}");
+    //     store = store
+    //         .insert_bulk(embeddings[i..j].to_vec().clone(), nb_threads, true)
+    //         .unwrap();
+    //     i += chunk_size;
+    // }
 
     let path = Path::new("./index_eval_test");
     if path.exists() {
@@ -71,11 +82,10 @@ fn main() -> std::io::Result<()> {
         store.params.m
     );
 
-    show_nn_words(&words, &store, 10);
     {
         use text_io::read;
 
-        let ef = 1000;
+        let ef = 100;
         let words_map: HashMap<String, usize> =
             HashMap::from_iter(words.iter().enumerate().map(|(idx, w)| (w.clone(), idx)));
         loop {
@@ -97,25 +107,4 @@ fn main() -> std::io::Result<()> {
         }
     }
     // Ok(())
-}
-
-fn show_nn_words(words: &Vec<String>, store: &HNSW, max: usize) {
-    let ef = 1000;
-    let mut words: Vec<(usize, &String)> = words.iter().enumerate().collect();
-    words.shuffle(&mut thread_rng());
-    let mut c = 0;
-    for (idx, word) in words.iter() {
-        if c > max {
-            break;
-        }
-        c += 1;
-        let point = store.get_point(*idx as u32).unwrap();
-        let anns = store.ann_by_vector(&point.get_vals(), 10, ef).unwrap();
-        let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].1.clone()).collect();
-        println!();
-        println!("ANNs of {} (ef={ef})", word);
-        for w in anns_words.iter() {
-            println!("  - {w}",);
-        }
-    }
 }
