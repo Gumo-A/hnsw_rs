@@ -571,9 +571,9 @@ mod test {
     }
 
     #[test]
-        for _ in 0..100 {
     fn hnsw_save_load() {
-        init_logs();
+        for m in (0..=6).map(|i| 2usize.pow(i)) {
+            init_logs();
             let vectors = make_rand_vectors(N, DIM);
             let index = HNSW::new(m, None, DIM);
             let index = index.insert_bulk(vectors, 1, false).unwrap();
