@@ -3,6 +3,7 @@ use crate::{NodeID, errors::GraphError};
 use log::{error, trace, warn};
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use vectors::serializer::Serializer;
 
@@ -249,39 +250,36 @@ impl Graph {
 
 impl Serializer for Graph {
     fn size(&self) -> usize {
-        let mut size = 7;
-        size += self.nb_nodes() * 4 * (self.m + 1);
-        size
+        3 + (self.nb_nodes() * 4 * (self.m + 1))
     }
 
     /// Val          Bytes
     /// level        1
-    /// nb_nodes     4
     /// m            2
-    /// adj_list     nb_nodes * 4 * (1 + m)
+    /// adj_list     (1 + m) * nb_nodes
     fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.nb_nodes() * 4);
-        bytes.extend_from_slice(&[self.level as u8]);
-        bytes.extend_from_slice(&(self.nb_nodes() as u32).to_be_bytes());
-        bytes.extend_from_slice(&(self.m as u16).to_be_bytes());
+        let mut e = Vec::new();
+        e.write(&[self.level as u8]).unwrap();
+        e.write(&(self.m as u16).to_be_bytes()).unwrap();
+
         for node in self.iter_nodes() {
-            bytes.extend(self.serialize_adj_list(node));
+            let adj_list = self.serialize_adj_list(node);
+            e.write(&adj_list).unwrap();
         }
-        bytes
+        e
     }
 
     /// Val          Bytes
     /// level        1
-    /// nb_nodes     4
     /// m            2
-    /// adj_list     nb_nodes * m
+    /// adj_list     (1 + m) * nb_nodes
     fn deserialize(data: Vec<u8>) -> Graph {
         let mut i = 1;
         let level = u8::from_be_bytes(data[..i].try_into().unwrap()) as usize;
-        let nb_nodes = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
-        i += 4;
         let m = u16::from_be_bytes(data[i..i + 2].try_into().unwrap()) as usize;
         i += 2;
+
+        let nb_nodes = data[i..].len() / ((m + 1) * 4);
         let mut nodes = IntMap::default();
         for _ in 0..nb_nodes {
             let node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
