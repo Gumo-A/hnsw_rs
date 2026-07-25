@@ -1,6 +1,6 @@
 use crate::{NodeID, errors::GraphError};
 
-use log::{trace, warn};
+use log::{error, trace, warn};
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
 use std::sync::{Arc, Mutex};
@@ -211,7 +211,14 @@ impl Graph {
         bytes.extend_from_slice(&node_id.to_be_bytes());
 
         let mut neighbors = self.neighbors_vec(node_id).unwrap();
-        assert!(neighbors.len() <= self.m);
+        if neighbors.len() > self.m {
+            error!(
+                "Degree of node {node_id} is {}, but M is {}",
+                neighbors.len(),
+                self.m
+            );
+            panic!("Tried to serialize a neighbor list exceeding M");
+        }
         while neighbors.len() < self.m {
             neighbors.push(NodeID::MAX);
         }
