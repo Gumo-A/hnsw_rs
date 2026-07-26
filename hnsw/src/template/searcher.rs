@@ -42,7 +42,7 @@ impl Searcher {
                 trace!("Best candidate is further away than worst selected, breaking from loop");
                 break;
             }
-            let cand_neighbors = match layer.neighbors(cand_dist.id) {
+            let cand_neighbors_locked = match layer.neighbors_lock(cand_dist.id) {
                 Ok(neighs) => neighs,
                 Err(e) => match e {
                     GraphError::NodeNotInGraph(n) => {
@@ -51,6 +51,7 @@ impl Searcher {
                     _ => panic!("Error in search_layer: got an unexpected error"),
                 },
             };
+            let cand_neighbors = cand_neighbors_locked.lock().unwrap();
             trace!("{0} has {1} neighbors", cand_dist.id, cand_neighbors.len());
 
             trace!(
@@ -61,13 +62,12 @@ impl Searcher {
             let q2cand_neighbors_dists: Vec<Dist> = cand_neighbors
                 .iter()
                 .filter(|node| results.insert_visited(**node))
-                .copied()
                 .map(|node| {
                     let dist = index
-                        .get_point(node)
+                        .get_point(*node)
                         .expect(format!("Could get point {node}").as_str())
                         .dist2other(point);
-                    Dist::new(node, dist)
+                    Dist::new(*node, dist)
                 })
                 .collect();
             trace!("Selecting among the best of the candidate's neighbors");
