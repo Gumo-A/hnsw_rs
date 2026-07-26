@@ -11,6 +11,7 @@ members = [
 [profile.release]
 lto = true
 codegen-units = 1
+debug = true  # for valgrind analysis
 
 [profile.release-profile]
 inherits = "release"
