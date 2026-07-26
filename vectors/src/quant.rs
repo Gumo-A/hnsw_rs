@@ -64,13 +64,6 @@ impl VecBase for QuantVec {
             codes: quantized,
         }
     }
-    fn distance(&self, other: &impl VecBase) -> f32 {
-        self.iter_vals()
-            .zip(other.iter_vals())
-            .map(|(x, y)| (x - y).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
 
     fn dist2other(&self, other: &Self) -> f32 {
         self.distance_unrolled(other)
