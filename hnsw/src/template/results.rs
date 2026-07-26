@@ -125,22 +125,19 @@ impl Results {
         points: &SimplePoints,
         layer: &Graph,
     ) -> Result<(), String> {
-        let mut neighbors = Vec::new();
-        for node in self.candidates.iter() {
-            let node_neighbors = match layer.neighbors(node.id) {
+        let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
+        for node in cands {
+            let neighs_mutex = match layer.neighbors_lock(node) {
                 Ok(n) => n,
                 Err(e) => match e {
                     GraphError::NodeNotInGraph(n) => panic!("Node {n} is not in the Graph"),
                     _ => panic!("Error while extending candidates"),
                 },
             };
-            for neighbor in node_neighbors {
-                neighbors.push(neighbor)
+            for neighbor in neighs_mutex.lock().unwrap().iter() {
+                let dist = Dist::new(*neighbor, points.distance(point.id, *neighbor).unwrap());
+                self.insert_candidate(dist);
             }
-        }
-        for neighbor in neighbors {
-            let dist = Dist::new(neighbor, points.distance(point.id, neighbor).unwrap());
-            self.insert_candidate(dist);
         }
         Ok(())
     }
