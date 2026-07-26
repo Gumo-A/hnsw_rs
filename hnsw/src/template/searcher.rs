@@ -8,7 +8,7 @@ use points::{
 };
 use vectors::VecBase;
 
-use crate::template::{results::Results, PointsType, HNSW};
+use crate::template::{results::Results, HNSW};
 
 pub struct Searcher {}
 
