@@ -11,8 +11,6 @@ use hnsw::helpers::glove::load_glove_array;
 
 use hnsw::template::HNSW;
 
-use rand::seq::SliceRandom;
-use rand::thread_rng;
 use vectors::VecBase;
 
 const DEFAULT_HNSW_THREADS: usize = 4;
@@ -42,9 +40,17 @@ fn main() -> std::io::Result<()> {
     let (words, embeddings) = load_glove_array(lim, file, true).unwrap();
 
     let mut store = HNSW::new(m, None, embeddings[0].len());
+    let s = Instant::now();
     store = store
         .insert_bulk(embeddings.clone(), nb_threads, true)
         .unwrap();
+    let e = s.elapsed().as_secs_f32();
+    println!(
+        "took {0}s to build index with {1} points and M {2}",
+        e,
+        store.len(),
+        store.params.m
+    );
     // let chunk_size = 10_000;
     // let mut i = 0;
     // let nb_chunks = embeddings.len() / chunk_size;
@@ -97,8 +103,8 @@ fn main() -> std::io::Result<()> {
                 continue;
             }
 
-            let word_idx = words_map.get(&query).unwrap();
-            let vector = store.get_point(*word_idx as u32).unwrap().get_vals();
+            let word_idx = *words_map.get(&query).unwrap() as u32;
+            let vector = store.get_point(word_idx).unwrap().get_vals();
 
             let anns = store.ann_by_vector(&vector, 10, ef).unwrap();
             let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();

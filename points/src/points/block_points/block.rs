@@ -62,7 +62,7 @@ impl PointsBlock {
         }
 
         let mut point = point.clone();
-        let point_id = (self.header.id as u32 * MAX_PER_BLOCK as u32) + self.len() as u32;
+        let point_id = (self.header.id as NodeID * MAX_PER_BLOCK as NodeID) + self.len() as NodeID;
         point.id = point_id;
         self.block.add_point(point);
         self.header.nb_points += 1;

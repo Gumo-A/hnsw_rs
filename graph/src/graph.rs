@@ -47,8 +47,6 @@ impl Graph {
             a.insert(node_b);
             if a.len() > self.m {
                 warn!("Edge ({node_a}, {node_b}) made {node_a} exceed M");
-                // a.remove(&node_b);
-                // return Err(GraphError::MaxNeighbors(node_a));
             }
         }
         {
@@ -56,9 +54,6 @@ impl Graph {
             b.insert(node_a);
             if b.len() > self.m {
                 warn!("Edge ({node_a}, {node_b}) made {node_b} exceed M");
-                // b.remove(&node_a);
-                // a.lock().unwrap().remove(&node_b);
-                // return Err(GraphError::MaxNeighbors(node_b));
             }
         }
         trace!("Added edge ({node_a}, {node_b})");
@@ -112,7 +107,7 @@ impl Graph {
         }
     }
 
-    pub fn neighbors_vec(&self, node: NodeID) -> Result<Vec<NodeID>, GraphError> {
+    pub fn neighbors_lock(&self, node: NodeID) -> Result<Arc<Mutex<IntSet<NodeID>>>, GraphError> {
         trace!("Getting neighbors of {node}");
         let neighbors = match self.nodes.get(&node) {
             Some(neighbors) => neighbors,
@@ -120,19 +115,6 @@ impl Graph {
                 return Err(GraphError::NodeNotInGraph(node));
             }
         };
-
-        Ok(neighbors.lock().unwrap().iter().cloned().collect())
-    }
-
-    pub fn neighbors_lock(&self, node: NodeID) -> Result<Arc<Mutex<IntSet<u32>>>, GraphError> {
-        trace!("Getting neighbors of {node}");
-        let neighbors = match self.nodes.get(&node) {
-            Some(neighbors) => neighbors,
-            None => {
-                return Err(GraphError::NodeNotInGraph(node));
-            }
-        };
-
         Ok(neighbors.clone())
     }
 
@@ -142,8 +124,11 @@ impl Graph {
         I: Iterator<Item = NodeID>,
     {
         trace!("Replacing {node}'s neighbors");
-        let current_neighbors = self.neighbors(node)?;
         let new_neighbors = IntSet::from_iter(new_neighbors);
+        // Deadlocks:
+        // let tmp = self.neighbors_lock(node)?;
+        // let current_neighbors = tmp.lock().unwrap();
+        let current_neighbors = self.neighbors(node)?;
         let to_remove = current_neighbors.difference(&new_neighbors).copied();
         let to_add = new_neighbors.difference(&current_neighbors).copied();
         self.add_neighbors(node, to_add)?;
@@ -156,21 +141,13 @@ impl Graph {
         I: Iterator<Item = NodeID>,
     {
         for n in new_neighbors {
-            match self.add_edge(node, n) {
-                Ok(()) => (),
-                Err(e) => match e {
-                    GraphError::MaxNeighbors(a) => warn!(
-                        "Edge ({node}, {n}) not added, would exceed max allowed neighbors for {a}"
-                    ),
-                    _ => return Err(e),
-                },
-            };
+            self.add_edge(node, n)?;
         }
 
         Ok(())
     }
 
-    pub fn remove_neighbors<I>(&self, node: NodeID, old_neighbors: I) -> Result<(), GraphError>
+    fn remove_neighbors<I>(&self, node: NodeID, old_neighbors: I) -> Result<(), GraphError>
     where
         I: Iterator<Item = NodeID>,
     {
@@ -211,7 +188,7 @@ impl Graph {
         let mut bytes = Vec::with_capacity(4 + (self.m * 4));
         bytes.extend_from_slice(&node_id.to_be_bytes());
 
-        let mut neighbors = self.neighbors_vec(node_id).unwrap();
+        let mut neighbors = Vec::from_iter(self.neighbors(node_id).unwrap().iter().copied());
         if neighbors.len() > self.m {
             error!(
                 "Degree of node {node_id} is {}, but M is {}",
@@ -237,7 +214,7 @@ impl Graph {
         let mut neighbors = Vec::with_capacity(m);
         let mut i = 0;
         for _ in 0..m {
-            let n: NodeID = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
+            let n: NodeID = NodeID::from_be_bytes(data[i..i + 4].try_into().unwrap());
             i += 4;
             if n == NodeID::MAX {
                 break;
@@ -337,7 +314,6 @@ pub fn simple_graph() -> Graph {
 mod test {
     use crate::{
         NodeID,
-        errors::GraphError,
         graph::{Graph, make_rand_graph, simple_graph},
     };
     use nohash_hasher::IntSet;
@@ -413,21 +389,6 @@ mod test {
 
         // Can't remove edge, it would leave 30 isolated
         assert!(g.remove_edge(20, 30).is_err());
-    }
-
-    #[test]
-    fn neighbors_and_neighbors_vec() {
-        let g = simple_graph();
-        let neigh_set = g.neighbors(1).unwrap();
-        let neigh_vec = g.neighbors_vec(1).unwrap();
-
-        let expected: IntSet<NodeID> = [0, 2, 4].into_iter().collect();
-        assert_eq!(neigh_set, expected);
-
-        assert_eq!(neigh_vec.len(), 3);
-        assert!(neigh_vec.contains(&0));
-        assert!(neigh_vec.contains(&2));
-        assert!(neigh_vec.contains(&4));
     }
 
     #[test]

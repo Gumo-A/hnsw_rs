@@ -45,6 +45,17 @@ impl Layers {
         self.levels.iter()
     }
 
+    /// Adds a Node to its layers, based on its maximum level
+    /// Creates layers when needed.
+    pub fn add_node(&mut self, point_id: NodeID, level: usize) {
+        trace!("Adding node {point_id} with level {level}");
+        self.add_level(level);
+        self.levels.iter_mut().take(level + 1).for_each(|layer| {
+            trace!("Adding node {point_id} to level {}", layer.level);
+            layer.add_node(point_id)
+        });
+    }
+
     fn add_level(&mut self, level: usize) {
         while self.len() <= level {
             let m = if self.len() == 0 { self.m * 2 } else { self.m };
@@ -56,17 +67,6 @@ impl Layers {
             );
             self.add_layer(g);
         }
-    }
-
-    /// Adds a Node to its layers, based on its maximum level
-    /// Creates layers when needed.
-    pub fn add_node(&mut self, point_id: NodeID, level: usize) {
-        trace!("Adding node {point_id} with level {level}");
-        self.add_level(level);
-        self.levels.iter_mut().take(level + 1).for_each(|layer| {
-            trace!("Adding node {point_id} to level {}", layer.level);
-            layer.add_node(point_id)
-        });
     }
 }
 

@@ -32,11 +32,12 @@ mod inserter;
 use inserter::Inserter;
 
 type PointsType = SimplePoints;
+type LayersType = Layers;
 
 #[derive(Debug, Clone)]
 pub struct HNSW {
     pub params: Params,
-    layers: Layers,
+    layers: LayersType,
     points: PointsType,
 }
 
@@ -91,7 +92,7 @@ impl HNSW {
             Err(e) => return Err(format!("Problem reading params file: {e}")),
         };
 
-        let mut layers = Layers::new(params.m);
+        let mut layers = LayersType::new(params.m);
         let layers_dir = dir.join("layers");
         match layers_dir.read_dir() {
             Ok(dir) => {
@@ -138,7 +139,7 @@ impl HNSW {
         HNSW {
             points: PointsType::new(Vec::new(), params.ml),
             params,
-            layers: Layers::new(m),
+            layers: LayersType::new(m),
         }
     }
 
@@ -156,8 +157,8 @@ impl HNSW {
 
     pub fn layer_degrees(&self, layer_nb: usize) {
         let layer = self.layers.get_layer(layer_nb);
-        for node in layer.nodes.keys() {
-            println!("{}", layer.degree(*node).unwrap());
+        for node in layer.iter_nodes() {
+            println!("{}", layer.degree(node).unwrap());
         }
     }
 
@@ -206,6 +207,13 @@ impl HNSW {
                             let point = self.get_point(id).unwrap();
                             Dist::new(id, point.distance(query))
                         });
+                        // Deadlocks:
+                        // let neighs = layer.neighbors_lock(*n).unwrap();
+                        // let neighs_locked = neighs.lock().unwrap();
+                        // let candidate_dists = neighs_locked.iter().copied().map(|id| {
+                        //     let point = self.get_point(id).unwrap();
+                        //     Dist::new(id, point.distance(query))
+                        // });
                         let new = select_simple(candidate_dists, layer.m);
                         layer.replace_neighbors(*n, new.iter().copied()).unwrap();
                     }
@@ -232,7 +240,7 @@ impl HNSW {
     ///
     /// This is only the storing part, no indexing can
     /// be done on these points after this operation,
-    fn store_points(&mut self, vectors: Vec<Vec<f32>>) -> Vec<u32> {
+    fn store_points(&mut self, vectors: Vec<Vec<f32>>) -> Vec<NodeID> {
         let points = PointsType::new(vectors, get_default_ml(self.params.m));
         let new_points_len = points.len();
         info!(
@@ -247,7 +255,7 @@ impl HNSW {
         }
 
         let max_layer_nb = self.layers.len() - 1;
-        let new_ep = *self.get_layer(max_layer_nb).nodes.keys().next().unwrap();
+        let new_ep = self.get_layer(max_layer_nb).iter_nodes().next().unwrap();
         // TODO: if index already had points and we insert more,
         // one of the new points could have a higher level than the
         // current max. So it will become the new EP, and therefore
@@ -547,7 +555,7 @@ mod test {
         let index = HNSW::new(M, None, queries[0].len());
         let index = index.insert_bulk(stored.clone(), 1, false).unwrap();
         for layer in index.layers.iter_layers() {
-            let mut degree_count: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
+            let mut degree_count: BTreeMap<usize, Vec<NodeID>> = BTreeMap::new();
             for node in layer.iter_nodes() {
                 if layer.nb_nodes() <= 1 {
                     continue;

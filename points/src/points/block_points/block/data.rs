@@ -142,8 +142,8 @@ mod test {
         assert_eq!(block.len(), des.len());
 
         for idx in 0..header.nb_points as usize {
-            let point = block.get_point(idx as u32).unwrap();
-            let point_des = des.get_point(idx as u32).unwrap();
+            let point = block.get_point(idx as NodeID).unwrap();
+            let point_des = des.get_point(idx as NodeID).unwrap();
             assert_eq!(point.get_vals(), point_des.get_vals());
 
             let correct_id = (block_id * MAX_PER_BLOCK as usize) + idx;
