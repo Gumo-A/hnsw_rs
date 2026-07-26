@@ -42,7 +42,7 @@ impl Searcher {
                 trace!("Best candidate is further away than worst selected, breaking from loop");
                 break;
             }
-            let cand_neighbors = match layer.neighbors_vec(cand_dist.id) {
+            let cand_neighbors = match layer.neighbors(cand_dist.id) {
                 Ok(neighs) => neighs,
                 Err(e) => match e {
                     GraphError::NodeNotInGraph(n) => {
