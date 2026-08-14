@@ -435,6 +435,7 @@ mod test {
     use graph::{dist::Dist, graph::Graph, NodeID};
     use itertools::Itertools;
     use points::{point::Point, points::Points};
+    use repo_path::repo_path;
     use vectors::{serializer::Serializer, VecBase};
 
     const DIM: usize = 10;
@@ -503,9 +504,9 @@ mod test {
     }
 
     fn get_glove_data() -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
-        let file = File::open("/home/gamal/repos/vector-store/test-data/store.txt").unwrap();
+        let file = File::open(repo_path!("test-data/store.txt").to_str().unwrap()).unwrap();
         let (_, stored) = load_glove_array(0, file, false).expect("Could not load store vectors");
-        let file = File::open("/home/gamal/repos/vector-store/test-data/queries.txt").unwrap();
+        let file = File::open(repo_path!("test-data/queries.txt").to_str().unwrap()).unwrap();
         let (_, queries) = load_glove_array(0, file, false).expect("Could not load query vectors");
         return (stored, queries);
     }
