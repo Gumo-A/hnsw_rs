@@ -5,7 +5,7 @@ use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
-use vectors::serializer::Serializer;
+use vectors::serializer::{BytesReader, Serializer};
 
 type Neighbors = Arc<Mutex<IntSet<NodeID>>>;
 
@@ -212,10 +212,9 @@ impl Graph {
     fn deserialize_neighbors(data: &[u8]) -> Vec<NodeID> {
         let m = data.len() / 4;
         let mut neighbors = Vec::with_capacity(m);
-        let mut i = 0;
+        let mut reader = BytesReader::new(data.to_vec());
         for _ in 0..m {
-            let n: NodeID = NodeID::from_be_bytes(data[i..i + 4].try_into().unwrap());
-            i += 4;
+            let n: NodeID = NodeID::from_be_bytes(reader.u32());
             if n == NodeID::MAX {
                 break;
             }
@@ -225,9 +224,11 @@ impl Graph {
     }
 }
 
+const GRAPH_HEADER_BYTES: usize = 3;
+
 impl Serializer for Graph {
     fn size(&self) -> usize {
-        3 + (self.nb_nodes() * 4 * (self.m + 1))
+        GRAPH_HEADER_BYTES + (self.nb_nodes() * 4 * (self.m + 1))
     }
 
     /// Val          Bytes
@@ -251,23 +252,21 @@ impl Serializer for Graph {
     /// m            2
     /// adj_list     (1 + m) * nb_nodes
     fn deserialize(data: Vec<u8>) -> Graph {
-        let mut i = 1;
-        let level = u8::from_be_bytes(data[..i].try_into().unwrap()) as usize;
-        let m = u16::from_be_bytes(data[i..i + 2].try_into().unwrap()) as usize;
-        i += 2;
+        let mut reader = BytesReader::new(data);
+        let level = u8::from_be_bytes(reader.u8()) as usize;
+        let m = u16::from_be_bytes(reader.u16()) as usize;
+        let neighbors_size = m * 4; // 4 bytes per neighbor
+        let adj_list_size = 4 + neighbors_size; // adj list is the node followed by its neighbors
 
-        let nb_nodes = data[i..].len() / ((m + 1) * 4);
+        let nb_nodes = reader.remaining() / adj_list_size;
         let mut nodes = IntMap::default();
         for _ in 0..nb_nodes {
-            let node = u32::from_be_bytes(data[i..i + 4].try_into().unwrap());
-            i += 4;
+            let node = u32::from_be_bytes(reader.u32());
             let neighbors = IntSet::from_iter(
-                Graph::deserialize_neighbors(&data[i..i + (m * 4)])
+                Graph::deserialize_neighbors(reader.read_bytes(neighbors_size))
                     .iter()
                     .copied(),
             );
-            i += m * 4;
-
             nodes.insert(node, Arc::new(Mutex::new(neighbors)));
         }
 

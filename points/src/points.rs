@@ -6,7 +6,7 @@ use graph::NodeID;
 use log::{debug, trace};
 use vectors::VecBase;
 
-use vectors::serializer::Serializer;
+use vectors::serializer::{BytesReader, Serializer};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -116,10 +116,14 @@ impl Points for SimplePoints {
     }
 }
 
+const NB_POINTS_U64: usize = 8;
+const POINT_SIZE_U64: usize = 8;
+const SIMPLE_POINTS_HEADER_SIZE: usize = NB_POINTS_U64 + POINT_SIZE_U64;
+
 impl Serializer for SimplePoints {
     fn size(&self) -> usize {
         // how many points, size of each point, plus the points themselves
-        8 + 8 + (self.len() * self.get_point(0).unwrap().size())
+        SIMPLE_POINTS_HEADER_SIZE + (self.len() * self.get_point(0).unwrap().size())
     }
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -132,15 +136,14 @@ impl Serializer for SimplePoints {
     }
 
     fn deserialize(data: Vec<u8>) -> Self {
-        let nb_points = usize::from_be_bytes(data[0..8].try_into().unwrap());
-        let point_size = usize::from_be_bytes(data[8..16].try_into().unwrap());
+        let mut reader = BytesReader::new(data);
+        let nb_points = usize::from_be_bytes(reader.u64());
+        let point_size = usize::from_be_bytes(reader.u64());
         let mut collection = Vec::new();
-        let mut idx = 16;
         for id in 0..nb_points {
-            let mut point = Point::deserialize(data[idx..(idx + point_size)].to_vec());
+            let mut point = Point::deserialize(reader.read_bytes(point_size).to_vec());
             point.id = id as NodeID;
             collection.push(point);
-            idx += point_size
         }
         Self { collection }
     }

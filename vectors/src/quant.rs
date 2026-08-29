@@ -1,7 +1,10 @@
 const BITS: i32 = 8;
 const CHUNK_SIZE: usize = 8;
 
-use crate::{VecBase, serializer::Serializer};
+use crate::{
+    VecBase,
+    serializer::{BytesReader, Serializer},
+};
 
 #[derive(Debug, Clone)]
 pub struct QuantVec {
@@ -103,11 +106,12 @@ impl Serializer for QuantVec {
     }
 
     fn deserialize(data: Vec<u8>) -> Self {
-        let lower = f32::from_be_bytes(data[..4].try_into().unwrap());
-        let delta = f32::from_be_bytes(data[4..8].try_into().unwrap());
+        let mut reader = BytesReader::new(data);
+        let lower = f32::from_be_bytes(reader.u32());
+        let delta = f32::from_be_bytes(reader.u32());
         let mut quantized_vec: Vec<u8> = Vec::new();
-        for bytes_arr in data.iter().skip(8) {
-            quantized_vec.push(*bytes_arr);
+        for byte in reader.iter_remaining() {
+            quantized_vec.push(*byte);
         }
         QuantVec {
             delta,

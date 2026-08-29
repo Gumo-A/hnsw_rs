@@ -62,8 +62,8 @@ impl Serializer for FullVec {
     fn deserialize(data: Vec<u8>) -> Self {
         let bytes = data.chunks_exact(4);
         let mut vals: Vec<f32> = Vec::new();
-        for bytes_arr in bytes {
-            vals.push(f32::from_be_bytes(bytes_arr.try_into().unwrap()))
+        for f32_bytes in bytes {
+            vals.push(f32::from_be_bytes(f32_bytes.try_into().unwrap()))
         }
         FullVec::new(&vals)
     }
