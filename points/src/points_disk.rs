@@ -141,19 +141,20 @@ impl Points for PointsDisk {
 
 const NB_BLOCKS_U32: usize = 4;
 const ML_F32: usize = 4;
-const BLOCK_SIZE_U64: usize = 8;
-const POINTS_DISK_HEADER_SIZE: usize = NB_BLOCKS_U32 + ML_F32 + BLOCK_SIZE_U64;
+const POINTS_DISK_HEADER_SIZE: usize = NB_BLOCKS_U32 + ML_F32;
 impl Serializer for PointsDisk {
     fn size(&self) -> usize {
-        POINTS_DISK_HEADER_SIZE + self.blocks.iter().map(|b| b.size()).sum::<usize>()
+        // add 8 bytes to each block size to account for
+        // the size of each block, stored right before it
+        POINTS_DISK_HEADER_SIZE + self.blocks.iter().map(|b| b.size() + 8).sum::<usize>()
     }
 
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.blocks.len().to_be_bytes());
         bytes.extend_from_slice(&self.ml.to_be_bytes());
-        bytes.extend_from_slice(&self.blocks[0].size().to_be_bytes());
         for block in self.blocks.iter() {
+            bytes.extend_from_slice(&block.size().to_be_bytes());
             bytes.extend_from_slice(&block.serialize());
         }
         bytes
@@ -161,11 +162,12 @@ impl Serializer for PointsDisk {
 
     fn deserialize(data: Vec<u8>) -> Self {
         let mut reader = BytesReader::new(data);
-        let nb_blocks = u32::from_be_bytes(reader.u32());
+        let nb_blocks = u64::from_be_bytes(reader.u64());
+        assert_ne!(nb_blocks, 0);
         let ml = f32::from_be_bytes(reader.u32());
-        let block_size = u64::from_be_bytes(reader.u64());
         let mut blocks = Vec::new();
         for _ in 0..nb_blocks {
+            let block_size = u64::from_be_bytes(reader.u64());
             blocks.push(PointBlock::deserialize(
                 reader.read_bytes(block_size as usize).to_vec(),
             ));
@@ -181,7 +183,10 @@ mod test {
 
     use super::*;
 
-    const N: NodeID = 1030;
+    // Current limit per block is 1024,
+    // so PointsDisk should contain 3 blocks.
+    // Two should be full, one should contain 2
+    const N: NodeID = 2050;
 
     fn gen_rand_points(dim: usize, n: NodeID) -> PointsDisk {
         let vectors = gen_rand_vecs(dim, n as usize);
@@ -192,8 +197,8 @@ mod test {
         let dist = points
             .get_point(32)
             .unwrap()
-            .distance(points.get_point(1028).unwrap());
-        let val = points.get_point(16).unwrap().iter_vals().next().unwrap();
+            .distance(points.get_point(2049).unwrap());
+        let val = points.get_point(1089).unwrap().iter_vals().next().unwrap();
         (dist, val)
     }
 
@@ -201,7 +206,7 @@ mod test {
     fn build_simple_points() {
         let points = gen_rand_points(4, N);
 
-        assert_eq!(points.blocks.len(), 2);
+        assert_eq!(points.blocks.len(), 3);
         assert_eq!(points.len(), N as usize);
 
         let point_0 = points.get_point(0).unwrap();
@@ -222,15 +227,23 @@ mod test {
         let point = points.get_point(1029).unwrap();
         assert_eq!(point.id, 1029);
 
-        let point = points.get_point(1030);
+        let point = points.get_point(2100);
         assert!(point.is_none());
     }
 
     #[test]
-    fn distance_two_points() {
+    fn distance_two_points_same_block() {
         let points = gen_rand_points(4, N);
 
-        let dist = points.distance(12, 1028);
+        let dist = points.distance(12, 0);
+        assert!(dist.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn distance_two_points_different_blocks() {
+        let points = gen_rand_points(4, N);
+
+        let dist = points.distance(12, 0);
         assert!(dist.unwrap() > 0.0);
     }
 
@@ -245,6 +258,7 @@ mod test {
         let points_ser = points.serialize();
         let points_des = PointsDisk::deserialize(points_ser);
 
+        assert_eq!(points.blocks.len(), points_des.blocks.len());
         assert_eq!(points_len, points_des.len());
         assert_eq!(points_size, points_des.size());
 
