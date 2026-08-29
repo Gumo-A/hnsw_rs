@@ -137,7 +137,7 @@ impl HNSW {
             Params::from_m(m, dim)
         };
         HNSW {
-            points: PointsType::new(Vec::new(), params.ml),
+            points: PointsType::new(Vec::new(), params.ml, 0),
             params,
             layers: LayersType::new(m),
         }
@@ -153,13 +153,6 @@ impl HNSW {
 
     pub fn get_point(&self, point_id: NodeID) -> Option<&Point> {
         self.points.get_point(point_id)
-    }
-
-    pub fn layer_degrees(&self, layer_nb: usize) {
-        let layer = self.layers.get_layer(layer_nb);
-        for node in layer.iter_nodes() {
-            println!("{}", layer.degree(node).unwrap());
-        }
     }
 
     pub fn insert_vec(&mut self, vector: &Vec<f32>) -> Result<NodeID, String> {
@@ -241,7 +234,7 @@ impl HNSW {
     /// This is only the storing part, no indexing can
     /// be done on these points after this operation,
     fn store_points(&mut self, vectors: Vec<Vec<f32>>) -> Vec<NodeID> {
-        let points = PointsType::new(vectors, get_default_ml(self.params.m));
+        let points = PointsType::new(vectors, get_default_ml(self.params.m), 0);
         let new_points_len = points.len();
         info!(
             "Storing {} points, EP is {}",
@@ -461,7 +454,7 @@ mod test {
     }
 
     #[test]
-    fn hnsw_insert_one_after_build() {
+    fn hnsw_insert_one_after_bulk_insert() {
         init_logs();
         let vectors = make_rand_vectors(N, DIM);
         let index: HNSW = HNSW::new(12, None, DIM);
@@ -476,7 +469,7 @@ mod test {
     }
 
     #[test]
-    fn hnsw_insert_many_after_build() {
+    fn hnsw_subsequent_bulk_inserts() {
         init_logs();
         let index: HNSW = HNSW::new(12, None, DIM);
         let vectors = make_rand_vectors(N, DIM);
@@ -486,6 +479,21 @@ mod test {
 
         let vectors = make_rand_vectors(N, DIM);
         let index = index.insert_bulk(vectors, 1, false).unwrap();
+
+        assert_eq!(index.len(), N * 2);
+    }
+
+    #[test]
+    fn hnsw_subsequent_bulk_inserts_multithread() {
+        init_logs();
+        let index: HNSW = HNSW::new(12, None, DIM);
+        let vectors = make_rand_vectors(N, DIM);
+        let index = index.insert_bulk(vectors, 4, false).unwrap();
+
+        assert_eq!(index.len(), N);
+
+        let vectors = make_rand_vectors(N, DIM);
+        let index = index.insert_bulk(vectors, 4, false).unwrap();
 
         assert_eq!(index.len(), N * 2);
     }

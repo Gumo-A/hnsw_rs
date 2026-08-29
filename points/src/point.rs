@@ -10,9 +10,9 @@ pub struct Point {
 }
 
 impl Point {
-    pub fn with_level_and_id(vector: &Vec<f32>, level: usize, id: usize) -> Point {
+    pub fn with_level_and_id(vector: &Vec<f32>, level: usize, id: NodeID) -> Point {
         let mut point = Self::new(vector);
-        point.id = id as NodeID;
+        point.id = id;
         point.level = level as u8;
         point
     }
