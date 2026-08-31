@@ -87,6 +87,15 @@ pub struct PointsDisk {
     ml: f32,
 }
 
+impl PointsDisk {
+    fn push_new_block(&mut self, point: Point) -> NodeID {
+        let id = self.len() as NodeID;
+        let new_block = PointBlock::new(vec![point.get_vals()], self.ml, self.len() as NodeID);
+        self.blocks.push(new_block);
+        id
+    }
+}
+
 impl Points for PointsDisk {
     fn new(vecs: Vec<Vec<f32>>, ml: f32, idx_offset: NodeID) -> Self {
         let nb_blocks = (vecs.len() as f32 / BLOCK_CAPACITY as f32).ceil() as usize;
@@ -110,21 +119,29 @@ impl Points for PointsDisk {
     }
 
     fn push(&mut self, point: Point) -> NodeID {
-        let last_block = self.blocks.last_mut().unwrap(); // fails if no points in collection
-        if last_block.len() == BLOCK_CAPACITY {
-            let new_block = PointBlock::new(vec![point.get_vals()], self.ml, self.len() as NodeID);
-            self.blocks.push(new_block);
-            self.len() as NodeID
-        } else {
-            last_block.push(point)
+        let last_block = self.blocks.last_mut();
+        match last_block {
+            Some(b) => {
+                if b.len() == BLOCK_CAPACITY as usize {
+                    self.push_new_block(point)
+                } else {
+                    b.push(point)
+                }
+            }
+            None => self.push_new_block(point),
         }
     }
 
     fn len(&self) -> usize {
         // Every block contains BLOCK_CAPACITY points,
         // except the last one
-        let last_idx = self.blocks.len() - 1;
-        (last_idx * BLOCK_CAPACITY) + self.blocks[last_idx].len()
+        let nb_blocks = self.blocks.len();
+        if nb_blocks == 0 {
+            0
+        } else {
+            let last_block_idx = nb_blocks - 1;
+            (last_block_idx * BLOCK_CAPACITY as usize) + self.blocks[last_block_idx].len()
+        }
     }
 
     fn dim(&self) -> Option<usize> {
