@@ -19,6 +19,7 @@ use graph::{dist::Dist, graph::Graph, layers::Layers, NodeID};
 use points::{
     point::Point,
     points::{Points, SimplePoints},
+    points_disk::PointsDisk,
 };
 use rand::Rng;
 use vectors::{serializer::Serializer, VecBase};
@@ -31,7 +32,7 @@ use results::Results;
 mod inserter;
 use inserter::Inserter;
 
-type PointsType = SimplePoints;
+type PointsType = PointsDisk;
 type LayersType = Layers;
 
 #[derive(Debug, Clone)]
@@ -258,17 +259,6 @@ impl HNSW {
         info!("Stored {new_points_len} points, the new EP is {new_ep}");
         ids
     }
-
-    // fn get_nearest<I>(&self, point: &Point, others: I) -> Node
-    // where
-    //     I: Iterator<Item = Node>,
-    // {
-    //     point
-    //         .dist2many(others.map(|idx| self.points.get_point(idx).unwrap()))
-    //         .min()
-    //         .unwrap()
-    //         .id
-    // }
 
     pub fn ann_by_vector(
         &self,
@@ -554,7 +544,7 @@ mod test {
         }
         let final_acc = total_hits as f32 / (queries.len() * 10) as f32;
         println!("Final accuracy was {final_acc}");
-        assert!(final_acc > 0.99);
+        assert_eq!(final_acc, 1.0);
     }
 
     #[test]
@@ -643,7 +633,11 @@ mod test {
             assert_eq!(params.dim, index.params.dim);
 
             let points = PointsType::deserialize(index.points.serialize());
-            for (p, s_p) in index.points.iter_points().zip(points.iter_points()) {
+            for (p, s_p) in index
+                .points
+                .iter_points::<&Point>()
+                .zip(points.iter_points::<&Point>())
+            {
                 assert_eq!(p.id, s_p.id);
                 assert_eq!(p.level, s_p.level);
                 assert_eq!(p.dist2other(s_p), 0.0);
