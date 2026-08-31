@@ -111,7 +111,7 @@ impl Searcher {
         results: &mut Results,
         layer: &Graph,
         point: &Point,
-        points: &SimplePoints,
+        points: &impl Points,
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,

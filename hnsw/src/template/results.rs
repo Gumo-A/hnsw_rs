@@ -66,7 +66,7 @@ impl Results {
         }
     }
 
-    pub fn get_nearest_from_selected(&self, point: &Point, points: &SimplePoints) -> Dist {
+    pub fn get_nearest_from_selected(&self, point: &Point, points: &impl Points) -> Dist {
         let selected_points = points.get_points_iter(self.selected.iter().map(|n| n.id));
         let distances = point.dist2many(selected_points);
         distances
@@ -122,7 +122,7 @@ impl Results {
     pub fn extend_candidates_with_neighbors(
         &mut self,
         point: &Point,
-        points: &SimplePoints,
+        points: &impl Points,
         layer: &Graph,
     ) -> Result<(), String> {
         let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
