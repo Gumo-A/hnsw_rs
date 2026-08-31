@@ -8,7 +8,7 @@ use vectors::serializer::{BytesReader, Serializer};
 use crate::point::Point;
 use crate::points::{Points, SimplePoints};
 
-const BLOCK_CAPACITY: usize = 1024;
+const BLOCK_CAPACITY: NodeID = 2048;
 
 #[derive(Debug, Clone)]
 pub struct PointBlock {
@@ -17,7 +17,7 @@ pub struct PointBlock {
 
 impl Points for PointBlock {
     fn new(vecs: Vec<Vec<f32>>, ml: f32, idx_offset: NodeID) -> Self {
-        if vecs.len() > BLOCK_CAPACITY {
+        if vecs.len() > BLOCK_CAPACITY as usize {
             panic!(
                 "Cannot create PointBlock. It can only hold {BLOCK_CAPACITY}, but vecs contains {} vectors",
                 vecs.len()
@@ -40,14 +40,14 @@ impl Points for PointBlock {
         self.points.dim()
     }
     fn push(&mut self, point: Point) -> NodeID {
-        if self.len() < BLOCK_CAPACITY {
+        if self.len() < BLOCK_CAPACITY as usize {
             self.points.push(point)
         } else {
             panic!("Could not add point to PointBlock, it would breach the limit")
         }
     }
     fn extend(&mut self, other: Self) -> Vec<NodeID> {
-        if self.len() + other.len() < BLOCK_CAPACITY {
+        if self.len() + other.len() < BLOCK_CAPACITY as usize {
             self.points.extend(other.points)
         } else {
             panic!("Could not extend PointBlock, it would breach the limit")
@@ -102,8 +102,8 @@ impl Points for PointsDisk {
         let mut vecs_iter = vecs.iter().cloned();
         let mut blocks = Vec::new();
         for block_idx in 0..nb_blocks {
-            let block_vecs = vecs_iter.by_ref().take(BLOCK_CAPACITY).collect();
-            let block_offset = (block_idx * BLOCK_CAPACITY) + idx_offset as usize;
+            let block_vecs = vecs_iter.by_ref().take(BLOCK_CAPACITY as usize).collect();
+            let block_offset = (block_idx * BLOCK_CAPACITY as usize) + idx_offset as usize;
             let block = PointBlock::new(block_vecs, ml, block_offset as NodeID);
             blocks.push(block)
         }
@@ -111,7 +111,7 @@ impl Points for PointsDisk {
     }
 
     fn get_point(&self, idx: NodeID) -> Option<&Point> {
-        let block_idx = idx as usize / BLOCK_CAPACITY;
+        let block_idx = idx as usize / BLOCK_CAPACITY as usize;
         match self.blocks.get(block_idx) {
             Some(b) => b.get_point(idx),
             None => None,
@@ -200,10 +200,7 @@ mod test {
 
     use super::*;
 
-    // Current limit per block is 1024,
-    // so PointsDisk should contain 3 blocks.
-    // Two should be full, one should contain 2
-    const N: NodeID = 2050;
+    const N: NodeID = (BLOCK_CAPACITY * 2) + 2;
 
     fn gen_rand_points(dim: usize, n: NodeID) -> PointsDisk {
         let vectors = gen_rand_vecs(dim, n as usize);
@@ -212,10 +209,15 @@ mod test {
 
     fn get_collection_data(points: &PointsDisk) -> (f32, f32) {
         let dist = points
-            .get_point(32)
+            .get_point(0)
             .unwrap()
-            .distance(points.get_point(2049).unwrap());
-        let val = points.get_point(1089).unwrap().iter_vals().next().unwrap();
+            .distance(points.get_point(BLOCK_CAPACITY).unwrap());
+        let val = points
+            .get_point((BLOCK_CAPACITY * 2) + 1)
+            .unwrap()
+            .iter_vals()
+            .next()
+            .unwrap();
         (dist, val)
     }
 
@@ -232,35 +234,38 @@ mod test {
         let point_1 = points.get_point(1).unwrap();
         assert_eq!(point_1.id, 1);
 
-        let point = points.get_point(1023).unwrap();
-        assert_eq!(point.id, 1023);
+        let idx = BLOCK_CAPACITY - 1;
+        let point = points.get_point(idx).unwrap();
+        assert_eq!(point.id, idx);
 
-        let point = points.get_point(1024).unwrap();
-        assert_eq!(point.id, 1024);
+        let idx = BLOCK_CAPACITY;
+        let point = points.get_point(idx).unwrap();
+        assert_eq!(point.id, idx);
 
-        let point = points.get_point(1025).unwrap();
-        assert_eq!(point.id, 1025);
+        let idx = BLOCK_CAPACITY + 1;
+        let point = points.get_point(idx).unwrap();
+        assert_eq!(point.id, idx);
 
-        let point = points.get_point(1029).unwrap();
-        assert_eq!(point.id, 1029);
+        let idx = BLOCK_CAPACITY + 2;
+        let point = points.get_point(idx).unwrap();
+        assert_eq!(point.id, idx);
 
-        let point = points.get_point(2100);
+        let idx = BLOCK_CAPACITY * 10;
+        let point = points.get_point(idx);
         assert!(point.is_none());
     }
 
     #[test]
     fn distance_two_points_same_block() {
         let points = gen_rand_points(4, N);
-
-        let dist = points.distance(12, 0);
+        let dist = points.distance(BLOCK_CAPACITY, BLOCK_CAPACITY + 2);
         assert!(dist.unwrap() > 0.0);
     }
 
     #[test]
     fn distance_two_points_different_blocks() {
         let points = gen_rand_points(4, N);
-
-        let dist = points.distance(12, 0);
+        let dist = points.distance(0, BLOCK_CAPACITY + 1);
         assert!(dist.unwrap() > 0.0);
     }
 
