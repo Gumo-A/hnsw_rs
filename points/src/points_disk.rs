@@ -12,7 +12,27 @@ const BLOCK_CAPACITY: NodeID = 2048;
 
 #[derive(Debug, Clone)]
 pub struct PointBlock {
-    points: SimplePoints,
+    points: Option<SimplePoints>,
+    // path: String, // TODO
+}
+
+impl PointBlock {
+    fn get_points(&self) -> &SimplePoints {
+        match self.points.as_ref() {
+            Some(p) => p,
+            None => {
+                todo!("load the points from disk")
+            }
+        }
+    }
+    fn get_points_mut(&mut self) -> &mut SimplePoints {
+        match self.points.as_mut() {
+            Some(p) => p,
+            None => {
+                todo!("load the points from disk")
+            }
+        }
+    }
 }
 
 impl Points for PointBlock {
@@ -24,59 +44,69 @@ impl Points for PointBlock {
             )
         }
         PointBlock {
-            points: SimplePoints::new(vecs, ml, idx_offset),
+            points: Some(SimplePoints::new(vecs, ml, idx_offset)),
         }
     }
     fn len(&self) -> usize {
-        self.points.len()
+        let points = self.get_points();
+        points.len()
     }
     fn distance2point(&self, point: &Point, idx: NodeID) -> Option<f32> {
-        self.points.distance2point(point, idx)
+        let points = self.get_points();
+        points.distance2point(point, idx)
     }
     fn ids(&self) -> impl Iterator<Item = NodeID> {
-        self.points.ids()
+        let points = self.get_points();
+        points.ids()
     }
     fn dim(&self) -> Option<usize> {
-        self.points.dim()
-    }
-    fn push(&mut self, point: Point) -> NodeID {
-        if self.len() < BLOCK_CAPACITY as usize {
-            self.points.push(point)
-        } else {
-            panic!("Could not add point to PointBlock, it would breach the limit")
-        }
-    }
-    fn extend(&mut self, other: Self) -> Vec<NodeID> {
-        if self.len() + other.len() < BLOCK_CAPACITY as usize {
-            self.points.extend(other.points)
-        } else {
-            panic!("Could not extend PointBlock, it would breach the limit")
-        }
+        let points = self.get_points();
+        points.dim()
     }
     fn get_point(&self, idx: NodeID) -> Option<&Point> {
-        self.points.get_point(idx)
+        let points = self.get_points();
+        points.get_point(idx)
     }
     fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point>
     where
         I: Iterator<Item = NodeID>,
     {
-        self.points.get_points_iter(indices)
+        let points = self.get_points();
+        points.get_points_iter(indices)
     }
     fn distance(&self, a_idx: NodeID, b_idx: NodeID) -> Option<f32> {
-        self.points.distance(a_idx, b_idx)
+        let points = self.get_points();
+        points.distance(a_idx, b_idx)
+    }
+    fn push(&mut self, point: Point) -> NodeID {
+        let points = self.get_points_mut();
+        if points.len() < BLOCK_CAPACITY as usize {
+            points.push(point)
+        } else {
+            panic!("Could not add point to PointBlock, it would breach the limit")
+        }
+    }
+    fn extend(&mut self, other: Self) -> Vec<NodeID> {
+        let points = self.get_points_mut();
+        let other_points = other.get_points().clone();
+        if points.len() + other_points.len() < BLOCK_CAPACITY as usize {
+            points.extend(other_points)
+        } else {
+            panic!("Could not extend PointBlock, it would breach the limit")
+        }
     }
 }
 
 impl Serializer for PointBlock {
     fn size(&self) -> usize {
-        self.points.size()
+        self.get_points().size()
     }
     fn serialize(&self) -> Vec<u8> {
-        self.points.serialize()
+        self.get_points().serialize()
     }
     fn deserialize(data: Vec<u8>) -> Self {
         PointBlock {
-            points: SimplePoints::deserialize(data),
+            points: Some(SimplePoints::deserialize(data)),
         }
     }
 }
