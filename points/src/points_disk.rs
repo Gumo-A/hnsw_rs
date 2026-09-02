@@ -1,4 +1,9 @@
 use std::fmt::Debug;
+use std::fs::{File, create_dir_all};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 use graph::NodeID;
 use vectors::VecBase;
@@ -8,16 +13,25 @@ use vectors::serializer::{BytesReader, Serializer};
 use crate::point::Point;
 use crate::points::{Points, SimplePoints};
 
+const MAX_LOADED: usize = 8;
 const BLOCK_CAPACITY: NodeID = 2048;
 
 #[derive(Debug, Clone)]
 pub struct PointBlock {
     points: Option<SimplePoints>,
-    // path: String, // TODO
+    requests: Arc<Mutex<usize>>,
 }
 
 impl PointBlock {
+    pub fn new_empty() -> Self {
+        PointBlock {
+            points: None,
+            requests: Arc::new(Mutex::new(0)),
+        }
+    }
+
     fn get_points(&self) -> &SimplePoints {
+        *self.requests.lock().unwrap() += 1;
         match self.points.as_ref() {
             Some(p) => p,
             None => {
@@ -26,6 +40,7 @@ impl PointBlock {
         }
     }
     fn get_points_mut(&mut self) -> &mut SimplePoints {
+        *self.requests.lock().unwrap() += 1;
         match self.points.as_mut() {
             Some(p) => p,
             None => {
@@ -45,6 +60,7 @@ impl Points for PointBlock {
         }
         PointBlock {
             points: Some(SimplePoints::new(vecs, ml, idx_offset)),
+            requests: Arc::new(Mutex::new(0)),
         }
     }
     fn len(&self) -> usize {
@@ -107,6 +123,7 @@ impl Serializer for PointBlock {
     fn deserialize(data: Vec<u8>) -> Self {
         PointBlock {
             points: Some(SimplePoints::deserialize(data)),
+            requests: Arc::new(Mutex::new(0)),
         }
     }
 }
@@ -114,21 +131,98 @@ impl Serializer for PointBlock {
 #[derive(Debug, Clone)]
 pub struct PointsDisk {
     pub blocks: Vec<PointBlock>,
+    path: String,
     ml: f32,
 }
 
 impl PointsDisk {
+    pub fn new_at(vecs: Vec<Vec<f32>>, ml: f32, idx_offset: NodeID, path: PathBuf) -> Self {
+        let mut points = Self::new(vecs, ml, idx_offset);
+        if path.exists() & path.is_dir() {
+            if path.read_dir().iter().count() > 0 {
+                panic!("Cannot create new PointsDisk at {path:?}, it exists and is not empty")
+            }
+        }
+        create_dir_all(path.clone()).unwrap();
+        let mut ml_file = File::create_new(path.join("ml.txt")).unwrap();
+        ml_file.write(&format!("{ml}").into_bytes()).unwrap();
+        points.path = path.to_string_lossy().to_string();
+        points
+    }
+
+    pub fn load_at(path: PathBuf) -> Self {
+        if path.exists() & path.is_dir() {
+            let nb_blocks = path.read_dir().iter().count();
+            let blocks = Vec::from_iter((0..nb_blocks).map(|_| PointBlock::new_empty()));
+            let mut ml_string = String::new();
+            File::open(path.join("ml.txt"))
+                .unwrap()
+                .read_to_string(&mut ml_string)
+                .unwrap();
+            let ml = f32::from_str(ml_string.as_str()).unwrap();
+            Self {
+                blocks,
+                ml,
+                path: path.to_string_lossy().to_string(),
+            }
+        } else {
+            panic!("Could not load PointsDisk from {path:?}")
+        }
+    }
+
+    fn should_offload(&self) -> bool {
+        self.blocks.iter().filter(|b| b.points.is_some()).count() > MAX_LOADED
+    }
+
     fn push_new_block(&mut self, point: Point) -> NodeID {
         let id = self.len() as NodeID;
         let new_block = PointBlock::new(vec![point.get_vals()], self.ml, self.len() as NodeID);
         self.blocks.push(new_block);
         id
     }
+
+    fn offload_block(&mut self, block_idx: NodeID) {
+        match self.blocks.get_mut(block_idx as usize) {
+            Some(block) => {
+                block.points = None;
+                block.requests = Arc::new(Mutex::new(0));
+            }
+            None => (),
+        }
+    }
+
+    fn load_block(&mut self, block_idx: NodeID) {
+        match self.blocks.get_mut(block_idx as usize) {
+            Some(block) => {
+                if block.points.is_none() {
+                    let path = Path::new(&self.path).join(format!("{block_idx}"));
+                    let mut file = File::open(path).unwrap();
+                    let mut buffer = Vec::new();
+                    file.read_to_end(&mut buffer).unwrap();
+                    let points = SimplePoints::deserialize(buffer);
+                    block.points = Some(points);
+                }
+                while self.should_offload() {
+                    let idx_to_offload = self
+                        .blocks
+                        .iter()
+                        .enumerate()
+                        .filter(|(_idx, b)| b.points.is_some())
+                        .min_by_key(|(_idx, b)| *b.requests.lock().unwrap())
+                        .unwrap()
+                        .0;
+                    self.offload_block(idx_to_offload as NodeID);
+                }
+            }
+            None => panic!("Tried loading a block that doesn't exist ({block_idx})"),
+        }
+    }
 }
 
 impl Points for PointsDisk {
     fn new(vecs: Vec<Vec<f32>>, ml: f32, idx_offset: NodeID) -> Self {
-        let nb_blocks = (vecs.len() as f32 / BLOCK_CAPACITY as f32).ceil() as usize;
+        let len = vecs.len();
+        let nb_blocks = (len as f32 / BLOCK_CAPACITY as f32).ceil() as usize;
         let mut vecs_iter = vecs.iter().cloned();
         let mut blocks = Vec::new();
         for block_idx in 0..nb_blocks {
@@ -137,7 +231,8 @@ impl Points for PointsDisk {
             let block = PointBlock::new(block_vecs, ml, block_offset as NodeID);
             blocks.push(block)
         }
-        Self { blocks, ml }
+        let path = Path::new("").to_string_lossy().to_string();
+        Self { blocks, ml, path }
     }
 
     fn get_point(&self, idx: NodeID) -> Option<&Point> {
@@ -219,7 +314,11 @@ impl Serializer for PointsDisk {
                 reader.read_bytes(block_size as usize).to_vec(),
             ));
         }
-        Self { blocks, ml }
+        Self {
+            blocks,
+            ml,
+            path: String::new(),
+        }
     }
 }
 

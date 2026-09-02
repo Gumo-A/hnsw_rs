@@ -16,11 +16,7 @@ use crate::{
     template::searcher::Searcher,
 };
 use graph::{dist::Dist, graph::Graph, layers::Layers, NodeID};
-use points::{
-    point::Point,
-    points::{Points, SimplePoints},
-    points_disk::PointsDisk,
-};
+use points::{point::Point, points::Points, points_disk::PointsDisk};
 use rand::Rng;
 use vectors::{serializer::Serializer, VecBase};
 
@@ -139,8 +135,8 @@ impl HNSW {
         };
         HNSW {
             points: PointsType::new(Vec::new(), params.ml, 0),
-            params,
             layers: LayersType::new(m),
+            params,
         }
     }
 
