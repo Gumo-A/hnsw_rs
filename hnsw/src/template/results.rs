@@ -6,7 +6,7 @@ use graph::NodeID;
 use log::trace;
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
-use points::points::{Points, SimplePoints};
+use points::points::Points;
 use std::collections::BTreeSet;
 use vectors::VecBase;
 
@@ -50,12 +50,6 @@ impl Results {
             .or_insert(IntMap::default())
     }
 
-    fn get_prune_result(&mut self, layer_nb: usize) -> &mut LayerResult {
-        self.prune_results
-            .entry(layer_nb)
-            .or_insert(IntMap::default())
-    }
-
     pub fn get_top_selected(&self, n: usize) -> Vec<Dist> {
         self.selected.iter().take(n).copied().collect()
     }
@@ -81,16 +75,6 @@ impl Results {
         let point_neighbors = IntSet::from_iter(self.selected.iter().map(|dist| dist.id));
         let layer_result = self.get_insertion_result(layer_nb);
         layer_result.insert(point_id, point_neighbors);
-    }
-
-    pub fn insert_prune_result(
-        &mut self,
-        layer_nb: usize,
-        node_id: NodeID,
-        nearest: IntSet<NodeID>,
-    ) {
-        let layer_result = self.get_prune_result(layer_nb);
-        layer_result.insert(node_id, nearest);
     }
 
     pub fn insert_selected(&mut self, dist: Dist) {
@@ -166,10 +150,6 @@ impl Results {
 
     pub fn clear_candidates(&mut self) {
         self.candidates.clear();
-    }
-
-    pub fn clear_prune(&mut self) {
-        self.prune_results.clear();
     }
 
     pub fn clear_visited(&mut self) {

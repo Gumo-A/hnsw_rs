@@ -1,9 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::template::HNSW;
-use points::point::Point;
 use std::fs::File;
-use std::time::Duration;
 
 const M: [usize; 3] = [32, 64, 128];
 const FILE_NAME: &str = "/home/gamal/glove_dataset/glove.6B/glove.6B.300d.txt";

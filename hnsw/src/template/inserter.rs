@@ -33,10 +33,6 @@ impl Inserter {
         &self.results
     }
 
-    pub fn get_results_mut(&mut self) -> &mut Results {
-        &mut self.results
-    }
-
     pub fn build_insertion_results(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
         trace!("Begin insertion results");
         if point.id == index.params.ep {

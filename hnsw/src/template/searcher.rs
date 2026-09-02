@@ -2,10 +2,7 @@ use core::panic;
 
 use graph::{dist::Dist, errors::GraphError, graph::Graph};
 use log::trace;
-use points::{
-    point::Point,
-    points::{Points, SimplePoints},
-};
+use points::{point::Point, points::Points};
 use vectors::VecBase;
 
 use crate::template::{results::Results, HNSW};
