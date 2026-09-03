@@ -9,3 +9,4 @@ graph = {path = "../graph"}
 rand = "0.8.5"
 env_logger = "0.11.11"
 log = "0.4.33"
+uuid = { version = "1.26.0", features = ["v4"] }
