@@ -3,7 +3,7 @@ use log::info;
 use nohash_hasher::IntSet;
 use std::{
     collections::HashSet,
-    fs::{self, create_dir, File},
+    fs::{self, create_dir, create_dir_all, remove_dir_all, File},
     io::{BufReader, Read, Write},
     path::Path,
     sync::Arc,
@@ -133,8 +133,10 @@ impl HNSW {
         } else {
             Params::from_m(m, dim)
         };
+        let tmp_path = std::env::temp_dir().join("hnsw_rs").join("points");
+        create_dir_all(&tmp_path).unwrap();
         HNSW {
-            points: PointsType::new(Vec::new(), params.ml, 0),
+            points: PointsType::new(Vec::new(), params.ml, 0, &tmp_path),
             layers: LayersType::new(m),
             params,
         }
@@ -231,7 +233,9 @@ impl HNSW {
     /// This is only the storing part, no indexing can
     /// be done on these points after this operation,
     fn store_points(&mut self, vectors: Vec<Vec<f32>>) -> Vec<NodeID> {
-        let points = PointsType::new(vectors, get_default_ml(self.params.m), 0);
+        let tmp_path = std::env::temp_dir().join("hnsw_rs").join("tmp_points");
+        create_dir_all(&tmp_path).unwrap();
+        let points = PointsType::new(vectors, get_default_ml(self.params.m), 0, &tmp_path);
         let new_points_len = points.len();
         info!(
             "Storing {} points, EP is {}",
@@ -239,6 +243,7 @@ impl HNSW {
         );
         self.check_points_dim(&points);
         let ids = self.points.extend(points);
+        remove_dir_all(tmp_path).unwrap();
         for point_id in ids.iter() {
             let level = self.points.get_point(*point_id).unwrap().level;
             self.layers.add_node(*point_id, level as usize);
