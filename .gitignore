@@ -11,3 +11,5 @@ hnsw/ser_test_full
 hnsw/ser_test_quant
 cachegrind.out*
 callgrind.out*
+points/points_disk_test
+points/test_data
