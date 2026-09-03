@@ -1,9 +1,10 @@
+mod blocks;
+
 use std::fmt::Debug;
 use std::fs::{File, create_dir_all};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 
 use graph::NodeID;
 use vectors::VecBase;
@@ -11,122 +12,11 @@ use vectors::VecBase;
 use vectors::serializer::{BytesReader, Serializer};
 
 use crate::point::Point;
-use crate::points::{Points, SimplePoints};
+use crate::points::Points;
+use crate::points_disk::blocks::BLOCK_CAPACITY;
+use blocks::PointBlock;
 
 const MAX_LOADED: usize = 8;
-const BLOCK_CAPACITY: NodeID = 2048;
-
-#[derive(Debug, Clone)]
-pub struct PointBlock {
-    points: Option<SimplePoints>,
-    requests: Arc<Mutex<usize>>,
-}
-
-impl PointBlock {
-    pub fn new_empty() -> Self {
-        PointBlock {
-            points: None,
-            requests: Arc::new(Mutex::new(0)),
-        }
-    }
-
-    fn get_points(&self) -> &SimplePoints {
-        *self.requests.lock().unwrap() += 1;
-        match self.points.as_ref() {
-            Some(p) => p,
-            None => {
-                todo!("load the points from disk")
-            }
-        }
-    }
-    fn get_points_mut(&mut self) -> &mut SimplePoints {
-        *self.requests.lock().unwrap() += 1;
-        match self.points.as_mut() {
-            Some(p) => p,
-            None => {
-                todo!("load the points from disk")
-            }
-        }
-    }
-}
-
-impl Points for PointBlock {
-    fn new(vecs: Vec<Vec<f32>>, ml: f32, idx_offset: NodeID) -> Self {
-        if vecs.len() > BLOCK_CAPACITY as usize {
-            panic!(
-                "Cannot create PointBlock. It can only hold {BLOCK_CAPACITY}, but vecs contains {} vectors",
-                vecs.len()
-            )
-        }
-        PointBlock {
-            points: Some(SimplePoints::new(vecs, ml, idx_offset)),
-            requests: Arc::new(Mutex::new(0)),
-        }
-    }
-    fn len(&self) -> usize {
-        let points = self.get_points();
-        points.len()
-    }
-    fn distance2point(&self, point: &Point, idx: NodeID) -> Option<f32> {
-        let points = self.get_points();
-        points.distance2point(point, idx)
-    }
-    fn ids(&self) -> impl Iterator<Item = NodeID> {
-        let points = self.get_points();
-        points.ids()
-    }
-    fn dim(&self) -> Option<usize> {
-        let points = self.get_points();
-        points.dim()
-    }
-    fn get_point(&self, idx: NodeID) -> Option<&Point> {
-        let points = self.get_points();
-        points.get_point(idx)
-    }
-    fn get_points_iter<I>(&self, indices: I) -> impl Iterator<Item = &Point>
-    where
-        I: Iterator<Item = NodeID>,
-    {
-        let points = self.get_points();
-        points.get_points_iter(indices)
-    }
-    fn distance(&self, a_idx: NodeID, b_idx: NodeID) -> Option<f32> {
-        let points = self.get_points();
-        points.distance(a_idx, b_idx)
-    }
-    fn push(&mut self, point: Point) -> NodeID {
-        let points = self.get_points_mut();
-        if points.len() < BLOCK_CAPACITY as usize {
-            points.push(point)
-        } else {
-            panic!("Could not add point to PointBlock, it would breach the limit")
-        }
-    }
-    fn extend(&mut self, other: Self) -> Vec<NodeID> {
-        let points = self.get_points_mut();
-        let other_points = other.get_points().clone();
-        if points.len() + other_points.len() < BLOCK_CAPACITY as usize {
-            points.extend(other_points)
-        } else {
-            panic!("Could not extend PointBlock, it would breach the limit")
-        }
-    }
-}
-
-impl Serializer for PointBlock {
-    fn size(&self) -> usize {
-        self.get_points().size()
-    }
-    fn serialize(&self) -> Vec<u8> {
-        self.get_points().serialize()
-    }
-    fn deserialize(data: Vec<u8>) -> Self {
-        PointBlock {
-            points: Some(SimplePoints::deserialize(data)),
-            requests: Arc::new(Mutex::new(0)),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PointsDisk {
@@ -136,24 +26,12 @@ pub struct PointsDisk {
 }
 
 impl PointsDisk {
-    pub fn new_at(vecs: Vec<Vec<f32>>, ml: f32, idx_offset: NodeID, path: PathBuf) -> Self {
-        let mut points = Self::new(vecs, ml, idx_offset);
-        if path.exists() & path.is_dir() {
-            if path.read_dir().iter().count() > 0 {
-                panic!("Cannot create new PointsDisk at {path:?}, it exists and is not empty")
-            }
-        }
-        create_dir_all(path.clone()).unwrap();
-        let mut ml_file = File::create_new(path.join("ml.txt")).unwrap();
-        ml_file.write(&format!("{ml}").into_bytes()).unwrap();
-        points.path = path.to_string_lossy().to_string();
-        points
-    }
-
     pub fn load_at(path: PathBuf) -> Self {
         if path.exists() & path.is_dir() {
             let nb_blocks = path.read_dir().iter().count();
-            let blocks = Vec::from_iter((0..nb_blocks).map(|_| PointBlock::new_empty()));
+            let blocks = Vec::from_iter(
+                (0..nb_blocks).map(|idx| PointBlock::new_empty(&path.join(format!("{idx}")))),
+            );
             let mut ml_string = String::new();
             File::open(path.join("ml.txt"))
                 .unwrap()
@@ -170,23 +48,37 @@ impl PointsDisk {
         }
     }
 
+    fn write_all(&self) {
+        let path = Path::new(&self.path);
+        create_dir_all(path).unwrap();
+        let mut ml_file = File::create_new(path.join("ml.txt")).unwrap();
+        ml_file.write(&format!("{}", self.ml).into_bytes()).unwrap();
+        self.write_all_blocks();
+    }
+
+    fn write_all_blocks(&self) {
+        for block in self.blocks.iter() {
+            block.write();
+        }
+    }
+
     fn should_offload(&self) -> bool {
-        self.blocks.iter().filter(|b| b.points.is_some()).count() > MAX_LOADED
+        self.blocks.iter().filter(|b| b.is_loaded()).count() > MAX_LOADED
     }
 
     fn push_new_block(&mut self, point: Point) -> NodeID {
         let id = self.len() as NodeID;
-        let new_block = PointBlock::new(vec![point.get_vals()], self.ml, self.len() as NodeID);
+        let next_block_idx = self.blocks.len();
+        let path = Path::new(&self.path).join(format!("{next_block_idx}"));
+        let new_block =
+            PointBlock::new(vec![point.get_vals()], self.ml, self.len() as NodeID, &path);
         self.blocks.push(new_block);
         id
     }
 
     fn offload_block(&mut self, block_idx: NodeID) {
         match self.blocks.get_mut(block_idx as usize) {
-            Some(block) => {
-                block.points = None;
-                block.requests = Arc::new(Mutex::new(0));
-            }
+            Some(block) => block.offload(),
             None => (),
         }
     }
@@ -194,33 +86,40 @@ impl PointsDisk {
     fn load_block(&mut self, block_idx: NodeID) {
         match self.blocks.get_mut(block_idx as usize) {
             Some(block) => {
-                if block.points.is_none() {
-                    let path = Path::new(&self.path).join(format!("{block_idx}"));
-                    let mut file = File::open(path).unwrap();
-                    let mut buffer = Vec::new();
-                    file.read_to_end(&mut buffer).unwrap();
-                    let points = SimplePoints::deserialize(buffer);
-                    block.points = Some(points);
+                if !block.is_loaded() {
+                    block.load();
                 }
-                while self.should_offload() {
-                    let idx_to_offload = self
-                        .blocks
-                        .iter()
-                        .enumerate()
-                        .filter(|(_idx, b)| b.points.is_some())
-                        .min_by_key(|(_idx, b)| *b.requests.lock().unwrap())
-                        .unwrap()
-                        .0;
-                    self.offload_block(idx_to_offload as NodeID);
-                }
+                self.offload()
             }
             None => panic!("Tried loading a block that doesn't exist ({block_idx})"),
+        }
+    }
+
+    fn offload_least_requested(&mut self) {
+        let idx_to_offload = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_idx, b)| b.is_loaded())
+            .min_by_key(|(_idx, b)| b.get_requests())
+            .unwrap()
+            .0;
+        self.offload_block(idx_to_offload as NodeID);
+    }
+
+    fn offload(&mut self) {
+        while self.should_offload() {
+            self.offload_least_requested()
         }
     }
 }
 
 impl Points for PointsDisk {
-    fn new(vecs: Vec<Vec<f32>>, ml: f32, idx_offset: NodeID) -> Self {
+    fn new(vecs: Vec<Vec<f32>>, ml: f32, idx_offset: NodeID, path: &Path) -> Self {
+        if path.exists() & path.is_dir() {
+            panic!("Cannot create new PointsDisk at {path:?}, it already exists")
+        }
+        create_dir_all(&path).unwrap();
         let len = vecs.len();
         let nb_blocks = (len as f32 / BLOCK_CAPACITY as f32).ceil() as usize;
         let mut vecs_iter = vecs.iter().cloned();
@@ -228,11 +127,19 @@ impl Points for PointsDisk {
         for block_idx in 0..nb_blocks {
             let block_vecs = vecs_iter.by_ref().take(BLOCK_CAPACITY as usize).collect();
             let block_offset = (block_idx * BLOCK_CAPACITY as usize) + idx_offset as usize;
-            let block = PointBlock::new(block_vecs, ml, block_offset as NodeID);
+            let block = PointBlock::new(
+                block_vecs,
+                ml,
+                block_offset as NodeID,
+                &path.join(format!("{block_idx}")),
+            );
             blocks.push(block)
         }
-        let path = Path::new("").to_string_lossy().to_string();
-        Self { blocks, ml, path }
+        Self {
+            blocks,
+            ml,
+            path: path.to_string_lossy().to_string(),
+        }
     }
 
     fn get_point(&self, idx: NodeID) -> Option<&Point> {
@@ -329,11 +236,17 @@ mod test {
 
     use super::*;
 
-    const N: NodeID = (BLOCK_CAPACITY * 2) + 2;
+    // One less block than allowed to load
+    const N: NodeID = (BLOCK_CAPACITY * (MAX_LOADED as NodeID - 2)) + 2;
+
+    // Three more blocks than allowed to load
+    const N_OFFLOADED: NodeID = (BLOCK_CAPACITY * (MAX_LOADED as NodeID + 2)) + 2;
 
     fn gen_rand_points(dim: usize, n: NodeID) -> PointsDisk {
         let vectors = gen_rand_vecs(dim, n as usize);
-        PointsDisk::new(vectors, 0.5, 0)
+        let id = format!("{}", uuid::Uuid::new_v4());
+        let path = Path::new("./test_data").join(id);
+        PointsDisk::new(vectors, 0.5, 0, &path)
     }
 
     fn get_collection_data(points: &PointsDisk) -> (f32, f32) {
@@ -350,38 +263,62 @@ mod test {
         (dist, val)
     }
 
+    fn assert_can_get_point(points: &PointsDisk, idx: NodeID) {
+        let p = points.get_point(idx).unwrap();
+        assert_eq!(p.id, idx);
+    }
+
+    fn assert_can_get_points(points: &PointsDisk) {
+        let max_idx = points.len() as NodeID - 1;
+        assert_can_get_point(&points, 0);
+        assert_can_get_point(&points, 1);
+        assert_can_get_point(&points, BLOCK_CAPACITY - 2);
+        assert_can_get_point(&points, BLOCK_CAPACITY - 1);
+        assert_can_get_point(&points, BLOCK_CAPACITY);
+        assert_can_get_point(&points, BLOCK_CAPACITY + 1);
+        assert_can_get_point(&points, BLOCK_CAPACITY + 2);
+        assert_can_get_point(&points, max_idx - 1);
+        assert_can_get_point(&points, max_idx);
+    }
+
     #[test]
-    fn build_simple_points() {
+    fn build_points_multiblock() {
         let points = gen_rand_points(4, N);
 
-        assert_eq!(points.blocks.len(), 3);
+        assert_eq!(points.blocks.len(), MAX_LOADED - 1);
         assert_eq!(points.len(), N as usize);
 
-        let point_0 = points.get_point(0).unwrap();
-        assert_eq!(point_0.id, 0);
-
-        let point_1 = points.get_point(1).unwrap();
-        assert_eq!(point_1.id, 1);
-
-        let idx = BLOCK_CAPACITY - 1;
-        let point = points.get_point(idx).unwrap();
-        assert_eq!(point.id, idx);
-
-        let idx = BLOCK_CAPACITY;
-        let point = points.get_point(idx).unwrap();
-        assert_eq!(point.id, idx);
-
-        let idx = BLOCK_CAPACITY + 1;
-        let point = points.get_point(idx).unwrap();
-        assert_eq!(point.id, idx);
-
-        let idx = BLOCK_CAPACITY + 2;
-        let point = points.get_point(idx).unwrap();
-        assert_eq!(point.id, idx);
+        assert_can_get_points(&points);
 
         let idx = BLOCK_CAPACITY * 10;
         let point = points.get_point(idx);
         assert!(point.is_none());
+    }
+
+    #[test]
+    fn build_points_offloaded() {
+        let path = Path::new("./points_disk_test/").to_path_buf();
+        if path.exists() {
+            std::fs::remove_dir_all(path.clone()).unwrap();
+        }
+
+        let vectors = gen_rand_vecs(4, N_OFFLOADED as usize);
+        let p_disk = PointsDisk::new(vectors, 0.5, 0, &path);
+
+        // I decided to have the Disk version completely offloaded
+        // on creation by default. It should load points from
+        // disk when necessary.
+        let loaded_blocks = p_disk.blocks.iter().filter(|b| b.is_loaded()).count();
+        assert_eq!(loaded_blocks, 0);
+
+        assert_can_get_points(&p_disk);
+
+        let loaded_blocks = p_disk.blocks.iter().filter(|b| b.is_loaded()).count();
+        assert!(loaded_blocks > 0);
+
+        if path.exists() {
+            std::fs::remove_dir_all(path.clone()).unwrap();
+        }
     }
 
     #[test]
