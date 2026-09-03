@@ -2,6 +2,7 @@ use graph::NodeID;
 use vectors::{QuantVec, VecBase, serializer::Serializer};
 
 type VecType = QuantVec;
+
 #[derive(Debug, Clone)]
 pub struct Point {
     pub id: NodeID,
