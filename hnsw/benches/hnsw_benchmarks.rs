@@ -1,17 +1,29 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hnsw::helpers::glove::load_glove_array;
 use hnsw::template::HNSW;
+use rand::{thread_rng, Rng};
 use std::fs::File;
 
 const M: [usize; 3] = [32, 64, 128];
 const FILE_NAME: &str = "/home/gamal/glove_dataset/glove.6B/glove.6B.300d.txt";
+
+fn init_index(m: usize, dim: usize) -> HNSW {
+    let tmp_dir = std::env::temp_dir().join("hnsw_tests");
+    let rand = thread_rng().gen::<usize>();
+    HNSW::new(
+        &tmp_dir.join(format!("{rand}")).to_str().unwrap(),
+        m,
+        None,
+        dim,
+    )
+}
 
 fn insert_at_10k(c: &mut Criterion) {
     let mut group = c.benchmark_group(format!("Insert @ 10k nodes"));
     for m in M {
         let file = File::open(FILE_NAME).unwrap();
         let (_, embeddings) = load_glove_array(10_000, file, false).unwrap();
-        let index = HNSW::new(m, None, embeddings[0].len());
+        let index = init_index(m, embeddings[0].len());
         let index = index
             .insert_bulk(embeddings[..9_999].to_vec(), 1, false)
             .unwrap();
@@ -39,7 +51,7 @@ fn build_10k(c: &mut Criterion) {
             b.iter_batched(
                 || embeddings.clone(),
                 move |embs| {
-                    let index = HNSW::new(m, None, embs[0].len());
+                    let index = init_index(m, embs[0].len());
                     let _ = index.insert_bulk(embs, 1, false);
                 },
                 criterion::BatchSize::LargeInput,

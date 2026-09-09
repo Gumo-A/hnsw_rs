@@ -39,7 +39,11 @@ fn main() -> std::io::Result<()> {
 
     let (words, embeddings) = load_glove_array(lim, file, true).unwrap();
 
-    let mut store = HNSW::new(m, None, embeddings[0].len());
+    let tmp_path = Path::new("./persistance");
+    if tmp_path.exists() {
+        remove_dir_all(tmp_path).unwrap();
+    }
+    let mut store = HNSW::new("./persistance", m, None, embeddings[0].len());
     let s = Instant::now();
     store = store
         .insert_bulk(embeddings.clone(), nb_threads, true)

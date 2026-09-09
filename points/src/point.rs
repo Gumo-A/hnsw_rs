@@ -29,10 +29,6 @@ impl VecBase for Point {
             vector: VecType::new(vector),
         }
     }
-
-    fn distance(&self, other: &impl VecBase) -> f32 {
-        self.vector.distance(other)
-    }
     fn dist2other(&self, other: &Self) -> f32 {
         self.vector.dist2other(&other.vector)
     }

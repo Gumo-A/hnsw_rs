@@ -2,6 +2,8 @@ mod full;
 mod quant;
 pub mod serializer;
 
+use std::sync::Arc;
+
 pub use full::FullVec;
 pub use quant::QuantVec;
 
@@ -22,11 +24,11 @@ pub trait VecBase {
             .sum::<f32>()
             .sqrt()
     }
-    fn dist2many<'a, I>(&'a self, others: I) -> impl Iterator<Item = f32> + 'a
+    fn dist2many<I>(&self, others: I) -> impl Iterator<Item = f32>
     where
-        I: Iterator<Item = &'a Self> + 'a,
+        I: Iterator<Item = Arc<Self>>,
     {
-        others.map(move |other| self.dist2other(other))
+        others.map(move |other| self.dist2other(&other))
     }
 }
 

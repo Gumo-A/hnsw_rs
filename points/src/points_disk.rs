@@ -1,10 +1,12 @@
 mod blocks;
 
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs::{File, create_dir_all};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 
 use graph::NodeID;
 use vectors::VecBase;
@@ -21,11 +23,26 @@ const MAX_LOADED: usize = 8;
 #[derive(Debug, Clone)]
 pub struct PointsDisk {
     pub blocks: Vec<PointBlock>,
+    loaded_block_ids: Arc<RwLock<HashSet<usize>>>,
     path: String,
     ml: f32,
 }
 
 impl PointsDisk {
+    pub fn iter_points(&self) -> impl Iterator<Item = Arc<Point>> {
+        self.blocks
+            .iter()
+            .map(|b| {
+                b.get_read_lock()
+                    .as_ref()
+                    .unwrap()
+                    .collection
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<Arc<Point>>>()
+            })
+            .flatten()
+    }
     pub fn load_at(path: PathBuf) -> Self {
         if path.exists() & path.is_dir() {
             let nb_blocks = path.read_dir().iter().count();
@@ -42,29 +59,26 @@ impl PointsDisk {
                 blocks,
                 ml,
                 path: path.to_string_lossy().to_string(),
+                loaded_block_ids: Arc::new(RwLock::new(HashSet::new())),
             }
         } else {
             panic!("Could not load PointsDisk from {path:?}")
         }
     }
 
-    fn write_all(&self) {
-        let path = Path::new(&self.path);
-        create_dir_all(path).unwrap();
-        let mut ml_file = File::create_new(path.join("ml.txt")).unwrap();
-        ml_file.write(&format!("{}", self.ml).into_bytes()).unwrap();
-        self.write_all_blocks();
-    }
+    // fn write_all(&self) {
+    //     let path = Path::new(&self.path);
+    //     create_dir_all(path).unwrap();
+    //     let mut ml_file = File::create_new(path.join("ml.txt")).unwrap();
+    //     ml_file.write(&format!("{}", self.ml).into_bytes()).unwrap();
+    //     self.write_all_blocks();
+    // }
 
-    fn write_all_blocks(&self) {
-        for block in self.blocks.iter() {
-            block.write();
-        }
-    }
-
-    fn should_offload(&self) -> bool {
-        self.blocks.iter().filter(|b| b.is_loaded()).count() > MAX_LOADED
-    }
+    // fn write_all_blocks(&self) {
+    //     for block in self.blocks.iter() {
+    //         block.write();
+    //     }
+    // }
 
     fn push_new_block(&mut self, point: Point) -> NodeID {
         let id = self.len() as NodeID;
@@ -76,40 +90,30 @@ impl PointsDisk {
         id
     }
 
-    fn offload_block(&mut self, block_idx: NodeID) {
-        match self.blocks.get_mut(block_idx as usize) {
+    pub fn offload_all(&mut self) {
+        self.blocks.iter_mut().for_each(|b| b.offload());
+        self.loaded_block_ids.write().unwrap().clear();
+    }
+
+    fn offload_block(&self, block_idx: NodeID) {
+        match self.blocks.get(block_idx as usize) {
             Some(block) => block.offload(),
             None => (),
         }
     }
 
-    fn load_block(&mut self, block_idx: NodeID) {
-        match self.blocks.get_mut(block_idx as usize) {
-            Some(block) => {
-                if !block.is_loaded() {
-                    block.load();
-                }
-                self.offload()
-            }
-            None => panic!("Tried loading a block that doesn't exist ({block_idx})"),
-        }
-    }
-
-    fn offload_least_requested(&mut self) {
-        let idx_to_offload = self
+    fn offload_blocks_until_limit(&self) {
+        let mut loaded_blocks: Vec<(usize, &PointBlock)> = self
             .blocks
             .iter()
             .enumerate()
             .filter(|(_idx, b)| b.is_loaded())
-            .min_by_key(|(_idx, b)| b.get_requests())
-            .unwrap()
-            .0;
-        self.offload_block(idx_to_offload as NodeID);
-    }
-
-    fn offload(&mut self) {
-        while self.should_offload() {
-            self.offload_least_requested()
+            .collect();
+        loaded_blocks.sort_by_key(|b| -(b.1.get_requests() as isize));
+        while loaded_blocks.len() > MAX_LOADED {
+            let idx = loaded_blocks.pop().unwrap().0;
+            self.offload_block(idx as NodeID);
+            self.loaded_block_ids.write().unwrap().remove(&idx);
         }
     }
 }
@@ -139,22 +143,32 @@ impl Points for PointsDisk {
             blocks,
             ml,
             path: path.to_string_lossy().to_string(),
+            loaded_block_ids: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
-    fn get_point(&self, idx: NodeID) -> Option<&Point> {
+    fn get_point(&self, idx: NodeID) -> Option<Arc<Point>> {
+        if self.loaded_block_ids.read().unwrap().len() > MAX_LOADED {
+            self.offload_blocks_until_limit();
+        }
         let block_idx = idx as usize / BLOCK_CAPACITY as usize;
         match self.blocks.get(block_idx) {
-            Some(b) => b.get_point(idx),
+            Some(b) => {
+                self.loaded_block_ids.write().unwrap().insert(block_idx);
+                b.get_point(idx)
+            }
             None => None,
         }
     }
 
     fn push(&mut self, point: Point) -> NodeID {
+        let idx = self.blocks.len();
         let last_block = self.blocks.last_mut();
         match last_block {
             Some(b) => {
                 if b.len() == BLOCK_CAPACITY as usize {
+                    println!("block {idx} got full, offloading and building a new one",);
+                    b.offload();
                     self.push_new_block(point)
                 } else {
                     b.push(point)
@@ -183,8 +197,12 @@ impl Points for PointsDisk {
         }
     }
 
-    fn ids(&self) -> impl Iterator<Item = NodeID> {
-        self.blocks.iter().map(|b| b.ids()).flatten()
+    fn extend(&mut self, other: Self) -> Vec<NodeID> {
+        let mut ids = Vec::with_capacity(other.len());
+        for point in other.iter_points() {
+            ids.push(self.push(Point::clone(&point)));
+        }
+        ids
     }
 }
 
@@ -217,14 +235,14 @@ impl Serializer for PointsDisk {
         let mut blocks = Vec::new();
         for _ in 0..nb_blocks {
             let block_size = u64::from_be_bytes(reader.u64());
-            blocks.push(PointBlock::deserialize(
-                reader.read_bytes(block_size as usize).to_vec(),
-            ));
+            let block = PointBlock::deserialize(reader.read_bytes(block_size as usize).to_vec());
+            blocks.push(block);
         }
         Self {
             blocks,
             ml,
             path: String::new(),
+            loaded_block_ids: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 }
@@ -253,7 +271,7 @@ mod test {
         let dist = points
             .get_point(0)
             .unwrap()
-            .distance(points.get_point(BLOCK_CAPACITY).unwrap());
+            .dist2other(&points.get_point(BLOCK_CAPACITY).unwrap());
         let val = points
             .get_point((BLOCK_CAPACITY * 2) + 1)
             .unwrap()

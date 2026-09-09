@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use vectors::{FullVec, QuantVec, VecBase, gen_rand_vecs};
 
@@ -21,13 +23,13 @@ fn full_dist_to_many(c: &mut Criterion) {
     let mut group = c.benchmark_group("L2 distance of one full vec to many, by dim");
     for dim in DIMS.iter() {
         let v = FullVec::new(&gen_rand_vecs(*dim, 1)[0]);
-        let others: Vec<FullVec> = gen_rand_vecs(*dim, 128)
+        let others: Vec<Arc<FullVec>> = gen_rand_vecs(*dim, 128)
             .iter()
-            .map(|v| FullVec::new(v))
+            .map(|v| Arc::new(FullVec::new(v)))
             .collect();
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &(&v, &others), |b, i| {
-            b.iter(|| i.0.dist2many(i.1.iter()).collect::<Vec<f32>>());
+            b.iter(|| i.0.dist2many(i.1.iter().cloned()).collect::<Vec<f32>>());
         });
     }
     group.finish();
@@ -41,7 +43,7 @@ fn quant_dist(c: &mut Criterion) {
         let v1 = QuantVec::new(&vectors[1]);
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &(&v0, &v1), |b, i| {
-            b.iter(|| i.0.distance(i.1));
+            b.iter(|| i.0.dist2other(i.1));
         });
     }
     group.finish();
@@ -51,13 +53,13 @@ fn quant_dist_to_many(c: &mut Criterion) {
     let mut group = c.benchmark_group("L2 distance of one quantized vec to many, by dim");
     for dim in DIMS.iter() {
         let v = QuantVec::new(&gen_rand_vecs(*dim, 1)[0]);
-        let others: Vec<QuantVec> = gen_rand_vecs(*dim, 128)
+        let others: Vec<Arc<QuantVec>> = gen_rand_vecs(*dim, 128)
             .iter()
-            .map(|v| QuantVec::new(v))
+            .map(|v| Arc::new(QuantVec::new(v)))
             .collect();
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &(&v, &others), |b, i| {
-            b.iter(|| i.0.dist2many(i.1.iter()).collect::<Vec<f32>>());
+            b.iter(|| i.0.dist2many(i.1.iter().cloned()).collect::<Vec<f32>>());
         });
     }
     group.finish();

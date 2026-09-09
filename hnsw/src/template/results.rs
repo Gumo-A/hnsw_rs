@@ -61,7 +61,10 @@ impl Results {
     }
 
     pub fn get_nearest_from_selected(&self, point: &Point, points: &impl Points) -> Dist {
-        let selected_points = points.get_points_iter(self.selected.iter().map(|n| n.id));
+        let selected_points = self
+            .selected
+            .iter()
+            .map(|n| points.get_point(n.id).unwrap());
         let distances = point.dist2many(selected_points);
         distances
             .zip(self.selected.iter().map(|n| n.id))

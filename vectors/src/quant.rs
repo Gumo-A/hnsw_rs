@@ -123,6 +123,8 @@ impl Serializer for QuantVec {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::gen_rand_vecs;
 
     use super::*;
@@ -142,10 +144,10 @@ mod tests {
         let mut others = Vec::new();
         for _ in 0..100 {
             let a = QuantVec::new(&gen_rand_vecs(128, 1)[0].clone());
-            others.push(a);
+            others.push(Arc::new(a));
         }
         let a = QuantVec::new(&gen_rand_vecs(128, 1)[0].clone());
-        a.dist2many(others.iter())
+        a.dist2many(others.iter().cloned())
             .for_each(|dist| assert!(dist >= 0.0));
 
         let a = QuantVec::new(&vec![0.5]);

@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::path::Path;
+use std::sync::Arc;
 
 use graph::NodeID;
 use log::{debug, trace};
@@ -15,7 +16,7 @@ use crate::points::Points;
 
 #[derive(Debug, Clone)]
 pub struct SimplePoints {
-    pub collection: Vec<Point>,
+    pub collection: Vec<Arc<Point>>,
     idx_offset: NodeID,
 }
 
@@ -24,7 +25,8 @@ impl Points for SimplePoints {
         let mut rng = StdRng::seed_from_u64(0);
         let i = vecs.iter().enumerate().map(|(idx, v)| {
             let level = new_layer(ml, &mut rng);
-            Point::with_level_and_id(v, level, idx as NodeID + idx_offset)
+            let point = Point::with_level_and_id(v, level, idx as NodeID + idx_offset);
+            Arc::new(point)
         });
         Self {
             collection: Vec::from_iter(i),
@@ -34,11 +36,6 @@ impl Points for SimplePoints {
     fn len(&self) -> usize {
         self.collection.len()
     }
-
-    fn ids(&self) -> impl Iterator<Item = NodeID> {
-        self.collection.iter().map(|p| p.id)
-    }
-
     fn dim(&self) -> Option<usize> {
         match self.collection.first() {
             Some(p) => Some(p.dim()),
@@ -53,16 +50,18 @@ impl Points for SimplePoints {
             "Pushing new point to collection with ID {} and level {}",
             point.id, point.level
         );
-        self.collection.push(point);
+        self.collection.push(Arc::new(point));
         id
     }
 
-    fn get_point(&self, idx: NodeID) -> Option<&Point> {
+    fn get_point(&self, idx: NodeID) -> Option<Arc<Point>> {
         // The smallest valid idx is idx_offset
         if idx < self.idx_offset {
             None
         } else {
-            self.collection.get((idx - self.idx_offset) as usize)
+            self.collection
+                .get((idx - self.idx_offset) as usize)
+                .cloned()
         }
     }
 
@@ -74,8 +73,7 @@ impl Points for SimplePoints {
             other.len()
         );
         let mut ids = Vec::with_capacity(other.len());
-        let mut other = other;
-        for point in other.collection.drain(..) {
+        for point in other.collection.iter().map(|p| Point::clone(p)) {
             ids.push(self.push(point));
         }
         ids
@@ -118,7 +116,7 @@ impl Serializer for SimplePoints {
         for id in 0..nb_points {
             let mut point = Point::deserialize(reader.read_bytes(point_size).to_vec());
             point.id = idx_offset + id as NodeID;
-            collection.push(point);
+            collection.push(Arc::new(point));
         }
         Self {
             collection,
@@ -141,15 +139,6 @@ pub fn new_layer(ml: f32, rng: &mut StdRng) -> usize {
     level
 }
 
-impl<'a> SimplePoints {
-    pub fn iter_points<'b: 'a>(&'b self) -> impl Iterator<Item = &'a Point> {
-        self.collection.iter()
-    }
-    pub fn iter_points_mut<'b: 'a>(&mut self) -> impl Iterator<Item = &mut Point> {
-        self.collection.iter_mut()
-    }
-}
-
 #[cfg(test)]
 mod test {
 
@@ -169,7 +158,7 @@ mod test {
         let dist = points
             .get_point(32)
             .unwrap()
-            .distance(points.get_point(64).unwrap());
+            .dist2other(&points.get_point(64).unwrap());
         let val = points.get_point(16).unwrap().iter_vals().next().unwrap();
         (dist, val, points.len() as u32, points.size())
     }

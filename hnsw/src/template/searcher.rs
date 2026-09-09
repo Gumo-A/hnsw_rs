@@ -126,7 +126,7 @@ impl Searcher {
             let node_e = results.candidates.pop_first().unwrap();
             let e_point = points.get_point(node_e.id).unwrap();
 
-            let nearest_selected = results.get_nearest_from_selected(e_point, points);
+            let nearest_selected = results.get_nearest_from_selected(&e_point, points);
 
             if node_e < nearest_selected {
                 results.insert_selected(node_e);

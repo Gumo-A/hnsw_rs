@@ -83,7 +83,7 @@ pub fn brute_force_nns(
         let query = test_set
             .get_point(*idx as NodeID)
             .expect("Point ID not found in collection.");
-        let nns: Vec<NodeID> = get_nn_bf(query, &train_set, nb_nns);
+        let nns: Vec<NodeID> = get_nn_bf(&query, &train_set, nb_nns);
         assert_eq!(nb_nns, nns.len());
         brute_force_results.insert(*idx, nns);
         bar.inc(1);
@@ -98,12 +98,12 @@ fn get_nn_bf(point: &Point, others: &Arc<SimplePoints>, nb_nns: usize) -> Vec<No
 }
 
 fn sort_by_distance(point: &Point, others: &Arc<SimplePoints>) -> Vec<Dist> {
-    let points: Vec<&Point> = others.iter_points().collect();
-    let result = point.dist2many(points.iter().map(|p| *p));
+    let iter = others.collection.iter().cloned();
+    let result = point.dist2many(iter.clone());
     let mut dists = Vec::from_iter(
         result
-            .zip(points.iter())
-            .map(|(dist, p)| Dist::new(p.id, dist)),
+            .zip(iter.clone().map(|p| p.id))
+            .map(|(dist, id)| Dist::new(id, dist)),
     );
     dists.sort();
     dists
