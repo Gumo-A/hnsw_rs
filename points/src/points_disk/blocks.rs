@@ -12,7 +12,7 @@ use crate::point::Point;
 use crate::points::Points;
 use crate::simple_points::SimplePoints;
 
-pub const BLOCK_CAPACITY: NodeID = 65536;
+pub const BLOCK_CAPACITY: NodeID = 131072;
 
 fn new_cell<T>(val: T) -> Arc<RwLock<T>> {
     Arc::new(RwLock::new(val))
