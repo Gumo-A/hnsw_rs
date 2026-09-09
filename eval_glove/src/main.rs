@@ -92,29 +92,29 @@ fn main() -> std::io::Result<()> {
         store.params.m
     );
 
-    {
-        use text_io::read;
+    // {
+    //     use text_io::read;
 
-        let ef = 100;
-        let words_map: HashMap<String, usize> =
-            HashMap::from_iter(words.iter().enumerate().map(|(idx, w)| (w.clone(), idx)));
-        loop {
-            println!("Look for NNs of a word (Ctrl+C to exit):");
-            let query: String = read!();
+    //     let ef = 100;
+    //     let words_map: HashMap<String, usize> =
+    //         HashMap::from_iter(words.iter().enumerate().map(|(idx, w)| (w.clone(), idx)));
+    //     loop {
+    //         println!("Look for NNs of a word (Ctrl+C to exit):");
+    //         let query: String = read!();
 
-            if !words_map.contains_key(&query) {
-                println!("'{query}' is not in the index, try another word.");
-                continue;
-            }
+    //         if !words_map.contains_key(&query) {
+    //             println!("'{query}' is not in the index, try another word.");
+    //             continue;
+    //         }
 
-            let word_idx = *words_map.get(&query).unwrap() as u32;
-            let vector = store.get_point(word_idx).unwrap().get_vals();
+    //         let word_idx = *words_map.get(&query).unwrap() as u32;
+    //         let vector = store.get_point(word_idx).unwrap().get_vals();
 
-            let anns = store.ann_by_vector(&vector, 10, ef).unwrap();
-            let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
-            println!("ANNs of {query} (ef={ef})");
-            println!("{:?}", anns_words);
-        }
-    }
-    // Ok(())
+    //         let anns = store.ann_by_vector(&vector, 10, ef).unwrap();
+    //         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
+    //         println!("ANNs of {query} (ef={ef})");
+    //         println!("{:?}", anns_words);
+    //     }
+    // }
+    Ok(())
 }
