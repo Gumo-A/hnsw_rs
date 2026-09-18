@@ -1,6 +1,7 @@
 use core::panic;
 use log::info;
 use nohash_hasher::IntSet;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fs::{self, create_dir, create_dir_all, File},
@@ -14,7 +15,7 @@ use crate::{helpers::get_progress_bar, params::Params, template::searcher::Searc
 use graph::{dist::Dist, graph::Graph, layers::Layers, NodeID};
 use points::{point::Point, points::Points, points_disk::PointsDisk};
 use rand::Rng;
-use vectors::{serializer::Serializer, VecBase};
+use vectors::VecBase;
 
 mod searcher;
 
@@ -27,7 +28,7 @@ use inserter::Inserter;
 type PointsType = PointsDisk;
 type LayersType = Layers;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HNSW {
     pub params: Params,
     layers: LayersType,

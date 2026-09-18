@@ -5,7 +5,8 @@ members = [
   "eval_glove",
   "vectors", 
   "graph",
-  "points"
+  "points",
+  "hnsw-engine",
 ]
 
 [profile.release]

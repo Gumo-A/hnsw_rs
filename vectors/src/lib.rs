@@ -1,13 +1,9 @@
 mod full;
 mod quant;
-pub mod serializer;
-
-use std::sync::Arc;
-
 pub use full::FullVec;
 pub use quant::QuantVec;
-
 use rand::Rng;
+use std::sync::Arc;
 
 pub trait VecBase {
     fn new(vector: &Vec<f32>) -> Self;

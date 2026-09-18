@@ -1,12 +1,11 @@
 const BITS: i32 = 8;
 const CHUNK_SIZE: usize = 8;
 
-use crate::{
-    VecBase,
-    serializer::{BytesReader, Serializer},
-};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+use crate::VecBase;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuantVec {
     delta: f32,
     min: f32,
@@ -83,44 +82,6 @@ impl VecBase for QuantVec {
     }
 }
 
-impl Serializer for QuantVec {
-    fn size(&self) -> usize {
-        8 + self.dim()
-    }
-
-    /// 4 for low, 4 for delta
-    /// followed by dim bytes
-    ///
-    /// Val       Bytes
-    /// low       4
-    /// delta     4
-    /// quant_vec dim
-    fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&self.min.to_be_bytes());
-        bytes.extend_from_slice(&self.delta.to_be_bytes());
-        for byte in self.codes.iter() {
-            bytes.push(*byte);
-        }
-        bytes
-    }
-
-    fn deserialize(data: Vec<u8>) -> Self {
-        let mut reader = BytesReader::new(data);
-        let lower = f32::from_be_bytes(reader.u32());
-        let delta = f32::from_be_bytes(reader.u32());
-        let mut quantized_vec: Vec<u8> = Vec::new();
-        for byte in reader.iter_remaining() {
-            quantized_vec.push(*byte);
-        }
-        QuantVec {
-            delta,
-            min: lower,
-            codes: quantized_vec,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -132,15 +93,15 @@ mod tests {
     #[test]
     fn serialization() {
         let a = QuantVec::new(&gen_rand_vecs(128, 1)[0].clone());
-        let ser_a = a.serialize();
-        let b = QuantVec::deserialize(ser_a);
+        let ser_a = rmp_serde::encode::to_vec(&a).unwrap();
+        let b: QuantVec = rmp_serde::decode::from_slice(&ser_a).unwrap();
         for (a_val, b_val) in a.iter_vals().zip(b.iter_vals()) {
             assert_eq!(a_val, b_val);
         }
     }
 
     #[test]
-    fn distance() {
+    fn dist() {
         let mut others = Vec::new();
         for _ in 0..100 {
             let a = QuantVec::new(&gen_rand_vecs(128, 1)[0].clone());

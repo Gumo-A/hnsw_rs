@@ -7,6 +7,8 @@ edition = "2024"
 env_logger = "0.11.11"
 log = "0.4.33"
 rand = "0.8.5"
+serde = { version = "1.0.229", features = ["derive"] }
+rmp-serde = "1.3.1"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }

@@ -1,9 +1,10 @@
-use graph::NodeID;
-use vectors::{QuantVec, VecBase, serializer::Serializer};
+use serde::{Deserialize, Serialize};
+use vectors::{QuantVec, VecBase};
 
+type NodeID = u32;
 type VecType = QuantVec;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
     pub id: NodeID,
     pub level: u8,
@@ -40,38 +41,6 @@ impl VecBase for Point {
     }
 }
 
-impl Serializer for Point {
-    /// One byte for level
-    /// followed by vector byte string.
-    ///
-    /// Val        Bytes
-    /// level      1
-    /// vector     self.vector.size()
-    fn size(&self) -> usize {
-        1 + self.vector.size()
-    }
-
-    fn serialize(&self) -> Vec<u8> {
-        let vec_bytes = self.vector.serialize();
-        let mut bytes = Vec::with_capacity(6 + vec_bytes.len());
-        bytes.extend_from_slice(&self.level.to_be_bytes());
-        bytes.extend(vec_bytes);
-        bytes
-    }
-
-    // When we deserialize, we dont get the ID, it is inferred
-    // from its position.
-    fn deserialize(data: Vec<u8>) -> Self {
-        let level = u8::from_be_bytes(data[..1].try_into().unwrap());
-        let vector = VecType::deserialize(data[1..].try_into().unwrap());
-        Point {
-            id: 0,
-            level,
-            vector,
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
 
@@ -83,31 +52,36 @@ mod test {
     use super::*;
 
     #[test]
-    fn quant_serialization() {
-        let rand_vecs = gen_rand_vecs(128, 2);
-
-        let a_level = 2;
-        let b_level = 1;
-
-        let a = Point::with_level_and_id(&rand_vecs[0], a_level, 0);
+    fn serialization() {
+        let rand_vecs = gen_rand_vecs(128, 1);
+        let level = 2;
+        let a = Point::with_level_and_id(&rand_vecs[0], level, 0);
         let a_vector = a.get_vals();
-
-        let b = Point::with_level_and_id(&rand_vecs[0], b_level, 0);
-        let b_vector = b.get_vals();
-
-        let a_ser = a.serialize();
-        let b_ser = b.serialize();
-
-        let a = Point::deserialize(a_ser);
-        let b = Point::deserialize(b_ser);
-
-        assert_eq!(a_level, a.level as usize);
+        let a_ser = rmp_serde::encode::to_vec(&a).unwrap();
+        let a: Point = rmp_serde::decode::from_slice(&a_ser).unwrap();
+        assert_eq!(level, a.level as usize);
         assert_eq!(a_vector, a.vector.get_vals());
-
-        assert_eq!(b_level, b.level as usize);
-        assert_eq!(b_vector, b.vector.get_vals());
     }
 
     #[test]
-    fn placeholder() {}
+    fn dist() {
+        let rand_vecs = gen_rand_vecs(128, 2);
+        let a = Point::with_level_and_id(&rand_vecs[0], 0, 0);
+        let a_vector = a.get_vals();
+
+        let b = Point::with_level_and_id(&rand_vecs[0], 0, 0);
+        let b_vector = b.get_vals();
+
+        let vec_dist: f32 = a_vector
+            .iter()
+            .zip(b_vector.iter())
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f32>()
+            .sqrt();
+
+        let dist = a.dist2other(&b);
+        assert_eq!(dist, vec_dist);
+        let dist = a.distance(&b);
+        assert_eq!(dist, vec_dist);
+    }
 }

@@ -9,3 +9,5 @@ log = "0.4.33"
 nohash-hasher = "0.2.0"
 rand = "0.8.5"
 vectors = {path = "../vectors"}
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+rmp-serde = "1.3.1"

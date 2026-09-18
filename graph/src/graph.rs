@@ -1,15 +1,14 @@
 use crate::{NodeID, errors::GraphError};
 
-use log::{error, trace, warn};
+use log::{trace, warn};
 use nohash_hasher::{IntMap, IntSet};
 use rand::seq::IteratorRandom;
-use std::io::Write;
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use vectors::serializer::{BytesReader, Serializer};
 
 type Neighbors = Arc<Mutex<IntSet<NodeID>>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Graph {
     pub nodes: IntMap<NodeID, Neighbors>,
     pub level: usize,
@@ -180,101 +179,9 @@ impl Graph {
     pub fn contains(&self, node_id: NodeID) -> bool {
         self.nodes.contains_key(&node_id)
     }
-
-    /// Val          Bytes
-    /// Node         4
-    /// neighbors    m * 4
-    fn serialize_adj_list(&self, node_id: NodeID) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(4 + (self.m * 4));
-        bytes.extend_from_slice(&node_id.to_be_bytes());
-
-        let mut neighbors = Vec::from_iter(self.neighbors(node_id).unwrap().iter().copied());
-        if neighbors.len() > self.m {
-            error!(
-                "Degree of node {node_id} is {}, but M is {}",
-                neighbors.len(),
-                self.m
-            );
-            panic!("Tried to serialize a neighbor list exceeding M");
-        }
-        while neighbors.len() < self.m {
-            neighbors.push(NodeID::MAX);
-        }
-        for n in neighbors {
-            bytes.extend_from_slice(&n.to_be_bytes());
-        }
-
-        bytes
-    }
-
-    /// Val          Bytes
-    /// neighbors    m * 4
-    fn deserialize_neighbors(data: &[u8]) -> Vec<NodeID> {
-        let m = data.len() / 4;
-        let mut neighbors = Vec::with_capacity(m);
-        let mut reader = BytesReader::new(data.to_vec());
-        for _ in 0..m {
-            let n: NodeID = NodeID::from_be_bytes(reader.u32());
-            if n == NodeID::MAX {
-                break;
-            }
-            neighbors.push(n);
-        }
-        neighbors
-    }
 }
 
-const GRAPH_HEADER_BYTES: usize = 3;
-
-impl Serializer for Graph {
-    fn size(&self) -> usize {
-        GRAPH_HEADER_BYTES + (self.nb_nodes() * 4 * (self.m + 1))
-    }
-
-    /// Val          Bytes
-    /// level        1
-    /// m            2
-    /// adj_list     (1 + m) * nb_nodes
-    fn serialize(&self) -> Vec<u8> {
-        let mut e = Vec::new();
-        e.write(&[self.level as u8]).unwrap();
-        e.write(&(self.m as u16).to_be_bytes()).unwrap();
-
-        for node in self.iter_nodes() {
-            let adj_list = self.serialize_adj_list(node);
-            e.write(&adj_list).unwrap();
-        }
-        e
-    }
-
-    /// Val          Bytes
-    /// level        1
-    /// m            2
-    /// adj_list     (1 + m) * nb_nodes
-    fn deserialize(data: Vec<u8>) -> Graph {
-        let mut reader = BytesReader::new(data);
-        let level = u8::from_be_bytes(reader.u8()) as usize;
-        let m = u16::from_be_bytes(reader.u16()) as usize;
-        let neighbors_size = m * 4; // 4 bytes per neighbor
-        let adj_list_size = 4 + neighbors_size; // adj list is the node followed by its neighbors
-
-        let nb_nodes = reader.remaining() / adj_list_size;
-        let mut nodes = IntMap::default();
-        for _ in 0..nb_nodes {
-            let node = u32::from_be_bytes(reader.u32());
-            let neighbors = IntSet::from_iter(
-                Graph::deserialize_neighbors(reader.read_bytes(neighbors_size))
-                    .iter()
-                    .copied(),
-            );
-            nodes.insert(node, Arc::new(Mutex::new(neighbors)));
-        }
-
-        Graph { nodes, level, m }
-    }
-}
-
-pub fn make_rand_graph(n: usize, degree: usize) -> Graph {
+pub fn gen_rand_graph(n: usize, degree: usize) -> Graph {
     let mut rng = rand::thread_rng();
     let nodes =
         IntMap::from_iter((0..n).map(|id| (id as NodeID, Arc::new(Mutex::new(IntSet::default())))));
@@ -313,21 +220,20 @@ pub fn simple_graph() -> Graph {
 mod test {
     use crate::{
         NodeID,
-        graph::{Graph, make_rand_graph, simple_graph},
+        graph::{Graph, gen_rand_graph, simple_graph},
     };
     use nohash_hasher::IntSet;
     use std::sync::Arc;
-    use vectors::serializer::Serializer;
 
     #[test]
     fn build_graph() {
-        let graph = make_rand_graph(100, 8);
+        let graph = gen_rand_graph(100, 8);
         assert!(graph.nodes.len() == 100);
     }
 
     #[test]
     fn no_one_way_connections() {
-        let graph = make_rand_graph(100, 8);
+        let graph = gen_rand_graph(100, 8);
         for idx in 0..100 {
             let neighbors = graph.neighbors(idx).unwrap();
             for n in neighbors {
@@ -451,11 +357,9 @@ mod test {
     #[test]
     fn serialization_round_trip() {
         let original = simple_graph();
-        let original_bytes = original.serialize();
+        let original_bytes = rmp_serde::encode::to_vec(&original).unwrap();
 
-        assert_eq!(original_bytes.len(), original.size());
-
-        let restored = Graph::deserialize(original_bytes.try_into().unwrap());
+        let restored: Graph = rmp_serde::decode::from_slice(&original_bytes).unwrap();
 
         assert_eq!(original.nb_nodes(), restored.nb_nodes());
         assert_eq!(original.level, restored.level);

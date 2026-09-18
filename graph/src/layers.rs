@@ -1,10 +1,11 @@
 use core::panic;
 
 use log::trace;
+use serde::{Deserialize, Serialize};
 
 use crate::{NodeID, graph::Graph};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layers {
     levels: Vec<Graph>,
     m: usize,
@@ -72,5 +73,40 @@ impl Layers {
 
 #[cfg(test)]
 mod test {
-    // TODO
+    use crate::{graph::gen_rand_graph, layers::Layers};
+
+    fn gen_rand_layers() -> Layers {
+        let mut layers = Layers::new(12);
+        for _ in 0..2 {
+            layers.add_layer(gen_rand_graph(4, 2));
+        }
+        layers
+    }
+
+    #[test]
+    fn serialize() {
+        let layers = gen_rand_layers();
+        let l_s = rmp_serde::encode::to_vec(&layers).unwrap();
+        let l_d: Layers = rmp_serde::from_slice(&l_s).unwrap();
+        assert_eq!(layers.m, l_d.m);
+        assert_eq!(layers.len(), l_d.len());
+        assert_eq!(layers.get_layer(0).nb_nodes(), l_d.get_layer(0).nb_nodes());
+        assert_eq!(layers.get_layer(1).nb_nodes(), l_d.get_layer(1).nb_nodes());
+        assert_eq!(
+            layers.get_layer(0).degree(0).unwrap(),
+            l_d.get_layer(0).degree(0).unwrap()
+        );
+        assert_eq!(
+            layers.get_layer(1).degree(0).unwrap(),
+            l_d.get_layer(1).degree(0).unwrap()
+        );
+        assert_eq!(
+            layers.get_layer(0).neighbors(0).unwrap(),
+            l_d.get_layer(0).neighbors(0).unwrap()
+        );
+        assert_eq!(
+            layers.get_layer(1).neighbors(0).unwrap(),
+            l_d.get_layer(1).neighbors(0).unwrap()
+        );
+    }
 }

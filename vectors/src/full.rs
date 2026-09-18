@@ -1,6 +1,8 @@
-use crate::{VecBase, serializer::Serializer};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+use crate::VecBase;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FullVec {
     pub vector: Vec<f32>,
 }
@@ -33,34 +35,6 @@ impl VecBase for FullVec {
     }
 }
 
-impl Serializer for FullVec {
-    fn size(&self) -> usize {
-        self.dim() * 4
-    }
-
-    /// blocks of 4 bytes
-    /// for the floats (big endian)
-    ///
-    /// Val    Bytes
-    /// vector dim * 4
-    fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        for float in self.vector.iter() {
-            bytes.extend_from_slice(&float.to_be_bytes());
-        }
-        bytes
-    }
-
-    fn deserialize(data: Vec<u8>) -> Self {
-        let bytes = data.chunks_exact(4);
-        let mut vals: Vec<f32> = Vec::new();
-        for f32_bytes in bytes {
-            vals.push(f32::from_be_bytes(f32_bytes.try_into().unwrap()))
-        }
-        FullVec::new(&vals)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -72,8 +46,8 @@ mod tests {
     #[test]
     fn serialization() {
         let a = FullVec::new(&gen_rand_vecs(128, 1)[0].clone());
-        let ser_a = a.serialize();
-        let b = FullVec::deserialize(ser_a);
+        let ser_a = rmp_serde::encode::to_vec(&a).unwrap();
+        let b: FullVec = rmp_serde::decode::from_slice(&ser_a).unwrap();
         for (a_val, b_val) in a.iter_vals().zip(b.iter_vals()) {
             assert_eq!(a_val, b_val);
         }
