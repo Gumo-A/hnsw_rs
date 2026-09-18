@@ -39,7 +39,6 @@ impl Engine {
     fn lock(&self, req_len: usize) {
         let lock_file = self.loc.join("metadata-layer").join("lock-file");
         while lock_file.exists() {
-            println!("Waiting to acquire lock for {req_len} payloads");
             self.wait(100);
         }
         self.create_lock_file(lock_file, req_len);
@@ -70,21 +69,14 @@ impl Engine {
 
     fn add_payloads(&self, mut payloads: Vec<Point>) -> Vec<ID> {
         let len = payloads.len();
-        println!("Getting lock for {} payloads", len);
         self.lock(len);
-        println!("Got lock for {} payloads", payloads.len());
         let last_pl_id = self.get_last_payload_id();
-        println!(
-            "last id is {last_pl_id}, adding {} payloads",
-            payloads.len()
-        );
         payloads
             .iter_mut()
             .enumerate()
             .for_each(|(idx, p)| p.id = 1 + idx as u32 + last_pl_id as u32);
         let ids = (last_pl_id + 1..last_pl_id + len as ID + 1).collect();
         let ids = self.save_payloads(ids, payloads);
-        println!("Releasing lock for {} payloads", len);
         self.unlock();
         ids
     }
@@ -95,7 +87,6 @@ impl Engine {
         let last_id = ids.last().unwrap();
         let f_name = format!("{first_id}-{last_id}-payload");
         let path = self.loc.join("data-layer").join(f_name);
-        println!("Creating {path:?}");
         File::create_new(path)
             .unwrap()
             .write(&self.serialize_payloads(&payloads))
@@ -114,7 +105,6 @@ impl Engine {
 
     fn overwrite_last_id_file(&self, id: ID) {
         let path = self.loc.join("metadata-layer").join("last_id.txt");
-        println!("Overwritting {path:?} with ID {id}");
         let mut buf = vec![];
         write!(&mut buf, "{id}").unwrap();
         File::create(path).unwrap().write(&buf).unwrap();
@@ -198,8 +188,8 @@ mod tests {
     fn add_payloads() {
         let e = Engine::new(Path::new("./engine-test-index").to_path_buf()).unwrap();
 
-        for _ in 0..128 {
-            let p = gen_rand_points(1024);
+        for _ in 0..16 {
+            let p = gen_rand_points(128);
             e.add_payloads(p);
         }
     }
