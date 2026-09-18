@@ -1,10 +1,13 @@
 use std::{
-    fs::{self, File, create_dir, create_dir_all},
+    fs::{self, File, create_dir, create_dir_all, remove_file},
     io::{self, Write},
     path::PathBuf,
     str::FromStr,
+    thread::sleep,
+    time::Duration,
 };
 
+use flate2::{Compression, write::GzEncoder};
 use points::point::Point;
 
 type ID = u64;
@@ -29,6 +32,36 @@ impl Engine {
         Ok(engine)
     }
 
+    fn wait(&self, micros: u64) {
+        sleep(Duration::from_micros(micros));
+    }
+
+    fn lock(&self, req_len: usize) {
+        let lock_file = self.loc.join("metadata-layer").join("lock-file");
+        while lock_file.exists() {
+            println!("Waiting to acquire lock for {req_len} payloads");
+            self.wait(100);
+        }
+        self.create_lock_file(lock_file, req_len);
+    }
+
+    fn create_lock_file(&self, lock_file: PathBuf, req_len: usize) {
+        match File::create_new(lock_file) {
+            Ok(_) => (),
+            Err(e) => match e.kind() {
+                io::ErrorKind::AlreadyExists => self.lock(req_len),
+                _ => panic!("Could not create lock file: {e:?}"),
+            },
+        }
+    }
+
+    fn unlock(&self) {
+        let lock_file = self.loc.join("metadata-layer").join("lock-file");
+        if lock_file.exists() {
+            remove_file(lock_file).unwrap();
+        }
+    }
+
     pub fn insert(&self, payloads: Vec<Point>) -> io::Result<Vec<ID>> {
         let p_ids: Vec<ID> = self.add_payloads(payloads);
         // self.add_one_id_to_index(p_id);
@@ -36,29 +69,47 @@ impl Engine {
     }
 
     fn add_payloads(&self, mut payloads: Vec<Point>) -> Vec<ID> {
+        let len = payloads.len();
+        println!("Getting lock for {} payloads", len);
+        self.lock(len);
+        println!("Got lock for {} payloads", payloads.len());
         let last_pl_id = self.get_last_payload_id();
-        println!("last id is {last_pl_id}");
+        println!(
+            "last id is {last_pl_id}, adding {} payloads",
+            payloads.len()
+        );
         payloads
             .iter_mut()
             .enumerate()
             .for_each(|(idx, p)| p.id = 1 + idx as u32 + last_pl_id as u32);
-        let ids = (last_pl_id + 1..last_pl_id + payloads.len() as ID + 1).collect();
-        self.save_payloads(ids, payloads)
+        let ids = (last_pl_id + 1..last_pl_id + len as ID + 1).collect();
+        let ids = self.save_payloads(ids, payloads);
+        println!("Releasing lock for {} payloads", len);
+        self.unlock();
+        ids
     }
 
     fn save_payloads(&self, ids: Vec<ID>, payloads: Vec<Point>) -> Vec<ID> {
         assert_eq!(ids.len(), payloads.len());
         let first_id = ids.get(0).unwrap();
         let last_id = ids.last().unwrap();
-        let f_name = format!("{first_id}-{last_id}-payload.json");
+        let f_name = format!("{first_id}-{last_id}-payload");
         let path = self.loc.join("data-layer").join(f_name);
         println!("Creating {path:?}");
         File::create_new(path)
             .unwrap()
-            .write(&serde_json::to_vec(&payloads).unwrap())
+            .write(&self.serialize_payloads(&payloads))
             .unwrap();
         self.overwrite_last_id_file(*last_id);
         ids
+    }
+
+    fn serialize_payloads(&self, payloads: &Vec<Point>) -> Vec<u8> {
+        let mut buf = GzEncoder::new(vec![], Compression::default());
+        // buf.write(&serde_json::to_vec(payloads).unwrap())
+        buf.write(&rmp_serde::encode::to_vec(payloads).unwrap())
+            .unwrap();
+        buf.finish().unwrap()
     }
 
     fn overwrite_last_id_file(&self, id: ID) {
@@ -80,7 +131,7 @@ impl Engine {
                     File::create_new(last_id_file).unwrap().write(&buf).unwrap();
                     String::from_str("0").unwrap()
                 }
-                _ => panic!("Something else"),
+                _ => panic!("Error while reading {last_id_file:?}: {e:?}"),
             },
         };
         last_id_string.parse::<ID>().unwrap()
@@ -107,21 +158,20 @@ fn check_can_use_dir(loc: PathBuf) -> io::Result<()> {
     }
 }
 
+fn try_create_dir(path: PathBuf) -> io::Result<()> {
+    match create_dir(path.clone()) {
+        Ok(()) => Ok(()),
+        Err(e) => match e.kind() {
+            io::ErrorKind::AlreadyExists => Ok(()),
+            _ => panic!("Could not create dir {path:?}: {e:?}"),
+        },
+    }
+}
+
 fn check_or_create_dir_structure(loc: PathBuf) -> io::Result<()> {
-    let metadata_layer = loc.join("metadata-layer");
-    if !metadata_layer.exists() {
-        create_dir(metadata_layer)?;
-    }
-
-    let data_layer = loc.join("data-layer");
-    if !data_layer.exists() {
-        create_dir(data_layer)?;
-    }
-
-    let index_layer = loc.join("index-layer");
-    if !index_layer.exists() {
-        create_dir(index_layer)?;
-    }
+    try_create_dir(loc.join("metadata-layer"))?;
+    try_create_dir(loc.join("data-layer"))?;
+    try_create_dir(loc.join("index-layer"))?;
 
     Ok(())
 }
@@ -136,7 +186,7 @@ mod tests {
     use crate::Engine;
 
     fn gen_rand_points(n: usize) -> Vec<Point> {
-        let vs = gen_rand_vecs(12, n);
+        let vs = gen_rand_vecs(1024, n);
         let mut points = vec![];
         for v in vs {
             points.push(Point::with_level_and_id(&v, 0, 0));
@@ -148,8 +198,8 @@ mod tests {
     fn add_payloads() {
         let e = Engine::new(Path::new("./engine-test-index").to_path_buf()).unwrap();
 
-        for _ in 0..8 {
-            let p = gen_rand_points(4);
+        for _ in 0..128 {
+            let p = gen_rand_points(1024);
             e.add_payloads(p);
         }
     }
