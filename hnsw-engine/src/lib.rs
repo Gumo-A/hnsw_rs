@@ -1,8 +1,7 @@
 use std::{
-    fs::{self, File, create_dir, create_dir_all, remove_file},
+    fs::{File, create_dir, create_dir_all, remove_file},
     io::{self, Write},
     path::PathBuf,
-    str::FromStr,
     thread::sleep,
     time::Duration,
 };
@@ -11,6 +10,7 @@ use flate2::{Compression, write::GzEncoder};
 use points::point::Point;
 
 type ID = u64;
+type SaveInfo = (String, ID, ID);
 
 pub struct Engine {
     loc: PathBuf,
@@ -21,14 +21,14 @@ impl Engine {
         let engine = Self { loc: loc.clone() };
         if loc.exists() {
             if loc.is_dir() {
-                check_can_use_dir(loc.clone())?;
+                check_can_use_dir(&loc)?;
             } else {
                 return Err(io::ErrorKind::NotADirectory.into());
             }
         } else {
-            create_dir_all(loc.clone()).unwrap();
+            create_dir_all(&loc).unwrap();
         }
-        check_or_create_dir_structure(loc.clone()).unwrap();
+        check_or_create_dir_structure(&loc).unwrap();
         Ok(engine)
     }
 
@@ -36,63 +36,87 @@ impl Engine {
         sleep(Duration::from_micros(micros));
     }
 
-    fn lock(&self, req_len: usize) {
+    fn write_lock(&self) {
         let lock_file = self.loc.join("metadata-layer").join("lock-file");
         while lock_file.exists() {
             self.wait(100);
         }
-        self.create_lock_file(lock_file, req_len);
+        self.create_lock_file(&lock_file);
     }
 
-    fn create_lock_file(&self, lock_file: PathBuf, req_len: usize) {
+    fn create_lock_file(&self, lock_file: &PathBuf) {
         match File::create_new(lock_file) {
             Ok(_) => (),
             Err(e) => match e.kind() {
-                io::ErrorKind::AlreadyExists => self.lock(req_len),
-                _ => panic!("Could not create lock file: {e:?}"),
+                io::ErrorKind::AlreadyExists => {
+                    self.write_lock();
+                }
+                _ => panic!("Could not create {lock_file:?}: {e:?}"),
             },
         }
     }
 
-    fn unlock(&self) {
-        let lock_file = self.loc.join("metadata-layer").join("lock-file");
+    fn write_unlock(&self) {
+        let lock_file = self.loc.join("metadata-layer").join("write-lock-file");
         if lock_file.exists() {
-            remove_file(lock_file).unwrap();
+            match remove_file(&lock_file) {
+                Ok(()) => (),
+                Err(e) => match e.kind() {
+                    io::ErrorKind::NotFound => (),
+                    _ => panic!("Could not delete {lock_file:?}: {e:?}"),
+                },
+            };
         }
     }
 
-    pub fn insert(&self, payloads: Vec<Point>) -> io::Result<Vec<ID>> {
-        let p_ids: Vec<ID> = self.add_payloads(payloads);
-        // self.add_one_id_to_index(p_id);
-        Ok(p_ids)
+    pub fn insert(&self, payloads: Vec<Point>) -> io::Result<SaveInfo> {
+        self.write_lock();
+        let manifest = self.get_current_manifest();
+        let save_info = self.add_payloads(&manifest, payloads);
+        self.index_id_range(&save_info);
+        self.write_unlock();
+        Ok(save_info)
     }
 
-    fn add_payloads(&self, mut payloads: Vec<Point>) -> Vec<ID> {
-        let len = payloads.len();
-        self.lock(len);
-        let last_pl_id = self.get_last_payload_id();
-        payloads
-            .iter_mut()
-            .enumerate()
-            .for_each(|(idx, p)| p.id = 1 + idx as u32 + last_pl_id as u32);
-        let ids = (last_pl_id + 1..last_pl_id + len as ID + 1).collect();
-        let ids = self.save_payloads(ids, payloads);
-        self.unlock();
-        ids
+    fn index_id_range(&self, _added_id_range: &SaveInfo) {
+        // payloads were added to the data layer
+        // their IDs are all IDs in the given range
+        // insert these IDs in the index
+        todo!("insert IDs in the index")
     }
 
-    fn save_payloads(&self, ids: Vec<ID>, payloads: Vec<Point>) -> Vec<ID> {
-        assert_eq!(ids.len(), payloads.len());
-        let first_id = ids.get(0).unwrap();
-        let last_id = ids.last().unwrap();
+    fn get_current_manifest(&self) -> Manifest {
+        Manifest::new(&self.loc)
+    }
+
+    fn add_payloads(&self, manifest: &Manifest, mut payloads: Vec<Point>) -> SaveInfo {
+        let save_info = self.save_payloads(manifest, &mut payloads);
+        manifest.update(&save_info);
+        save_info
+    }
+
+    fn save_payloads(&self, manifest: &Manifest, payloads: &Vec<Point>) -> SaveInfo {
+        let last_id = manifest.get_last_id();
+        let first_id = last_id + 1;
+        let last_id = first_id + payloads.len() as ID - 1;
         let f_name = format!("{first_id}-{last_id}-payload");
-        let path = self.loc.join("data-layer").join(f_name);
-        File::create_new(path)
-            .unwrap()
-            .write(&self.serialize_payloads(&payloads))
-            .unwrap();
-        self.overwrite_last_id_file(*last_id);
-        ids
+        let path = self.loc.join("data-layer").join(f_name.clone());
+        self.save_serialized_payloads(&path, payloads);
+        (f_name, first_id, last_id)
+    }
+
+    fn save_serialized_payloads(&self, path: &PathBuf, payloads: &Vec<Point>) {
+        let mut file = match File::create_new(path) {
+            Ok(f) => f,
+            Err(e) => panic!("Could not create payload file at {path:?}: {e:?}"),
+        };
+        let payloads_ser = self.serialize_payloads(&payloads);
+        match file.write(&payloads_ser) {
+            Ok(_bytes_written) => {
+                todo!("log how many bytes were written")
+            }
+            Err(e) => panic!("Could not write payload to file {path:?}: {e:?}"),
+        };
     }
 
     fn serialize_payloads(&self, payloads: &Vec<Point>) -> Vec<u8> {
@@ -110,25 +134,14 @@ impl Engine {
         File::create(path).unwrap().write(&buf).unwrap();
     }
 
+    /// Gets the highest ID in the index from the current manifest
     fn get_last_payload_id(&self) -> ID {
-        let last_id_file = self.loc.join("metadata-layer").join("last_id.txt");
-        let last_id_string = match fs::read_to_string(last_id_file.clone()) {
-            Ok(s) => s,
-            Err(e) => match e.kind() {
-                io::ErrorKind::NotFound => {
-                    let mut buf = vec![];
-                    write!(&mut buf, "0").unwrap();
-                    File::create_new(last_id_file).unwrap().write(&buf).unwrap();
-                    String::from_str("0").unwrap()
-                }
-                _ => panic!("Error while reading {last_id_file:?}: {e:?}"),
-            },
-        };
-        last_id_string.parse::<ID>().unwrap()
+        let manifest = self.get_current_manifest();
+        manifest.get_last_id()
     }
 }
 
-fn check_can_use_dir(loc: PathBuf) -> io::Result<()> {
+fn check_can_use_dir(loc: &PathBuf) -> io::Result<()> {
     let entries = loc.read_dir().unwrap().count();
     if entries > 0 {
         if entries == 3 {
@@ -149,7 +162,7 @@ fn check_can_use_dir(loc: PathBuf) -> io::Result<()> {
 }
 
 fn try_create_dir(path: PathBuf) -> io::Result<()> {
-    match create_dir(path.clone()) {
+    match create_dir(&path) {
         Ok(()) => Ok(()),
         Err(e) => match e.kind() {
             io::ErrorKind::AlreadyExists => Ok(()),
@@ -158,12 +171,28 @@ fn try_create_dir(path: PathBuf) -> io::Result<()> {
     }
 }
 
-fn check_or_create_dir_structure(loc: PathBuf) -> io::Result<()> {
+fn check_or_create_dir_structure(loc: &PathBuf) -> io::Result<()> {
     try_create_dir(loc.join("metadata-layer"))?;
     try_create_dir(loc.join("data-layer"))?;
     try_create_dir(loc.join("index-layer"))?;
 
     Ok(())
+}
+
+struct Manifest {}
+
+impl Manifest {
+    pub fn new(_loc: &PathBuf) -> Self {
+        Manifest {}
+    }
+
+    pub fn update(&self, _save_info: &SaveInfo) {
+        todo!("update manifest after adding payloads")
+    }
+
+    pub fn get_last_id(&self) -> ID {
+        todo!("returns last ID")
+    }
 }
 
 #[cfg(test)]
