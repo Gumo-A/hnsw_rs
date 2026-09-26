@@ -1,7 +1,6 @@
 use std::{
-    collections::HashMap,
     fs::{File, ReadDir, create_dir, create_dir_all, remove_file},
-    io::{self, BufReader, Read, Write},
+    io::{self, BufReader, BufWriter, Write},
     path::PathBuf,
     thread::sleep,
     time::Duration,
@@ -9,13 +8,11 @@ use std::{
 
 use points::point::Point;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 type ID = u64;
-type IDOffset = ID;
 type AddedPoints = u64;
 type FileName = String;
-type NBBytes = usize;
-type SaveInfo = (FileName, IDOffset, AddedPoints, NBBytes);
 
 pub struct Engine {
     loc: PathBuf,
@@ -76,7 +73,7 @@ impl Engine {
     }
 
     fn write_lock(&self) {
-        let lock_file = self.loc.join("metadata-layer").join("lock-file");
+        let lock_file = self.loc.join("metadata-layer").join("write-lock-file");
         while lock_file.exists() {
             self.wait(100);
         }
@@ -108,42 +105,41 @@ impl Engine {
         }
     }
 
-    pub fn insert(&self, payloads: Vec<Point>) -> io::Result<SaveInfo> {
+    pub fn insert(&self, payloads: Vec<Point>) -> io::Result<Manifest> {
         self.write_lock();
-        let manifest = self.get_current_manifest();
-        let save_info = self.add_payloads(&manifest, payloads);
-        self.index_id_range(&save_info);
+        let mut manifest_list = self.get_current_manifest_list();
+        let manifest = self.add_payloads(&mut manifest_list, payloads);
+        // self.index_id_range(&manifest);
         self.write_unlock();
-        Ok(save_info)
+        Ok(manifest)
     }
 
-    fn index_id_range(&self, _added_id_range: &SaveInfo) {
+    fn index_id_range(&self, _manifest: &Manifest) {
         // payloads were added to the data layer
         // their IDs are all IDs in the given range
         // insert these IDs in the index
         todo!("insert IDs in the index")
     }
 
-    fn get_current_manifest(&self) -> ManifestList {
+    fn get_current_manifest_list(&self) -> ManifestList {
         ManifestList::new(&self.loc)
     }
 
-    fn add_payloads(&self, manifest: &ManifestList, mut payloads: Vec<Point>) -> SaveInfo {
-        let save_info: SaveInfo = self.save_payloads(manifest, &mut payloads);
-        manifest.update(&save_info);
-        save_info
+    fn add_payloads(&self, manifest: &mut ManifestList, mut payloads: Vec<Point>) -> Manifest {
+        let new_manifest = self.save_payloads(manifest, &mut payloads);
+        manifest.update(&new_manifest);
+        new_manifest
     }
 
-    fn save_payloads(&self, manifest: &ManifestList, payloads: &Vec<Point>) -> SaveInfo {
+    fn save_payloads(&self, manifest: &ManifestList, payloads: &Vec<Point>) -> Manifest {
         let id_offset = manifest.get_nb_points();
         let len = payloads.len() as AddedPoints;
-        let f_name = format!("{id_offset}-{len}-payload");
-        let path = self.loc.join("data-layer").join(&f_name);
-        let written_bytes = self.save_serialized_payloads(&path, payloads);
-        (f_name, id_offset, len, written_bytes)
+        let path = self.loc.join("data-layer").join(get_rand_file_name());
+        let _written_bytes = self.save_serialized_payloads(&path, payloads);
+        Manifest::new(&path, id_offset, len)
     }
 
-    fn save_serialized_payloads(&self, path: &PathBuf, payloads: &Vec<Point>) -> NBBytes {
+    fn save_serialized_payloads(&self, path: &PathBuf, payloads: &Vec<Point>) -> usize {
         let mut file = match File::create_new(path) {
             Ok(f) => f,
             Err(e) => panic!("Could not create payload file at {path:?}: {e}"),
@@ -162,7 +158,7 @@ impl Engine {
         //     .unwrap();
         // buf.finish().unwrap()
         // match rmp_serde::encode::to_vec(payloads) {
-        match serde_json::to_vec(payloads) {
+        match serde_json::to_vec_pretty(payloads) {
             Ok(bytes) => bytes,
             Err(e) => panic!("Error while serializing {} payloads: {e}", payloads.len()),
         }
@@ -170,32 +166,39 @@ impl Engine {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Manifest {
-    file_name: FileName,
+pub struct Manifest {
+    loc: PathBuf,
     id_offset: ID,
     nb_points: ID,
 }
 
 impl Manifest {
-    pub fn new(loc: &PathBuf, save_info: &SaveInfo) -> Self {
+    pub fn new(loc: &PathBuf, id_offset: ID, nb_points: AddedPoints) -> Self {
         let manifest = Manifest {
-            file_name: save_info.0.clone(),
-            id_offset: save_info.1,
-            nb_points: save_info.2,
+            loc: loc.clone(),
+            id_offset,
+            nb_points,
         };
-        let manifest_json = serde_json::to_vec_pretty(&manifest).unwrap();
-        File::create_new(loc.join("metadata-layer").join("0000-manifest"))
-            .unwrap()
-            .write(&manifest_json)
-            .unwrap();
+        // let manifest_json = serde_json::to_vec_pretty(&manifest).unwrap();
+        // let p = loc
+        //     .parent()
+        //     .expect("Could not get data layer dir")
+        //     .parent()
+        //     .expect("Could not get index base location")
+        //     .join("metadata-layer")
+        //     .join(get_rand_file_name());
+        // File::create_new(p)
+        //     .expect("Could not create new manifest file")
+        //     .write(&manifest_json)
+        //     .expect("Could not write manifest content to manifest file");
         manifest
     }
 
     /// Reads manifest at `file_loc`,
-    /// returning a Manifest that can tell if an
-    /// ID is in one of its files
     pub fn load(file_loc: &PathBuf) -> Self {
-        todo!("load manifest content")
+        let f = File::open(file_loc).expect("Could not open manifest file");
+        let reader = BufReader::new(f);
+        serde_json::from_reader(reader).unwrap()
     }
 
     pub fn get_nb_points(&self) -> ID {
@@ -203,85 +206,112 @@ impl Manifest {
     }
 
     pub fn ids(&self) -> impl Iterator<Item = ID> {
-        (self.id_offset..self.id_offset + self.nb_points)
+        self.id_offset..self.id_offset + self.nb_points
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ManifestListContent {
-    list: Vec<FileName>,
-}
+type ManifestListContent = Vec<FileName>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ManifestList {
     manifests: Vec<Manifest>,
     nb_points: ID,
-    loc: PathBuf,
+    file_loc: PathBuf,
 }
 
 impl ManifestList {
     pub fn new(loc: &PathBuf) -> Self {
-        match Self::read_current_manifest_list(loc) {
+        let metadata_dir = loc.join("metadata-layer");
+        match Self::read_current_manifest_list(&metadata_dir) {
             Some(s) => s,
-            None => ManifestList {
-                manifests: Vec::new(),
-                nb_points: 0,
-                loc: loc.join("metadata-layer").join("0000-manifest-list.json"),
-            },
+            None => Self::create_first_manifest_list(&metadata_dir),
         }
     }
 
-    fn read_current_manifest_list(loc: &PathBuf) -> Option<Self> {
-        match Self::get_latest_manifest_list_file(loc) {
+    fn create_first_manifest_list(metadata_dir: &PathBuf) -> Self {
+        let file_loc = metadata_dir.join("0-manifest-list.json");
+        let writer = BufWriter::new(
+            File::create_new(&file_loc).expect("Could not create first manifest list file"),
+        );
+        let manifest_list = ManifestList {
+            file_loc,
+            manifests: Vec::new(),
+            nb_points: 0,
+        };
+        serde_json::to_writer(writer, &manifest_list)
+            .expect("Could not write empty vec to first manifest list file");
+        manifest_list
+    }
+
+    fn read_current_manifest_list(metadata_dir: &PathBuf) -> Option<Self> {
+        match Self::get_latest_manifest_list_file(metadata_dir) {
             None => None,
             Some(f) => Some(Self::load_manifest_list(&f)),
         }
     }
 
-    fn get_latest_manifest_list_file(loc: &PathBuf) -> Option<PathBuf> {
-        let dir = read_layer(&loc.join("metadata-layer"));
+    fn get_latest_manifest_list_file(metadata_dir: &PathBuf) -> Option<PathBuf> {
+        let dir = read_layer(metadata_dir);
         let latest = dir
             .map(|e| {
-                let e = e.unwrap().path();
-                (path_to_f_name_str(e.clone()), e)
+                let e = e
+                    .expect("Could not read directory entry in metadata-layer")
+                    .path();
+                (path_to_f_name_str(&e), e)
             })
-            .filter(|(s, _)| s.contains("manifest-list"))
-            .max_by_key(|(s, _)| s.split_once("-").unwrap().0.parse::<usize>().unwrap());
+            .filter(|(s, _)| s.ends_with("-manifest-list.json"))
+            .max_by_key(|(s, _)| Self::parse_int_from_file_name(s));
         match latest {
             None => None,
             Some((_, p)) => Some(p),
         }
     }
 
+    fn parse_int_from_file_name(f_name: &FileName) -> usize {
+        f_name
+            .split_once("-")
+            .expect("Could not split file name by '-'")
+            .0
+            .parse::<usize>()
+            .expect("Could not parse integer from file name")
+    }
+
     fn load_manifest_list(loc: &PathBuf) -> Self {
         let f = File::open(loc).unwrap();
         let reader = BufReader::new(f);
-        let manifest_list: ManifestListContent = serde_json::from_reader(reader).unwrap().list;
-        let mut manifests = Vec::new();
-        let mut nb_points = 0;
-        for f_name in manifest_list {
-            let manifest = Manifest::load(&loc.join("metadata-layer").join(f_name));
-            nb_points += manifest.get_nb_points();
-            manifests.push(manifest)
-        }
-        ManifestList {
-            loc: loc.clone(),
-            manifests,
-            nb_points,
-        }
+        serde_json::from_reader::<BufReader<File>, ManifestList>(reader)
+            .expect("serde_json could not parse Manifest List")
     }
 
-    fn create_new_manifest_file(&self, save_info: &SaveInfo) -> Manifest {
-        Manifest::new(&self.loc, save_info)
+    /// we assume we have the write lock here
+    pub fn update(&mut self, new_manifest: &Manifest) {
+        let new_path = self.get_next_manifest_file_path();
+        let writer = BufWriter::new(
+            File::create_new(&new_path).expect("Could not create next manifest list file"),
+        );
+        self.manifests.push(new_manifest.clone());
+        self.nb_points += new_manifest.get_nb_points();
+        self.file_loc = new_path;
+        serde_json::to_writer_pretty(writer, &self)
+            .expect("Could not write contents to new manifest list file");
     }
 
-    fn update_manifest_list(&self, new_manifest: &Manifest) {
-        todo!("create new manifest list. Use all previous manifests plus the new one")
-    }
+    fn get_next_manifest_file_path(&self) -> PathBuf {
+        let metadata_dir = self
+            .file_loc
+            .parent()
+            .expect("Could not get metadata layer from manifest list file path")
+            .to_path_buf();
+        let latest = match Self::get_latest_manifest_list_file(&metadata_dir) {
+            Some(p) => p,
+            None => panic!("Was expecting a manifest list file to exist, but didn't find it"),
+        };
 
-    pub fn update(&self, save_info: &SaveInfo) {
-        let manifest = self.create_new_manifest_file(save_info);
-        self.update_manifest_list(&manifest);
+        let next_idx = Self::parse_int_from_file_name(
+            &latest.file_name().unwrap().to_string_lossy().to_string(),
+        ) + 1;
+        let next_file_name = format!("{next_idx}-manifest-list.json");
+        metadata_dir.join(next_file_name)
     }
 
     pub fn get_nb_points(&self) -> ID {
@@ -289,15 +319,20 @@ impl ManifestList {
     }
 }
 
-fn path_to_f_name_str(loc: PathBuf) -> String {
+fn path_to_f_name_str(loc: &PathBuf) -> String {
     loc.file_name().unwrap().to_string_lossy().to_string()
 }
 
 fn read_layer(loc: &PathBuf) -> ReadDir {
+    println!("Reading dir {loc:?}");
     match loc.read_dir() {
         Ok(d) => d,
         Err(e) => panic!("Could not read {loc:?}: {e}"),
     }
+}
+
+fn get_rand_file_name() -> String {
+    Uuid::new_v4().as_hyphenated().to_string()
 }
 
 #[cfg(test)]
@@ -318,13 +353,17 @@ mod tests {
         points
     }
 
+    const N: u64 = 128;
+
     #[test]
     fn add_payloads() {
         let e = Engine::new(Path::new("./engine-test-index").to_path_buf()).unwrap();
 
         for _ in 0..16 {
-            let p = gen_rand_points(128);
-            e.add_payloads(p);
+            let p = gen_rand_points(N as usize);
+            let r = e.insert(p);
+            assert!(r.is_ok());
+            assert_eq!(r.unwrap().nb_points, N);
         }
     }
 
@@ -334,7 +373,8 @@ mod tests {
 
         for _ in 0..8 {
             let p = gen_rand_points(1);
-            e.add_payloads(p);
+            let r = e.insert(p);
+            assert!(r.is_ok());
         }
     }
 }
