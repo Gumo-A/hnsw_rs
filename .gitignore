@@ -15,3 +15,4 @@ points/points_disk_test
 points/test_data
 Cargo.lock
 hnsw-engine/engine-test-index
+hnsw-engine/get-points-test
