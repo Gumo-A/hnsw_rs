@@ -1,12 +1,12 @@
 use std::{
     fs::{File, ReadDir, create_dir, create_dir_all, remove_file},
-    io::{self, BufReader, BufWriter, Write},
+    io::{self, BufReader, BufWriter, Read, Write},
     path::PathBuf,
     thread::sleep,
     time::Duration,
 };
 
-use flate2::{Compression, write::GzEncoder};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use points::point::Point;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -137,7 +137,16 @@ impl Engine {
     }
 
     fn load_payload_file(&self, loc: &PathBuf) -> Vec<Point> {
-        todo!()
+        let mut bytes = vec![];
+        File::open(loc)
+            .expect("Could not open payload file")
+            .read_to_end(&mut bytes)
+            .expect("Could not read payload file");
+        let mut bytes_uncompressed = vec![];
+        GzDecoder::new(&bytes[..])
+            .read_to_end(&mut bytes_uncompressed)
+            .expect("Could not decompress payload contents");
+        rmp_serde::decode::from_slice(&bytes_uncompressed).expect("Could not decode payload")
     }
 
     fn get_current_manifest_list(&self) -> ManifestList {
@@ -416,7 +425,7 @@ mod tests {
 
         assert_eq!(e.get_current_manifest_list().get_nb_points(), 8);
 
-        for i in 0..16 {
+        for i in 0..8 {
             let p = e.get_point(i);
             assert!(p.is_some());
             assert_eq!(p.unwrap().get_vals(), points[i as usize].get_vals());
