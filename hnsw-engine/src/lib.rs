@@ -106,6 +106,20 @@ impl Engine {
         }
     }
 
+    pub fn get_point(&self, id: ID) -> Option<Point> {
+        let manifest = self.get_current_manifest_list();
+        if manifest.get_nb_points() <= id {
+            None
+        } else {
+            let (file_path, idx) = match manifest.get_file_and_idx_from_id(id) {
+                Some(t) => t,
+                None => return None,
+            };
+            let points = self.load_payload_file(&file_path);
+            points.get(idx).cloned()
+        }
+    }
+
     pub fn insert(&self, payloads: Vec<Point>) -> io::Result<Manifest> {
         self.write_lock();
         let mut manifest_list = self.get_current_manifest_list();
@@ -120,6 +134,10 @@ impl Engine {
         // their IDs are all IDs in the given range
         // insert these IDs in the index
         todo!("insert IDs in the index")
+    }
+
+    fn load_payload_file(&self, loc: &PathBuf) -> Vec<Point> {
+        todo!()
     }
 
     fn get_current_manifest_list(&self) -> ManifestList {
@@ -189,6 +207,14 @@ impl Manifest {
         self.nb_points
     }
 
+    pub fn id_in_range(&self, id: ID) -> bool {
+        (id >= self.id_offset) & (id <= self.max_id())
+    }
+
+    fn max_id(&self) -> ID {
+        self.id_offset + self.nb_points - 1
+    }
+
     pub fn ids(&self) -> impl Iterator<Item = ID> {
         self.id_offset..self.id_offset + self.nb_points
     }
@@ -208,6 +234,15 @@ impl ManifestList {
             Some(s) => s,
             None => Self::create_first_manifest_list(&metadata_dir),
         }
+    }
+
+    pub fn get_file_and_idx_from_id(&self, id: ID) -> Option<(PathBuf, usize)> {
+        for manifest in self.manifests.iter() {
+            if manifest.id_in_range(id) {
+                return Some((manifest.loc.clone(), (id - manifest.id_offset) as usize));
+            }
+        }
+        None
     }
 
     fn create_first_manifest_list(metadata_dir: &PathBuf) -> Self {
@@ -306,7 +341,6 @@ fn path_to_f_name_str(loc: &PathBuf) -> String {
 }
 
 fn read_layer(loc: &PathBuf) -> ReadDir {
-    println!("Reading dir {loc:?}");
     match loc.read_dir() {
         Ok(d) => d,
         Err(e) => panic!("Could not read {loc:?}: {e}"),
@@ -319,15 +353,26 @@ fn get_rand_file_name() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{fs::remove_dir_all, path::Path, u64};
 
     use points::point::Point;
-    use vectors::gen_rand_vecs;
+    use vectors::{VecBase, gen_rand_vecs};
 
-    use crate::Engine;
+    use crate::{Engine, ID};
+
+    const N: u64 = 8;
+    const DIM: usize = 4;
+
+    fn init_engine(path: &str) -> Engine {
+        let path = Path::new(path).to_path_buf();
+        if path.exists() {
+            remove_dir_all(&path).unwrap();
+        }
+        Engine::new(path).unwrap()
+    }
 
     fn gen_rand_points(n: usize) -> Vec<Point> {
-        let vs = gen_rand_vecs(1024, n);
+        let vs = gen_rand_vecs(DIM, n);
         let mut points = vec![];
         for v in vs {
             points.push(Point::with_level_and_id(&v, 0, 0));
@@ -335,28 +380,53 @@ mod tests {
         points
     }
 
-    const N: u64 = 128;
-
     #[test]
     fn add_payloads() {
-        let e = Engine::new(Path::new("./engine-test-index").to_path_buf()).unwrap();
-
+        let path = "./add-payloads-test";
+        let e = init_engine(path);
         for _ in 0..4 {
             let p = gen_rand_points(N as usize);
             let r = e.insert(p);
             assert!(r.is_ok());
             assert_eq!(r.unwrap().nb_points, N);
         }
+        remove_dir_all(path).unwrap();
     }
 
     #[test]
     fn add_one_payload() {
-        let e = Engine::new(Path::new("./engine-test-index").to_path_buf()).unwrap();
-
+        let path = "./add-one-payload-test";
+        let e = init_engine(path);
         for _ in 0..4 {
             let p = gen_rand_points(1);
             let r = e.insert(p);
             assert!(r.is_ok());
         }
+        remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn get_points() {
+        let path = "./get-points-test";
+        let e = init_engine(path);
+
+        let points = gen_rand_points(8);
+        let _ = e.insert(points[..4].to_vec()).unwrap();
+        let _ = e.insert(points[4..].to_vec()).unwrap();
+
+        assert_eq!(e.get_current_manifest_list().get_nb_points(), 8);
+
+        for i in 0..16 {
+            let p = e.get_point(i);
+            assert!(p.is_some());
+            assert_eq!(p.unwrap().get_vals(), points[i as usize].get_vals());
+        }
+
+        assert!(e.get_point(8).is_none());
+        assert!(e.get_point(16).is_none());
+        assert!(e.get_point(1024).is_none());
+        assert!(e.get_point(ID::MAX).is_none());
+
+        remove_dir_all(path).unwrap();
     }
 }
