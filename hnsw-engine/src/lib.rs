@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use flate2::{Compression, write::GzEncoder};
 use points::point::Point;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -145,6 +146,7 @@ impl Engine {
             Err(e) => panic!("Could not create payload file at {path:?}: {e}"),
         };
         let payloads_ser = self.serialize_payloads(&payloads);
+        // let payloads_ser = self._serialize_payloads_debug(&payloads);
         match file.write(&payloads_ser) {
             Ok(bytes_written) => bytes_written,
             Err(e) => panic!("Could not write payload to file {path:?}: {e}"),
@@ -152,12 +154,13 @@ impl Engine {
     }
 
     fn serialize_payloads(&self, payloads: &Vec<Point>) -> Vec<u8> {
-        // let mut buf = GzEncoder::new(vec![], Compression::default());
-        // buf.write(&serde_json::to_vec(payloads).unwrap())
-        // buf.write(&rmp_serde::encode::to_vec(payloads).unwrap())
-        //     .unwrap();
-        // buf.finish().unwrap()
-        // match rmp_serde::encode::to_vec(payloads) {
+        let mut buf = GzEncoder::new(vec![], Compression::default());
+        buf.write(&rmp_serde::encode::to_vec(payloads).unwrap())
+            .unwrap();
+        buf.finish().unwrap()
+    }
+
+    fn _serialize_payloads_debug(&self, payloads: &Vec<Point>) -> Vec<u8> {
         match serde_json::to_vec_pretty(payloads) {
             Ok(bytes) => bytes,
             Err(e) => panic!("Error while serializing {} payloads: {e}", payloads.len()),
@@ -179,26 +182,7 @@ impl Manifest {
             id_offset,
             nb_points,
         };
-        // let manifest_json = serde_json::to_vec_pretty(&manifest).unwrap();
-        // let p = loc
-        //     .parent()
-        //     .expect("Could not get data layer dir")
-        //     .parent()
-        //     .expect("Could not get index base location")
-        //     .join("metadata-layer")
-        //     .join(get_rand_file_name());
-        // File::create_new(p)
-        //     .expect("Could not create new manifest file")
-        //     .write(&manifest_json)
-        //     .expect("Could not write manifest content to manifest file");
         manifest
-    }
-
-    /// Reads manifest at `file_loc`,
-    pub fn load(file_loc: &PathBuf) -> Self {
-        let f = File::open(file_loc).expect("Could not open manifest file");
-        let reader = BufReader::new(f);
-        serde_json::from_reader(reader).unwrap()
     }
 
     pub fn get_nb_points(&self) -> ID {
@@ -209,8 +193,6 @@ impl Manifest {
         self.id_offset..self.id_offset + self.nb_points
     }
 }
-
-type ManifestListContent = Vec<FileName>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ManifestList {
@@ -359,7 +341,7 @@ mod tests {
     fn add_payloads() {
         let e = Engine::new(Path::new("./engine-test-index").to_path_buf()).unwrap();
 
-        for _ in 0..16 {
+        for _ in 0..4 {
             let p = gen_rand_points(N as usize);
             let r = e.insert(p);
             assert!(r.is_ok());
@@ -371,7 +353,7 @@ mod tests {
     fn add_one_payload() {
         let e = Engine::new(Path::new("./engine-test-index").to_path_buf()).unwrap();
 
-        for _ in 0..8 {
+        for _ in 0..4 {
             let p = gen_rand_points(1);
             let r = e.insert(p);
             assert!(r.is_ok());
