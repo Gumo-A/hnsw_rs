@@ -233,7 +233,7 @@ impl Manifest {
 struct ManifestList {
     manifests: Vec<Manifest>,
     nb_points: ID,
-    file_loc: PathBuf,
+    metadata_dir: PathBuf,
 }
 
 impl ManifestList {
@@ -241,7 +241,7 @@ impl ManifestList {
         let metadata_dir = loc.join("metadata-layer");
         match Self::read_current_manifest_list(&metadata_dir) {
             Some(s) => s,
-            None => Self::create_first_manifest_list(&metadata_dir),
+            None => Self::create_first_manifest_list(metadata_dir),
         }
     }
 
@@ -254,17 +254,17 @@ impl ManifestList {
         None
     }
 
-    fn create_first_manifest_list(metadata_dir: &PathBuf) -> Self {
+    fn create_first_manifest_list(metadata_dir: PathBuf) -> Self {
         let file_loc = metadata_dir.join("0-manifest-list.json");
         let writer = BufWriter::new(
             File::create_new(&file_loc).expect("Could not create first manifest list file"),
         );
         let manifest_list = ManifestList {
-            file_loc,
+            metadata_dir,
             manifests: Vec::new(),
             nb_points: 0,
         };
-        serde_json::to_writer(writer, &manifest_list)
+        serde_json::to_writer_pretty(writer, &manifest_list)
             .expect("Could not write empty vec to first manifest list file");
         manifest_list
     }
@@ -317,18 +317,12 @@ impl ManifestList {
         );
         self.manifests.push(new_manifest.clone());
         self.nb_points += new_manifest.get_nb_points();
-        self.file_loc = new_path;
         serde_json::to_writer_pretty(writer, &self)
             .expect("Could not write contents to new manifest list file");
     }
 
     fn get_next_manifest_file_path(&self) -> PathBuf {
-        let metadata_dir = self
-            .file_loc
-            .parent()
-            .expect("Could not get metadata layer from manifest list file path")
-            .to_path_buf();
-        let latest = match Self::get_latest_manifest_list_file(&metadata_dir) {
+        let latest = match Self::get_latest_manifest_list_file(&self.metadata_dir) {
             Some(p) => p,
             None => panic!("Was expecting a manifest list file to exist, but didn't find it"),
         };
@@ -337,7 +331,7 @@ impl ManifestList {
             &latest.file_name().unwrap().to_string_lossy().to_string(),
         ) + 1;
         let next_file_name = format!("{next_idx}-manifest-list.json");
-        metadata_dir.join(next_file_name)
+        self.metadata_dir.join(next_file_name)
     }
 
     pub fn get_nb_points(&self) -> ID {
