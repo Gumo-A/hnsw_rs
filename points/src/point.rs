@@ -2,13 +2,13 @@ use serde::{Deserialize, Serialize};
 use vectors::{QuantVec, VecBase};
 
 type NodeID = u32;
-type VecType = QuantVec;
+pub type VecType = QuantVec;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
     pub id: NodeID,
     pub level: u8,
-    vector: VecType,
+    pub vector: VecType,
 }
 
 impl Point {
@@ -17,6 +17,14 @@ impl Point {
         point.id = id;
         point.level = level as u8;
         point
+    }
+
+    pub fn with_vectype_and_id(vector: &VecType, id: NodeID) -> Point {
+        Self {
+            id,
+            level: 0,
+            vector: vector.clone(),
+        }
     }
 }
 

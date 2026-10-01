@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    env,
     fs::{File, create_dir, create_dir_all, remove_file},
     io::{self, Read, Write},
     path::PathBuf,
@@ -8,23 +8,27 @@ use std::{
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use points::point::Point;
+use points::point::{Point, VecType};
 
 use crate::{
-    AddedPoints, ID, get_rand_file_name,
+    AddedPoints, ID,
+    cache::PointCache,
+    get_rand_file_name,
     manifest::{Manifest, ManifestList},
 };
 
 pub struct Engine {
     loc: PathBuf,
-    point_cache: HashMap<ID, Point>,
+    point_cache: PointCache,
+    debug: bool,
 }
 
 impl Engine {
     pub fn new(loc: PathBuf) -> io::Result<Self> {
         let engine = Self {
             loc: loc.clone(),
-            point_cache: HashMap::new(),
+            point_cache: PointCache::new(),
+            debug: env::var("HNSW_DEBUG").is_ok(),
         };
         if loc.exists() {
             if loc.is_dir() {
@@ -124,7 +128,7 @@ impl Engine {
             None
         } else {
             if let Some((file_path, offset)) = manifest.get_file_and_offset_from_id(id) {
-                let points = self.load_payload_file(&file_path);
+                let points = self.load_payload_file(&file_path, offset as usize);
                 let mut idx = 0;
                 for p in points {
                     self.point_cache.insert(idx + offset, p);
@@ -153,14 +157,13 @@ impl Engine {
         todo!("insert IDs in the index")
     }
 
-    fn load_payload_file(&self, loc: &PathBuf) -> Vec<Point> {
+    fn load_payload_file(&self, loc: &PathBuf, offset: usize) -> Vec<Point> {
         let mut bytes = vec![];
         File::open(loc)
             .expect("Could not open payload file")
             .read_to_end(&mut bytes)
             .expect("Could not read payload file");
-        // self.deserialize_payloads_debug(&bytes)
-        self.deserialize_payloads(&bytes)
+        self.deserialize_payloads(&bytes, offset)
     }
 
     pub fn get_current_manifest_list(&self) -> ManifestList {
@@ -187,7 +190,6 @@ impl Engine {
             Err(e) => panic!("Could not create payload file at {path:?}: {e}"),
         };
         let payloads_ser = self.serialize_payloads(&payloads);
-        // let payloads_ser = self.serialize_payloads_debug(&payloads);
         match file.write(&payloads_ser) {
             Ok(bytes_written) => bytes_written,
             Err(e) => panic!("Could not write payload to file {path:?}: {e}"),
@@ -195,26 +197,53 @@ impl Engine {
     }
 
     fn serialize_payloads(&self, payloads: &Vec<Point>) -> Vec<u8> {
-        let ser = rmp_serde::encode::to_vec(payloads).expect("Could not serialize payload");
+        if self.debug {
+            self.serialize_payloads_debug(payloads)
+        } else {
+            self.serialize_payloads_compressed(payloads)
+        }
+    }
+
+    fn serialize_payloads_compressed(&self, payloads: &Vec<Point>) -> Vec<u8> {
+        let p: Vec<&VecType> = payloads.iter().map(|p| &p.vector).collect();
+        let ser = rmp_serde::encode::to_vec(&p).expect("Could not serialize payload");
         let mut buf = GzEncoder::new(vec![], Compression::default());
         buf.write_all(&ser).unwrap();
         buf.finish().unwrap()
     }
 
-    fn deserialize_payloads(&self, bytes: &Vec<u8>) -> Vec<Point> {
+    fn deserialize_payloads(&self, bytes: &Vec<u8>, offset: usize) -> Vec<Point> {
+        if self.debug {
+            self.deserialize_payloads_debug(bytes, offset)
+        } else {
+            self.deserialize_payloads_compressed(bytes, offset)
+        }
+    }
+
+    fn deserialize_payloads_compressed(&self, bytes: &Vec<u8>, offset: usize) -> Vec<Point> {
         let mut bytes_uncompressed = vec![];
         GzDecoder::new(&bytes[..])
             .read_to_end(&mut bytes_uncompressed)
             .expect("Could not decompress payload contents");
-        rmp_serde::decode::from_slice(&bytes_uncompressed).expect("Could not decode payload")
+        let vecs: Vec<VecType> =
+            rmp_serde::decode::from_slice(&bytes_uncompressed).expect("Could not decode payload");
+        vecs.iter()
+            .enumerate()
+            .map(|(idx, v)| Point::with_vectype_and_id(v, (idx + offset) as u32))
+            .collect()
     }
 
     fn serialize_payloads_debug(&self, payloads: &Vec<Point>) -> Vec<u8> {
-        serde_json::to_vec_pretty(payloads).expect("Could not encode payload")
+        let p: Vec<&VecType> = payloads.iter().map(|p| &p.vector).collect();
+        serde_json::to_vec_pretty(&p).expect("Could not encode payload")
     }
 
-    fn deserialize_payloads_debug(&self, bytes: &Vec<u8>) -> Vec<Point> {
-        serde_json::from_slice(bytes).expect("Could not decode payload")
+    fn deserialize_payloads_debug(&self, bytes: &Vec<u8>, offset: usize) -> Vec<Point> {
+        let vecs: Vec<VecType> = serde_json::from_slice(bytes).expect("Could not decode payload");
+        vecs.iter()
+            .enumerate()
+            .map(|(idx, v)| Point::with_vectype_and_id(v, (idx + offset) as u32))
+            .collect()
     }
 }
 
@@ -241,8 +270,8 @@ mod tests {
     fn gen_rand_points(n: usize) -> Vec<Point> {
         let vs = gen_rand_vecs(DIM, n);
         let mut points = vec![];
-        for v in vs {
-            points.push(Point::with_level_and_id(&v, 0, 0));
+        for (idx, v) in vs.iter().enumerate() {
+            points.push(Point::with_level_and_id(v, 0, idx as u32));
         }
         points
     }
@@ -273,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn get_points() {
+    fn get_points_simple() {
         let path = "./get-points-test";
         let mut e = init_engine(path);
 
@@ -284,9 +313,12 @@ mod tests {
         assert_eq!(e.get_current_manifest_list().get_nb_points(), 8);
 
         for i in 0..8 {
-            let p = e.get_point(i);
-            assert!(p.is_some());
-            assert_eq!(p.unwrap().get_vals(), points[i as usize].get_vals());
+            println!("i {i}");
+            let a = e.get_point(i).unwrap();
+            let b = points[i as usize].clone();
+            assert_eq!(a.get_vals(), b.get_vals());
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.level, b.level);
         }
 
         assert!(e.get_point(8).is_none());
@@ -308,14 +340,20 @@ mod tests {
 
         assert_eq!(e.get_current_manifest_list().get_nb_points(), 8);
 
-        let mut check_cache_usage = |idx| {
+        let mut check_cache_updates = |idx| {
             assert_eq!(e.point_cache.contains_key(&idx), false);
+            assert_eq!(e.point_cache.contains_key(&(idx + 1)), false);
+            assert_eq!(e.point_cache.contains_key(&(idx + 2)), false);
+            assert_eq!(e.point_cache.contains_key(&(idx + 3)), false);
             e.get_point(idx);
             assert_eq!(e.point_cache.contains_key(&idx), true);
+            assert_eq!(e.point_cache.contains_key(&(idx + 1)), true);
+            assert_eq!(e.point_cache.contains_key(&(idx + 2)), true);
+            assert_eq!(e.point_cache.contains_key(&(idx + 3)), true);
         };
 
-        check_cache_usage(0);
-        check_cache_usage(7);
+        check_cache_updates(0);
+        check_cache_updates(4);
 
         remove_dir_all(path).unwrap();
     }
@@ -325,22 +363,20 @@ mod tests {
         let path = "./get-points-big-test";
         let mut e = init_engine(path);
 
-        let n1 = 2_usize.pow(16);
-        let points = gen_rand_points(n1);
-        let _ = e.insert(points.clone()).unwrap();
-        let n1 = n1 as ID;
+        let mut n = 0;
 
-        let n2 = 2_usize.pow(16);
-        let points = gen_rand_points(n2);
-        let _ = e.insert(points.clone()).unwrap();
-        let n2 = n2 as ID;
+        for _ in 0..8 {
+            let _n = 2_usize.pow(12);
+            let points = gen_rand_points(_n);
+            let _ = e.insert(points.clone()).unwrap();
+            n += _n;
+        }
 
-        assert_eq!(e.get_current_manifest_list().get_nb_points(), n1 + n2);
+        assert_eq!(e.get_current_manifest_list().get_nb_points(), n as ID);
 
-        for i in n1..n2 {
-            let p = e.get_point(i);
-            assert!(p.is_some());
-            assert_eq!(p.unwrap().get_vals(), points[i as usize].get_vals());
+        for i in 0..n {
+            let a = e.get_point(i as ID).unwrap();
+            assert_eq!(a.id, i as u32);
         }
 
         remove_dir_all(path).unwrap();
