@@ -3,32 +3,70 @@ use std::{
     fs::{File, create_dir, create_dir_all, remove_file},
     io::{self, Read, Write},
     path::PathBuf,
+    sync::Arc,
     thread::sleep,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use moka::{policy::EvictionPolicy, sync::Cache};
 use points::point::{Point, VecType};
 
 use crate::{
-    AddedPoints, ID,
-    cache::PointCache,
-    get_rand_file_name,
+    AddedPoints, ID, get_rand_file_name,
     manifest::{Manifest, ManifestList},
 };
 
+const DEFAULT_CACHE_CAPACITY: u64 = 1024;
+
 pub struct Engine {
     loc: PathBuf,
-    point_cache: PointCache,
+    cache: Cache<ID, Arc<Point>>,
     debug: bool,
+    cache_cap: u64,
 }
 
 impl Engine {
     pub fn new(loc: PathBuf) -> io::Result<Self> {
+        let cache = Cache::builder()
+            .max_capacity(DEFAULT_CACHE_CAPACITY)
+            .eviction_policy(EvictionPolicy::lru())
+            .build();
         let engine = Self {
             loc: loc.clone(),
-            point_cache: PointCache::new(),
+            cache,
             debug: env::var("HNSW_DEBUG").is_ok(),
+            cache_cap: DEFAULT_CACHE_CAPACITY,
+        };
+        if loc.exists() {
+            if loc.is_dir() {
+                Self::check_can_use_dir(&loc)?;
+            } else {
+                return Err(io::ErrorKind::NotADirectory.into());
+            }
+        } else {
+            match create_dir_all(&loc) {
+                Ok(()) => (),
+                Err(e) => match e.kind() {
+                    io::ErrorKind::AlreadyExists => (),
+                    _ => panic!("Could not create {loc:?}: {e}"),
+                },
+            };
+        }
+        Self::check_or_create_dir_structure(&loc);
+        Ok(engine)
+    }
+
+    pub fn with_cache_capacity(loc: PathBuf, cap: u64) -> io::Result<Self> {
+        let cache = Cache::builder()
+            .max_capacity(cap)
+            .eviction_policy(EvictionPolicy::lru())
+            .build();
+        let engine = Self {
+            loc: loc.clone(),
+            cache,
+            debug: env::var("HNSW_DEBUG").is_ok(),
+            cache_cap: cap,
         };
         if loc.exists() {
             if loc.is_dir() {
@@ -114,15 +152,19 @@ impl Engine {
         }
     }
 
-    pub fn get_point(&mut self, id: ID) -> Option<&Point> {
-        if self.point_cache.contains_key(&id) {
-            self.point_cache.get(&id)
+    pub fn get_point(&mut self, id: ID) -> Option<Arc<Point>> {
+        // let s = Instant::now();
+        let result = if let Some(p) = self.cache.get(&id) {
+            Some(p)
         } else {
             self.load_data_file_with_id(id)
-        }
+        };
+        // let e = s.elapsed();
+        // println!("Got {id} in {e:?}");
+        result
     }
 
-    fn load_data_file_with_id(&mut self, id: ID) -> Option<&Point> {
+    fn load_data_file_with_id(&mut self, id: ID) -> Option<Arc<Point>> {
         let manifest = self.get_current_manifest_list();
         if manifest.get_nb_points() <= id {
             None
@@ -130,24 +172,49 @@ impl Engine {
             if let Some((file_path, offset)) = manifest.get_file_and_offset_from_id(id) {
                 let points = self.load_payload_file(&file_path, offset as usize);
                 let mut idx = 0;
+                let mut requested = None;
                 for p in points {
-                    self.point_cache.insert(idx + offset, p);
+                    let key = idx + offset;
+                    if key == id {
+                        requested = Some(p.clone());
+                    }
+                    if !self.cache.contains_key(&key) {
+                        self.cache.insert(key, Arc::new(p));
+                    }
                     idx += 1;
                 }
-                self.point_cache.get(&id)
+                if !self.cache.contains_key(&id) {
+                    self.cache.insert(
+                        id,
+                        Arc::new(requested.expect("'requested should always be Some() here")),
+                    );
+                }
+                self.cache.get(&id)
             } else {
                 None
             }
         }
     }
 
-    pub fn insert(&self, payloads: Vec<Point>) -> io::Result<Manifest> {
-        self.write_lock();
-        let mut manifest_list = self.get_current_manifest_list();
-        let manifest = self.add_payloads(&mut manifest_list, payloads);
-        // self.index_id_range(&manifest);
-        self.write_unlock();
-        Ok(manifest)
+    pub fn insert(&self, payloads: &[Point]) -> io::Result<Manifest> {
+        if payloads.len() > self.cache_cap as usize {
+            self.divide_and_insert(payloads)
+        } else {
+            self.write_lock();
+            let mut manifest_list = self.get_current_manifest_list();
+            let manifest = self.add_payloads(&mut manifest_list, payloads);
+            // self.index_id_range(&manifest);
+            self.write_unlock();
+            Ok(manifest)
+        }
+    }
+
+    fn divide_and_insert(&self, payloads: &[Point]) -> io::Result<Manifest> {
+        let mid = payloads.len() / 2;
+        let p1 = &payloads[..mid];
+        let p2 = &payloads[mid..];
+        self.insert(p1)?;
+        self.insert(p2)
     }
 
     fn index_id_range(&self, _manifest: &Manifest) {
@@ -170,13 +237,13 @@ impl Engine {
         ManifestList::new(&self.loc)
     }
 
-    fn add_payloads(&self, manifest: &mut ManifestList, mut payloads: Vec<Point>) -> Manifest {
+    fn add_payloads(&self, manifest: &mut ManifestList, mut payloads: &[Point]) -> Manifest {
         let new_manifest = self.save_payloads(manifest, &mut payloads);
         manifest.update(&new_manifest);
         new_manifest
     }
 
-    fn save_payloads(&self, manifest: &ManifestList, payloads: &Vec<Point>) -> Manifest {
+    fn save_payloads(&self, manifest: &ManifestList, payloads: &[Point]) -> Manifest {
         let id_offset = manifest.get_nb_points();
         let len = payloads.len() as AddedPoints;
         let path = self.loc.join("data-layer").join(get_rand_file_name());
@@ -184,7 +251,7 @@ impl Engine {
         Manifest::new(&path, id_offset, len)
     }
 
-    fn save_serialized_payloads(&self, path: &PathBuf, payloads: &Vec<Point>) -> usize {
+    fn save_serialized_payloads(&self, path: &PathBuf, payloads: &[Point]) -> usize {
         let mut file = match File::create_new(path) {
             Ok(f) => f,
             Err(e) => panic!("Could not create payload file at {path:?}: {e}"),
@@ -196,7 +263,7 @@ impl Engine {
         }
     }
 
-    fn serialize_payloads(&self, payloads: &Vec<Point>) -> Vec<u8> {
+    fn serialize_payloads(&self, payloads: &[Point]) -> Vec<u8> {
         if self.debug {
             self.serialize_payloads_debug(payloads)
         } else {
@@ -204,7 +271,7 @@ impl Engine {
         }
     }
 
-    fn serialize_payloads_compressed(&self, payloads: &Vec<Point>) -> Vec<u8> {
+    fn serialize_payloads_compressed(&self, payloads: &[Point]) -> Vec<u8> {
         let p: Vec<&VecType> = payloads.iter().map(|p| &p.vector).collect();
         let ser = rmp_serde::encode::to_vec(&p).expect("Could not serialize payload");
         let mut buf = GzEncoder::new(vec![], Compression::default());
@@ -233,7 +300,7 @@ impl Engine {
             .collect()
     }
 
-    fn serialize_payloads_debug(&self, payloads: &Vec<Point>) -> Vec<u8> {
+    fn serialize_payloads_debug(&self, payloads: &[Point]) -> Vec<u8> {
         let p: Vec<&VecType> = payloads.iter().map(|p| &p.vector).collect();
         serde_json::to_vec_pretty(&p).expect("Could not encode payload")
     }
@@ -251,10 +318,14 @@ impl Engine {
 mod tests {
     use std::{fs::remove_dir_all, path::Path, u64};
 
+    use moka::sync::Cache;
     use points::point::Point;
     use vectors::{VecBase, gen_rand_vecs};
 
-    use crate::{ID, engine::Engine};
+    use crate::{
+        ID,
+        engine::{DEFAULT_CACHE_CAPACITY, Engine},
+    };
 
     const N: u64 = 8;
     const DIM: usize = 4;
@@ -282,7 +353,7 @@ mod tests {
         let e = init_engine(path);
         for _ in 0..4 {
             let p = gen_rand_points(N as usize);
-            let r = e.insert(p);
+            let r = e.insert(&p);
             assert!(r.is_ok());
             assert_eq!(r.unwrap().get_nb_points(), N);
         }
@@ -295,7 +366,7 @@ mod tests {
         let e = init_engine(path);
         for _ in 0..4 {
             let p = gen_rand_points(1);
-            let r = e.insert(p);
+            let r = e.insert(&p);
             assert!(r.is_ok());
         }
         remove_dir_all(path).unwrap();
@@ -307,13 +378,12 @@ mod tests {
         let mut e = init_engine(path);
 
         let points = gen_rand_points(8);
-        let _ = e.insert(points[..4].to_vec()).unwrap();
-        let _ = e.insert(points[4..].to_vec()).unwrap();
+        let _ = e.insert(&points[..4]).unwrap();
+        let _ = e.insert(&points[4..]).unwrap();
 
         assert_eq!(e.get_current_manifest_list().get_nb_points(), 8);
 
         for i in 0..8 {
-            println!("i {i}");
             let a = e.get_point(i).unwrap();
             let b = points[i as usize].clone();
             assert_eq!(a.get_vals(), b.get_vals());
@@ -335,21 +405,21 @@ mod tests {
         let mut e = init_engine(path);
 
         let points = gen_rand_points(8);
-        let _ = e.insert(points[..4].to_vec()).unwrap();
-        let _ = e.insert(points[4..].to_vec()).unwrap();
+        let _ = e.insert(&points[..4]).unwrap();
+        let _ = e.insert(&points[4..]).unwrap();
 
         assert_eq!(e.get_current_manifest_list().get_nb_points(), 8);
 
         let mut check_cache_updates = |idx| {
-            assert_eq!(e.point_cache.contains_key(&idx), false);
-            assert_eq!(e.point_cache.contains_key(&(idx + 1)), false);
-            assert_eq!(e.point_cache.contains_key(&(idx + 2)), false);
-            assert_eq!(e.point_cache.contains_key(&(idx + 3)), false);
+            assert_eq!(e.cache.contains_key(&idx), false);
+            assert_eq!(e.cache.contains_key(&(idx + 1)), false);
+            assert_eq!(e.cache.contains_key(&(idx + 2)), false);
+            assert_eq!(e.cache.contains_key(&(idx + 3)), false);
             e.get_point(idx);
-            assert_eq!(e.point_cache.contains_key(&idx), true);
-            assert_eq!(e.point_cache.contains_key(&(idx + 1)), true);
-            assert_eq!(e.point_cache.contains_key(&(idx + 2)), true);
-            assert_eq!(e.point_cache.contains_key(&(idx + 3)), true);
+            assert_eq!(e.cache.contains_key(&idx), true);
+            assert_eq!(e.cache.contains_key(&(idx + 1)), true);
+            assert_eq!(e.cache.contains_key(&(idx + 2)), true);
+            assert_eq!(e.cache.contains_key(&(idx + 3)), true);
         };
 
         check_cache_updates(0);
@@ -368,7 +438,7 @@ mod tests {
         for _ in 0..8 {
             let _n = 2_usize.pow(12);
             let points = gen_rand_points(_n);
-            let _ = e.insert(points.clone()).unwrap();
+            let _ = e.insert(&points).unwrap();
             n += _n;
         }
 
