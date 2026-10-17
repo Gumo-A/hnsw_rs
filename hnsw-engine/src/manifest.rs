@@ -1,44 +1,47 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{BufReader, BufWriter},
     path::PathBuf,
 };
 
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use crate::{AddedPoints, FileName, ID, path_to_f_name_str, read_layer};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
-    loc: PathBuf,
-    id_offset: ID,
-    nb_points: ID,
+    pub loc: PathBuf,
+    pub id_ranges: Vec<(ID, ID)>,
 }
 
 impl Manifest {
-    pub fn new(loc: &PathBuf, id_offset: ID, nb_points: AddedPoints) -> Self {
+    pub fn new(loc: &PathBuf, first_id: ID, last_id: ID) -> Self {
         let manifest = Manifest {
             loc: loc.clone(),
-            id_offset,
-            nb_points,
+            id_ranges: vec![(first_id, last_id)],
         };
         manifest
     }
 
     pub fn get_nb_points(&self) -> ID {
-        self.nb_points
+        self.id_ranges
+            .iter()
+            .map(|(first, last)| 1 + last - first)
+            .sum()
     }
 
     pub fn id_in_range(&self, id: ID) -> bool {
-        (id >= self.id_offset) & (id <= self.max_id())
-    }
-
-    fn max_id(&self) -> ID {
-        self.id_offset + self.nb_points - 1
+        self.id_ranges
+            .iter()
+            .any(|(first, last)| (id >= *first) & (id <= *last))
     }
 
     pub fn ids(&self) -> impl Iterator<Item = ID> {
-        self.id_offset..self.id_offset + self.nb_points
+        self.id_ranges
+            .iter()
+            .flat_map(|(first, last)| (*first..=*last))
     }
 }
 
@@ -58,10 +61,10 @@ impl ManifestList {
         }
     }
 
-    pub fn get_file_and_offset_from_id(&self, id: ID) -> Option<(PathBuf, ID)> {
+    pub fn get_manifest_from_id(&self, id: ID) -> Option<&Manifest> {
         for manifest in self.manifests.iter() {
             if manifest.id_in_range(id) {
-                return Some((manifest.loc.clone(), manifest.id_offset));
+                return Some(manifest);
             }
         }
         None
@@ -149,5 +152,15 @@ impl ManifestList {
 
     pub fn get_nb_points(&self) -> ID {
         self.nb_points
+    }
+
+    pub fn get_optimization_plan(&self, optimal_size: ID) -> HashMap<Manifest, Manifest> {
+        let mut plan = HashMap::new();
+        let (to_combine, to_split): (Vec<_>, Vec<_>) = self
+            .manifests
+            .iter()
+            .partition(|manif| manif.get_nb_points() < optimal_size);
+        {}
+        plan
     }
 }

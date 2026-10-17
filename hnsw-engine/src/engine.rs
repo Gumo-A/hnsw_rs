@@ -5,10 +5,11 @@ use std::{
     path::PathBuf,
     sync::Arc,
     thread::sleep,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use itertools::Itertools;
 use moka::{policy::EvictionPolicy, sync::Cache};
 use points::point::{Point, VecType};
 
@@ -17,7 +18,8 @@ use crate::{
     manifest::{Manifest, ManifestList},
 };
 
-const DEFAULT_CACHE_CAPACITY: u64 = 1024;
+const DEFAULT_CACHE_CAPACITY: u64 = 10_000;
+const LAYERS: [&str; 3] = ["metadata-layer", "data-layer", "index-layer"];
 
 pub struct Engine {
     loc: PathBuf,
@@ -38,6 +40,11 @@ impl Engine {
             debug: env::var("HNSW_DEBUG").is_ok(),
             cache_cap: DEFAULT_CACHE_CAPACITY,
         };
+        Self::init_loc(&loc)?;
+        Ok(engine)
+    }
+
+    fn init_loc(loc: &PathBuf) -> io::Result<()> {
         if loc.exists() {
             if loc.is_dir() {
                 Self::check_can_use_dir(&loc)?;
@@ -54,7 +61,7 @@ impl Engine {
             };
         }
         Self::check_or_create_dir_structure(&loc);
-        Ok(engine)
+        Ok(())
     }
 
     pub fn with_cache_capacity(loc: PathBuf, cap: u64) -> io::Result<Self> {
@@ -110,9 +117,9 @@ impl Engine {
     }
 
     fn check_or_create_dir_structure(loc: &PathBuf) {
-        Self::try_create_dir(loc.join("metadata-layer"));
-        Self::try_create_dir(loc.join("data-layer"));
-        Self::try_create_dir(loc.join("index-layer"));
+        for layer in LAYERS {
+            Self::try_create_dir(loc.join(layer));
+        }
     }
 
     fn wait(&self, micros: u64) {
@@ -165,21 +172,20 @@ impl Engine {
     }
 
     fn load_data_file_with_id(&mut self, id: ID) -> Option<Arc<Point>> {
-        let manifest = self.get_current_manifest_list();
-        if manifest.get_nb_points() <= id {
+        let manifest_list = self.get_current_manifest_list();
+        if manifest_list.get_nb_points() <= id {
             None
         } else {
-            if let Some((file_path, offset)) = manifest.get_file_and_offset_from_id(id) {
-                let points = self.load_payload_file(&file_path, offset as usize);
+            if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
+                let points = self.load_payload_file(manifest);
                 let mut idx = 0;
                 let mut requested = None;
                 for p in points {
-                    let key = idx + offset;
-                    if key == id {
+                    if p.id as ID == id {
                         requested = Some(p.clone());
                     }
-                    if !self.cache.contains_key(&key) {
-                        self.cache.insert(key, Arc::new(p));
+                    if !self.cache.contains_key(&(p.id as ID)) {
+                        self.cache.insert(p.id as ID, Arc::new(p));
                     }
                     idx += 1;
                 }
@@ -224,31 +230,31 @@ impl Engine {
         todo!("insert IDs in the index")
     }
 
-    fn load_payload_file(&self, loc: &PathBuf, offset: usize) -> Vec<Point> {
+    fn load_payload_file(&self, manifest: &Manifest) -> Vec<Point> {
         let mut bytes = vec![];
-        File::open(loc)
+        File::open(&manifest.loc)
             .expect("Could not open payload file")
             .read_to_end(&mut bytes)
             .expect("Could not read payload file");
-        self.deserialize_payloads(&bytes, offset)
+        self.deserialize_payloads(&bytes, manifest)
     }
 
     pub fn get_current_manifest_list(&self) -> ManifestList {
         ManifestList::new(&self.loc)
     }
 
-    fn add_payloads(&self, manifest: &mut ManifestList, mut payloads: &[Point]) -> Manifest {
-        let new_manifest = self.save_payloads(manifest, &mut payloads);
-        manifest.update(&new_manifest);
+    fn add_payloads(&self, manifest_list: &mut ManifestList, mut payloads: &[Point]) -> Manifest {
+        let new_manifest = self.save_payloads(manifest_list, &mut payloads);
+        manifest_list.update(&new_manifest);
         new_manifest
     }
 
-    fn save_payloads(&self, manifest: &ManifestList, payloads: &[Point]) -> Manifest {
-        let id_offset = manifest.get_nb_points();
-        let len = payloads.len() as AddedPoints;
+    fn save_payloads(&self, manifest_list: &ManifestList, payloads: &[Point]) -> Manifest {
+        let first = manifest_list.get_nb_points();
+        let last = first + payloads.len() as ID - 1;
         let path = self.loc.join("data-layer").join(get_rand_file_name());
         let _written_bytes = self.save_serialized_payloads(&path, payloads);
-        Manifest::new(&path, id_offset, len)
+        Manifest::new(&path, first, last)
     }
 
     fn save_serialized_payloads(&self, path: &PathBuf, payloads: &[Point]) -> usize {
@@ -279,25 +285,27 @@ impl Engine {
         buf.finish().unwrap()
     }
 
-    fn deserialize_payloads(&self, bytes: &Vec<u8>, offset: usize) -> Vec<Point> {
+    fn deserialize_payloads(&self, bytes: &Vec<u8>, manifest: &Manifest) -> Vec<Point> {
         if self.debug {
-            self.deserialize_payloads_debug(bytes, offset)
+            self.deserialize_payloads_debug(bytes, manifest)
         } else {
-            self.deserialize_payloads_compressed(bytes, offset)
+            self.deserialize_payloads_compressed(bytes, manifest)
         }
     }
 
-    fn deserialize_payloads_compressed(&self, bytes: &Vec<u8>, offset: usize) -> Vec<Point> {
+    fn deserialize_payloads_compressed(&self, bytes: &Vec<u8>, manifest: &Manifest) -> Vec<Point> {
         let mut bytes_uncompressed = vec![];
         GzDecoder::new(&bytes[..])
             .read_to_end(&mut bytes_uncompressed)
             .expect("Could not decompress payload contents");
         let vecs: Vec<VecType> =
             rmp_serde::decode::from_slice(&bytes_uncompressed).expect("Could not decode payload");
-        vecs.iter()
-            .enumerate()
-            .map(|(idx, v)| Point::with_vectype_and_id(v, (idx + offset) as u32))
-            .collect()
+        let ids = manifest.ids();
+        let mut points = vec![];
+        for (v, id) in vecs.iter().zip_eq(ids) {
+            points.push(Point::with_vectype_and_id(v, id as u32));
+        }
+        points
     }
 
     fn serialize_payloads_debug(&self, payloads: &[Point]) -> Vec<u8> {
@@ -305,12 +313,19 @@ impl Engine {
         serde_json::to_vec_pretty(&p).expect("Could not encode payload")
     }
 
-    fn deserialize_payloads_debug(&self, bytes: &Vec<u8>, offset: usize) -> Vec<Point> {
+    fn deserialize_payloads_debug(&self, bytes: &Vec<u8>, manifest: &Manifest) -> Vec<Point> {
         let vecs: Vec<VecType> = serde_json::from_slice(bytes).expect("Could not decode payload");
-        vecs.iter()
-            .enumerate()
-            .map(|(idx, v)| Point::with_vectype_and_id(v, (idx + offset) as u32))
-            .collect()
+        let ids = manifest.ids();
+        let mut points = vec![];
+        for (v, id) in vecs.iter().zip_eq(ids) {
+            points.push(Point::with_vectype_and_id(v, id as u32));
+        }
+        points
+    }
+
+    pub fn optimize(&self) -> io::Result<()> {
+        // let op_plan = self.get_current_manifest_list().get_opimization_plan();
+        Ok(())
     }
 }
 
@@ -433,22 +448,51 @@ mod tests {
         let path = "./get-points-big-test";
         let mut e = init_engine(path);
 
-        let mut n = 0;
-
-        for _ in 0..8 {
-            let _n = 2_usize.pow(12);
-            let points = gen_rand_points(_n);
-            let _ = e.insert(&points).unwrap();
-            n += _n;
+        let n = 2_usize.pow(12);
+        let points = gen_rand_points(n * 8);
+        for i in 0..8 {
+            let _ = e.insert(&points[(i * n)..((i * n) + n)]).unwrap();
         }
 
-        assert_eq!(e.get_current_manifest_list().get_nb_points(), n as ID);
+        assert_eq!(
+            e.get_current_manifest_list().get_nb_points(),
+            points.len() as ID
+        );
 
-        for i in 0..n {
-            let a = e.get_point(i as ID).unwrap();
-            assert_eq!(a.id, i as u32);
+        for (idx, p) in points.iter().enumerate() {
+            let a = e.get_point(idx as ID).unwrap();
+            assert_eq!(idx, p.id as usize);
+            assert_eq!(a.id, p.id);
+            assert_eq!(a.get_vals(), p.get_vals());
         }
 
-        remove_dir_all(path).unwrap();
+        // remove_dir_all(path).unwrap();
     }
+
+    // #[test]
+    // fn optimize() {
+    //     let path = "./optimize-test";
+    //     let mut e = init_engine(path);
+
+    //     let n = 16;
+    //     let points = gen_rand_points(n);
+    //     let _ = e.insert(&points[0..4]).unwrap();
+    //     let _ = e.insert(&points[4..8]).unwrap();
+    //     let _ = e.insert(&points[8..12]).unwrap();
+    //     let _ = e.insert(&points[12..n]).unwrap();
+
+    //     assert_eq!(e.get_current_manifest_list().get_nb_points(), n as ID);
+    //     assert_eq!(e., n as ID);
+
+    //     e.optimize();
+
+    //     for i in 0..n {
+    //         let a = e.get_point(i as ID).unwrap();
+    //         assert_eq!(a.id, i as u32);
+    //         assert_eq!(a.id, points[i].id);
+    //         assert_eq!(a.vector.get_vals(), points[i].get_vals());
+    //     }
+
+    //     remove_dir_all(path).unwrap();
+    // }
 }
