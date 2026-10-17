@@ -178,22 +178,10 @@ impl Engine {
         } else {
             if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
                 let points = self.load_payload_file(manifest);
-                let mut idx = 0;
-                let mut requested = None;
                 for p in points {
-                    if p.id as ID == id {
-                        requested = Some(p.clone());
-                    }
                     if !self.cache.contains_key(&(p.id as ID)) {
                         self.cache.insert(p.id as ID, Arc::new(p));
                     }
-                    idx += 1;
-                }
-                if !self.cache.contains_key(&id) {
-                    self.cache.insert(
-                        id,
-                        Arc::new(requested.expect("'requested should always be Some() here")),
-                    );
                 }
                 self.cache.get(&id)
             } else {
