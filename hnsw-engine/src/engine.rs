@@ -18,7 +18,7 @@ use crate::{
     manifest::{Manifest, ManifestList},
 };
 
-const DEFAULT_CACHE_CAPACITY: u64 = 10_000;
+const DEFAULT_CACHE_CAPACITY: u64 = 16384;
 const LAYERS: [&str; 3] = ["metadata-layer", "data-layer", "index-layer"];
 
 pub struct Engine {
@@ -164,20 +164,21 @@ impl Engine {
         let result = if let Some(p) = self.cache.get(&id) {
             Some(p)
         } else {
-            self.load_data_file_with_id(id)
+            self.load_point(id)
         };
         // let e = s.elapsed();
         // println!("Got {id} in {e:?}");
         result
     }
 
-    fn load_data_file_with_id(&mut self, id: ID) -> Option<Arc<Point>> {
+    /// Also caches points stored in the same data file
+    fn load_point(&mut self, id: ID) -> Option<Arc<Point>> {
         let manifest_list = self.get_current_manifest_list();
         if manifest_list.get_nb_points() <= id {
             None
         } else {
             if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
-                let points = self.load_payload_file(manifest);
+                let points = self.load_points_from_manifest(manifest);
                 for p in points {
                     if !self.cache.contains_key(&(p.id as ID)) {
                         self.cache.insert(p.id as ID, Arc::new(p));
@@ -218,7 +219,7 @@ impl Engine {
         todo!("insert IDs in the index")
     }
 
-    fn load_payload_file(&self, manifest: &Manifest) -> Vec<Point> {
+    fn load_points_from_manifest(&self, manifest: &Manifest) -> Vec<Point> {
         let mut bytes = vec![];
         File::open(&manifest.loc)
             .expect("Could not open payload file")
@@ -228,7 +229,8 @@ impl Engine {
     }
 
     pub fn get_current_manifest_list(&self) -> ManifestList {
-        ManifestList::new(&self.loc)
+        let r = ManifestList::new(&self.loc);
+        r
     }
 
     fn add_payloads(&self, manifest_list: &mut ManifestList, mut payloads: &[Point]) -> Manifest {
@@ -311,18 +313,59 @@ impl Engine {
         points
     }
 
-    pub fn optimize(&self) -> io::Result<()> {
-        // let op_plan = self.get_current_manifest_list().get_opimization_plan();
+    pub fn optimize(&self) -> io::Result<ManifestList> {
+        let old_manifest_list = self.get_current_manifest_list();
+        let op_plan = old_manifest_list.get_optimization_plan(self.cache_cap);
+
+        let mut optimized_manifest_list = Vec::new();
+        for to_combine in op_plan.iter() {
+            optimized_manifest_list.push(self.combine_manifests(to_combine));
+        }
+        let new_manifest_list = ManifestList::from_manifests(&self.loc, optimized_manifest_list);
+        remove_file(&old_manifest_list.loc);
+        self.remove_old_manifest_lists(&old_manifest_list);
+        self.purge_old_manifest_list_data(&old_manifest_list);
+        Ok(new_manifest_list)
+    }
+
+    fn remove_old_manifest_lists(&self, manifest_list: &ManifestList) -> io::Result<()> {
+        for old_manifest_list in manifest_list.get_prev_manifest_list_paths().iter() {
+            remove_file(&old_manifest_list)?;
+        }
         Ok(())
+    }
+
+    fn purge_old_manifest_list_data(&self, manifest_list: &ManifestList) -> io::Result<()> {
+        for manifest in manifest_list.manifests.iter() {
+            remove_file(&manifest.loc)?;
+        }
+        Ok(())
+    }
+
+    fn combine_manifests(&self, to_combine: &Vec<Manifest>) -> Manifest {
+        let mut combined_points = Vec::new();
+        let mut id_ranges = Vec::new();
+        for manifest in to_combine.iter() {
+            combined_points.extend(self.load_points_from_manifest(manifest));
+            id_ranges.extend(manifest.id_ranges.clone());
+        }
+        let path = self.loc.join("data-layer").join(get_rand_file_name());
+        let _written_bytes = self.save_serialized_payloads(&path, &combined_points);
+        Manifest::with_ranges(&path, id_ranges)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::remove_dir_all, path::Path, u64};
+    use std::{
+        fs::{read_dir, remove_dir_all},
+        path::Path,
+        u64,
+    };
 
     use moka::sync::Cache;
     use points::point::Point;
+    use rand::Rng;
     use vectors::{VecBase, gen_rand_vecs};
 
     use crate::{
@@ -436,9 +479,10 @@ mod tests {
         let path = "./get-points-big-test";
         let mut e = init_engine(path);
 
+        let nb_inserts = 8;
         let n = 2_usize.pow(12);
-        let points = gen_rand_points(n * 8);
-        for i in 0..8 {
+        let points = gen_rand_points(n * nb_inserts);
+        for i in 0..nb_inserts {
             let _ = e.insert(&points[(i * n)..((i * n) + n)]).unwrap();
         }
 
@@ -454,33 +498,94 @@ mod tests {
             assert_eq!(a.get_vals(), p.get_vals());
         }
 
-        // remove_dir_all(path).unwrap();
+        remove_dir_all(path).unwrap();
     }
 
-    // #[test]
-    // fn optimize() {
-    //     let path = "./optimize-test";
-    //     let mut e = init_engine(path);
+    #[test]
+    fn optimize() {
+        let path = "./optimize-test";
+        let mut e = init_engine(path);
 
-    //     let n = 16;
-    //     let points = gen_rand_points(n);
-    //     let _ = e.insert(&points[0..4]).unwrap();
-    //     let _ = e.insert(&points[4..8]).unwrap();
-    //     let _ = e.insert(&points[8..12]).unwrap();
-    //     let _ = e.insert(&points[12..n]).unwrap();
+        let nb_inserts = 4;
+        let n = DEFAULT_CACHE_CAPACITY as usize / 2;
+        let points = gen_rand_points(n * nb_inserts);
+        for i in 0..nb_inserts {
+            let _ = e.insert(&points[(i * n)..((i * n) + n)]).unwrap();
+        }
 
-    //     assert_eq!(e.get_current_manifest_list().get_nb_points(), n as ID);
-    //     assert_eq!(e., n as ID);
+        assert_eq!(
+            e.get_current_manifest_list().get_nb_points(),
+            (n * nb_inserts) as ID
+        );
 
-    //     e.optimize();
+        for (idx, p) in points.iter().enumerate() {
+            let a = e.get_point(idx as ID).unwrap();
+            assert_eq!(idx, p.id as usize);
+            assert_eq!(a.id, p.id);
+            assert_eq!(a.get_vals(), p.get_vals());
+        }
 
-    //     for i in 0..n {
-    //         let a = e.get_point(i as ID).unwrap();
-    //         assert_eq!(a.id, i as u32);
-    //         assert_eq!(a.id, points[i].id);
-    //         assert_eq!(a.vector.get_vals(), points[i].get_vals());
-    //     }
+        assert_eq!(e.get_current_manifest_list().manifests.len(), nb_inserts);
+        assert_ne!(e.get_current_manifest_list().manifests.len(), 2);
+        e.optimize();
+        assert_ne!(e.get_current_manifest_list().manifests.len(), nb_inserts);
+        assert_eq!(e.get_current_manifest_list().manifests.len(), 2);
 
-    //     remove_dir_all(path).unwrap();
-    // }
+        for (idx, p) in points.iter().enumerate() {
+            let a = e.get_point(idx as ID).unwrap();
+            assert_eq!(idx, p.id as usize);
+            assert_eq!(a.id, p.id);
+            assert_eq!(a.get_vals(), p.get_vals());
+        }
+
+        remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn optimize_rand_additions() {
+        let path = "./optimize-rand-test";
+        let mut e = init_engine(path);
+
+        let mut rng = rand::thread_rng();
+        let n = DEFAULT_CACHE_CAPACITY as usize * 8;
+        let points = gen_rand_points(n);
+        let mut cursor = 0;
+        loop {
+            let jump = rng.gen_range(128..DEFAULT_CACHE_CAPACITY as usize / 2);
+            let to_insert = points.get(cursor..cursor + jump);
+            match to_insert {
+                Some(p) => {
+                    let _ = e.insert(p).unwrap();
+                }
+                None => {
+                    let p = &points[cursor..];
+                    let _ = e.insert(p).unwrap();
+                    break;
+                }
+            }
+            cursor += jump;
+            cursor = cursor.min(points.len() - 1);
+        }
+
+        for (idx, p) in points.iter().enumerate() {
+            let a = e.get_point(idx as ID).unwrap();
+            assert_eq!(idx, p.id as usize);
+            assert_eq!(a.id, p.id);
+            assert_eq!(a.get_vals(), p.get_vals());
+        }
+
+        let n = e.get_current_manifest_list().manifests.len();
+        assert!(n > 0);
+        e.optimize();
+        assert!(e.get_current_manifest_list().manifests.len() < n);
+
+        for (idx, p) in points.iter().enumerate() {
+            let a = e.get_point(idx as ID).unwrap();
+            assert_eq!(idx, p.id as usize);
+            assert_eq!(a.id, p.id);
+            assert_eq!(a.get_vals(), p.get_vals());
+        }
+
+        remove_dir_all(path).unwrap();
+    }
 }
