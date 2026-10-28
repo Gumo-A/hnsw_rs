@@ -7,6 +7,7 @@ edition = "2024"
 graph = {path = "../graph"}
 vectors = {path = "../vectors"}
 points = {path = "../points"}
+hnsw = {path = "../hnsw"}
 indicatif = "0.17.8"
 nohash-hasher = "0.2.0"
 rand = "0.8.5"

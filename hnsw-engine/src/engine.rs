@@ -9,20 +9,37 @@ use std::{
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use hnsw::template::inserter::Inserter;
 use itertools::Itertools;
 use moka::{policy::EvictionPolicy, sync::Cache};
 use points::point::{Point, VecType};
+use vectors::VecBase;
 
 use crate::{
-    ID, get_rand_file_name,
+    INT, get_rand_file_name,
     manifest::{Manifest, ManifestList},
 };
 
-const CACHE_SIZE_BYTES: u64 = 134217728; // 128MiB
+macro_rules! timeit {
+    ($f:expr) => {
+        let s = Instant::now();
+        $f;
+        let e = s.elapsed();
+        println!("Executed {} in {e:?}", stringify!($f));
+    };
+    (let $x:ident = $f:expr) => {
+        let s = Instant::now();
+        let $x = $f;
+        let e = s.elapsed();
+        println!("Executed {} in {e:?}", stringify!($f));
+    };
+}
+
+const CACHE_SIZE_BYTES: INT = 134217728; // 128MiB
 const LAYERS: [&str; 3] = ["metadata-layer", "data-layer", "index-layer"];
 
-fn get_cache_cap(dim: usize) -> u64 {
-    CACHE_SIZE_BYTES / (8 + dim) as u64
+fn get_cache_cap(dim: INT) -> INT {
+    CACHE_SIZE_BYTES / (8 + dim)
 }
 
 enum Error {
@@ -31,17 +48,17 @@ enum Error {
 
 pub struct Engine {
     loc: PathBuf,
-    cache: Cache<ID, Arc<Point>>,
+    cache: Cache<INT, Arc<Point>>,
     debug: bool,
-    cache_cap: u64,
-    dim: usize,
+    cache_cap: INT,
+    dim: INT,
 }
 
 impl Engine {
-    pub fn new(loc: PathBuf, dim: usize) -> io::Result<Self> {
+    pub fn new(loc: PathBuf, dim: INT) -> io::Result<Self> {
         let cap = get_cache_cap(dim);
         let cache = Cache::builder()
-            .max_capacity(cap)
+            .max_capacity(cap as u64)
             .eviction_policy(EvictionPolicy::lru())
             .build();
         let engine = Self {
@@ -55,7 +72,17 @@ impl Engine {
         Ok(engine)
     }
 
-    fn init_at_loc(loc: &PathBuf, dim: usize) -> io::Result<()> {
+    pub fn distance(&self, a: INT, b: INT) -> io::Result<f32> {
+        let point_a = self
+            .get_point(a)?
+            .expect("could not get point while computing distance");
+        let point_b = self
+            .get_point(b)?
+            .expect("could not get point while computing distance");
+        Ok(point_a.dist2other(&point_b))
+    }
+
+    fn init_at_loc(loc: &PathBuf, dim: INT) -> io::Result<()> {
         if loc.exists() {
             if loc.is_dir() {
                 Self::check_can_use_dir(&loc)?;
@@ -97,14 +124,14 @@ impl Engine {
         }
     }
 
-    fn check_or_create_dir_structure(loc: &PathBuf, dim: usize) -> io::Result<()> {
+    fn check_or_create_dir_structure(loc: &PathBuf, dim: INT) -> io::Result<()> {
         for layer in LAYERS {
             Self::try_create_dir(loc.join(layer))?;
         }
         Self::check_or_create_dim_file(loc.join("metadata-layer"), dim)
     }
 
-    fn check_or_create_dim_file(metadata_dir: PathBuf, dim: usize) -> io::Result<()> {
+    fn check_or_create_dim_file(metadata_dir: PathBuf, dim: INT) -> io::Result<()> {
         let dim_file = metadata_dir.join("dim.txt");
         match File::create_new(&dim_file) {
             Ok(mut f) => {
@@ -124,12 +151,12 @@ impl Engine {
             },
         }
     }
-    fn read_dim_file(path: &PathBuf) -> io::Result<usize> {
+    fn read_dim_file(path: &PathBuf) -> io::Result<INT> {
         match File::open(path) {
             Ok(mut f) => {
                 let mut dim_str = String::new();
                 f.read_to_string(&mut dim_str)?;
-                Ok(dim_str.parse::<usize>().unwrap())
+                Ok(dim_str.parse::<INT>().unwrap())
             }
             Err(e) => Err(e),
         }
@@ -172,20 +199,17 @@ impl Engine {
         }
     }
 
-    pub fn get_point(&mut self, id: ID) -> io::Result<Option<Arc<Point>>> {
-        let s = Instant::now();
+    pub fn get_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
         let result = if let Some(p) = self.cache.get(&id) {
             Some(p)
         } else {
             self.load_point(id)?
         };
-        let e = s.elapsed().as_micros();
-        println!("Got {id} in {e:?}");
         Ok(result)
     }
 
     /// Also caches points stored in the same data file
-    fn load_point(&mut self, id: ID) -> io::Result<Option<Arc<Point>>> {
+    fn load_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
         let manifest_list = self.get_current_manifest_list()?;
         if manifest_list.get_nb_points() <= id {
             Ok(None)
@@ -193,8 +217,8 @@ impl Engine {
             if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
                 let points = self.load_points_from_manifest(manifest);
                 for p in points {
-                    if !self.cache.contains_key(&(p.id as ID)) {
-                        self.cache.insert(p.id as ID, Arc::new(p));
+                    if !self.cache.contains_key(&(p.id as INT)) {
+                        self.cache.insert(p.id as INT, Arc::new(p));
                     }
                 }
                 Ok(self.cache.get(&id))
@@ -205,13 +229,13 @@ impl Engine {
     }
 
     pub fn insert(&self, payloads: &[Point]) -> io::Result<Manifest> {
-        if payloads.len() > self.cache_cap as usize {
+        if payloads.len() > self.cache_cap as INT {
             self.divide_and_insert(payloads)
         } else {
             self.write_lock();
             let mut manifest_list = self.get_current_manifest_list()?;
-            let manifest = self.add_payloads(&mut manifest_list, payloads);
-            // self.index_id_range(&manifest);
+            let manifest = self.add_payloads_to_store(&mut manifest_list, payloads);
+            self.add_payloads_to_index(&manifest);
             self.write_unlock();
             Ok(manifest)
         }
@@ -225,11 +249,8 @@ impl Engine {
         self.insert(p2)
     }
 
-    fn index_id_range(&self, _manifest: &Manifest) {
-        // payloads were added to the data layer
-        // their IDs are all IDs in the given range
-        // insert these IDs in the index
-        todo!("insert IDs in the index")
+    fn add_payloads_to_index(&self, manifest: &Manifest) {
+        Inserter::new().insert(index, point);
     }
 
     fn load_points_from_manifest(&self, manifest: &Manifest) -> Vec<Point> {
@@ -245,7 +266,19 @@ impl Engine {
         ManifestList::new(&self.loc)
     }
 
-    fn add_payloads(&self, manifest_list: &mut ManifestList, mut payloads: &[Point]) -> Manifest {
+    pub fn get_number_of_manifests(&self) -> io::Result<INT> {
+        Ok(self.get_current_manifest_list()?.manifests.len())
+    }
+
+    pub fn get_nb_points(&self) -> io::Result<INT> {
+        Ok(self.get_current_manifest_list()?.get_nb_points())
+    }
+
+    fn add_payloads_to_store(
+        &self,
+        manifest_list: &mut ManifestList,
+        mut payloads: &[Point],
+    ) -> Manifest {
         let new_manifest = self.save_payloads(manifest_list, &mut payloads);
         manifest_list.update(&new_manifest);
         new_manifest
@@ -253,13 +286,13 @@ impl Engine {
 
     fn save_payloads(&self, manifest_list: &ManifestList, payloads: &[Point]) -> Manifest {
         let first = manifest_list.get_nb_points();
-        let last = first + payloads.len() as ID - 1;
+        let last = first + payloads.len() as INT - 1;
         let path = self.loc.join("data-layer").join(get_rand_file_name());
         let _written_bytes = self.save_serialized_payloads(&path, payloads);
         Manifest::new(&path, first, last)
     }
 
-    fn save_serialized_payloads(&self, path: &PathBuf, payloads: &[Point]) -> usize {
+    fn save_serialized_payloads(&self, path: &PathBuf, payloads: &[Point]) -> INT {
         let mut file = match File::create_new(path) {
             Ok(f) => f,
             Err(e) => panic!("Could not create payload file at {path:?}: {e}"),
@@ -275,17 +308,8 @@ impl Engine {
         if self.debug {
             self.serialize_payloads_debug(payloads)
         } else {
-            // self.serialize_payloads_compressed(payloads)
             self.serialize_payloads_uncompressed(payloads)
         }
-    }
-
-    fn serialize_payloads_compressed(&self, payloads: &[Point]) -> Vec<u8> {
-        let p: Vec<&VecType> = payloads.iter().map(|p| &p.vector).collect();
-        let ser = rmp_serde::encode::to_vec(&p).expect("Could not serialize payload");
-        let mut buf = GzEncoder::new(vec![], Compression::default());
-        buf.write_all(&ser).unwrap();
-        buf.finish().unwrap()
     }
 
     fn serialize_payloads_uncompressed(&self, payloads: &[Point]) -> Vec<u8> {
@@ -298,24 +322,8 @@ impl Engine {
         if self.debug {
             self.deserialize_payloads_debug(bytes, manifest)
         } else {
-            // self.deserialize_payloads_compressed(bytes, manifest)
             self.deserialize_payloads_uncompressed(bytes, manifest)
         }
-    }
-
-    fn deserialize_payloads_compressed(&self, bytes: &Vec<u8>, manifest: &Manifest) -> Vec<Point> {
-        let mut bytes_uncompressed = vec![];
-        GzDecoder::new(&bytes[..])
-            .read_to_end(&mut bytes_uncompressed)
-            .expect("Could not decompress payload contents");
-        let vecs: Vec<VecType> =
-            rmp_serde::decode::from_slice(&bytes_uncompressed).expect("Could not decode payload");
-        let ids = manifest.ordered_ids();
-        let mut points = vec![];
-        for (v, id) in vecs.iter().zip_eq(ids) {
-            points.push(Point::with_vectype_and_id(v, id as u32));
-        }
-        points
     }
 
     fn deserialize_payloads_uncompressed(
@@ -325,10 +333,9 @@ impl Engine {
     ) -> Vec<Point> {
         let vecs: Vec<VecType> =
             rmp_serde::decode::from_slice(&bytes).expect("Could not decode payload");
-        let ids = manifest.ordered_ids();
         let mut points = vec![];
-        for (v, id) in vecs.iter().zip_eq(ids) {
-            points.push(Point::with_vectype_and_id(v, id as u32));
+        for (v, id) in vecs.iter().zip_eq(manifest.ordered_ids()) {
+            points.push(Point::with_vec_and_id(v, id));
         }
         points
     }
@@ -343,7 +350,7 @@ impl Engine {
         let ids = manifest.ids();
         let mut points = vec![];
         for (v, id) in vecs.iter().zip_eq(ids) {
-            points.push(Point::with_vectype_and_id(v, id as u32));
+            points.push(Point::with_vec_and_id(v, id));
         }
         points
     }
@@ -395,6 +402,7 @@ mod tests {
     use std::{
         fs::remove_dir_all,
         path::{Path, PathBuf},
+        time::Instant,
         u64,
     };
 
@@ -405,10 +413,9 @@ mod tests {
     };
     use vectors::{VecBase, gen_rand_vecs};
 
-    use crate::{ID, engine::Engine};
+    use crate::{INT, engine::Engine};
 
-    const N: u64 = 8;
-    const DIM: usize = 1024;
+    const DIM: INT = 1024;
     const IOMSG: &str = "IO error ocurred";
 
     fn remove_path_if_exists(path: &str) -> PathBuf {
@@ -424,7 +431,7 @@ mod tests {
         Engine::new(path, DIM).unwrap()
     }
 
-    fn init_engine_dim(path: &str, dim: usize, remove: bool) -> Result<Engine, std::io::Error> {
+    fn init_engine_dim(path: &str, dim: INT, remove: bool) -> Result<Engine, std::io::Error> {
         let path = if remove {
             remove_path_if_exists(path)
         } else {
@@ -433,11 +440,11 @@ mod tests {
         Engine::new(path, dim)
     }
 
-    fn gen_rand_points(n: usize) -> Vec<Point> {
+    fn gen_rand_points(n: INT) -> Vec<Point> {
         let vs = gen_rand_vecs(DIM, n);
         let mut points = vec![];
         for (idx, v) in vs.iter().enumerate() {
-            points.push(Point::with_level_and_id(v, 0, idx as u32));
+            points.push(Point::with_level_and_id(v, 0, idx));
         }
         points
     }
@@ -455,11 +462,12 @@ mod tests {
     fn add_payloads() {
         let path = "./add-payloads-test";
         let e = init_engine(path);
+        let n = 8;
         for _ in 0..4 {
-            let p = gen_rand_points(N as usize);
+            let p = gen_rand_points(n);
             let r = e.insert(&p);
             assert!(r.is_ok());
-            assert_eq!(r.unwrap().get_nb_points(), N);
+            assert_eq!(r.unwrap().get_nb_points(), n as INT);
         }
         remove_dir_all(path).unwrap();
     }
@@ -492,7 +500,7 @@ mod tests {
                 .get_point(i)
                 .expect(IOMSG)
                 .expect("The point was not found");
-            let b = points[i as usize].clone();
+            let b = points[i as INT].clone();
             assert_eq!(a.get_vals(), b.get_vals());
             assert_eq!(a.id, b.id);
             assert_eq!(a.level, b.level);
@@ -501,7 +509,7 @@ mod tests {
         assert!(e.get_point(8).expect(IOMSG).is_none());
         assert!(e.get_point(16).expect(IOMSG).is_none());
         assert!(e.get_point(1024).expect(IOMSG).is_none());
-        assert!(e.get_point(ID::MAX).expect(IOMSG).is_none());
+        assert!(e.get_point(INT::MAX).expect(IOMSG).is_none());
 
         remove_dir_all(path).unwrap();
     }
@@ -536,71 +544,61 @@ mod tests {
     }
 
     #[test]
-    /// Inserts 100 more than the cache cap
-    /// via random number of insertions until all
+    /// Inserts a number of points in the store
+    /// via a random number of insertions until all
     /// points are inserted. This creates many manifests
     /// and data files. After optimize() is called,
-    /// it should reduce the number of manifests to 2,
-    /// the number of manifest lists to 1
-    /// and data files to 2 (cache cap + the extra 100).
+    /// it should reduce the number of manifests
+    /// and the number of data files to 1
     fn optimize_rand_additions() {
         let path = "./optimize-rand-test";
         let mut e = init_engine(path);
 
         let mut rng = rand::thread_rng();
-        let n = e.cache_cap as usize + 100;
-        let points = gen_rand_points(n);
-        let mut cursor = 0;
-        loop {
-            let jump = rng.gen_range(n / 4..n / 2);
-            if cursor + jump >= points.len() {
-                e.insert(&points[cursor..]).unwrap();
-                break;
-            } else {
-                e.insert(&points[cursor..cursor + jump]).unwrap();
-            }
-            cursor += jump;
-        }
-
-        let sample: Vec<usize> = Uniform::new(0, points.len())
+        let n = 2_usize.pow(16);
+        timeit!(let points = gen_rand_points(n));
+        let sample: Vec<INT> = Uniform::new(0, points.len())
             .sample_iter(rng.clone())
             .take(1000)
             .collect();
+        let mut cursor = 0;
+        let mut insertions = 0;
+        let mut insert_loop = |e: &mut Engine| {
+            loop {
+                insertions += 1;
+                let jump = rng.gen_range(1..n);
+                if cursor + jump >= points.len() {
+                    e.insert(&points[cursor..]).unwrap();
+                    break;
+                } else {
+                    e.insert(&points[cursor..cursor + jump]).unwrap();
+                }
+                cursor += jump;
+            }
+        };
+        let mut check_sample = |e: &mut Engine| {
+            for id in sample.iter().copied() {
+                let p = points.get(id).unwrap();
+                assert_eq!(id, p.id as INT);
 
-        for id in sample.iter().copied() {
-            let p = points.get(id).unwrap();
-            assert_eq!(id, p.id as usize);
+                let a = e
+                    .get_point(id as INT)
+                    .expect(IOMSG)
+                    .expect("The point was not found");
 
-            let a = e
-                .get_point(id as ID)
-                .expect(IOMSG)
-                .expect("The point was not found");
+                assert_eq!(a.id, p.id);
+                assert_eq!(a.get_vals(), p.get_vals());
+            }
+        };
 
-            assert_eq!(a.id, p.id);
-            assert_eq!(a.get_vals(), p.get_vals());
-        }
+        timeit!(insert_loop(&mut e));
 
-        let n = e.get_current_manifest_list().expect(IOMSG).manifests.len();
-        assert!(n > 0);
-        e.optimize().unwrap();
-        assert_eq!(
-            e.get_current_manifest_list().expect(IOMSG).manifests.len(),
-            2
-        );
+        assert_eq!(e.get_number_of_manifests().expect(IOMSG), insertions);
+        timeit!(e.optimize().unwrap());
+        assert_eq!(e.get_number_of_manifests().expect(IOMSG), 1);
 
-        for id in sample.iter().copied() {
-            let p = points.get(id).unwrap();
-            assert_eq!(id, p.id as usize);
+        timeit!(check_sample(&mut e));
 
-            let a = e
-                .get_point(id as ID)
-                .expect(IOMSG)
-                .expect("The point was not found");
-
-            assert_eq!(a.id, p.id);
-            assert_eq!(a.get_vals(), p.get_vals());
-        }
-
-        remove_dir_all(path).unwrap();
+        // remove_dir_all(path).unwrap();
     }
 }

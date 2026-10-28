@@ -1,4 +1,4 @@
-pub type NodeID = u32;
+pub type NodeID = usize;
 
 pub mod dist;
 pub mod errors;

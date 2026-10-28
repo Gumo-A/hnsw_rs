@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use vectors::{QuantVec, VecBase};
 
-type NodeID = u32;
+type NodeID = usize;
 pub type VecType = QuantVec;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +19,7 @@ impl Point {
         point
     }
 
-    pub fn with_vectype_and_id(vector: &VecType, id: NodeID) -> Point {
+    pub fn with_vec_and_id(vector: &VecType, id: NodeID) -> Point {
         Self {
             id,
             level: 0,

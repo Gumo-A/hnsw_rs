@@ -1,230 +1,126 @@
-use core::panic;
-use log::info;
+// use std::{collections::HashSet, sync::Arc, thread::Builder};
+
+use graph::dist::Dist;
+use graph::errors::GraphError;
+use graph::graph::Graph;
+use graph::NodeID;
+use log::{info, trace, warn};
 use nohash_hasher::IntSet;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashSet,
-    fs::{self, create_dir, create_dir_all, File},
-    io::{BufReader, Read, Write},
-    path::Path,
-    sync::Arc,
-    thread::Builder,
-};
+use points::point::Point;
 
-use crate::{helpers::get_progress_bar, params::Params, template::searcher::Searcher};
-use graph::{dist::Dist, graph::Graph, layers::Layers, NodeID};
-use points::{point::Point, points::Points, points_disk::PointsDisk};
-use rand::Rng;
-use vectors::VecBase;
-
-mod searcher;
+use crate::template::results::Results;
 
 mod results;
-use results::Results;
 
-mod inserter;
-use inserter::Inserter;
+// use crate::helpers::get_progress_bar;
 
-type PointsType = PointsDisk;
-type LayersType = Layers;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HNSW {
-    pub params: Params,
-    layers: LayersType,
-    points: PointsType,
-    path: String,
+/// The role of the Inserter is to encapsulate the insertion
+/// logic, exposing a single `insert` method for one point.
+pub struct Traverser {
+    results: Results,
 }
 
-impl HNSW {
-    pub fn iter_points(&self) -> impl Iterator<Item = Arc<Point>> + use<'_> {
-        self.points
-            .blocks
-            .iter()
-            .map(|b| {
-                b.get_read_lock()
-                    .as_ref()
-                    .unwrap()
-                    .collection
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<Arc<Point>>>()
-            })
-            .flatten()
-    }
-    pub fn save(&self, dir: &Path) {
-        if !dir.exists() {
-            match create_dir(dir) {
-                Ok(_) => (),
-                Err(e) => panic!("Could not create dir {dir:?}: {e}"),
-            }
-        }
-
-        self.save_part(dir, self.params.serialize(), "params");
-        self.save_part(dir, self.points.serialize(), "points");
-        self.save_layers(dir);
-    }
-
-    fn save_part(&self, dir: &Path, data: Vec<u8>, part: &str) {
-        File::create(dir.join(part))
-            .expect(format!("Could not create {part} file").as_str())
-            .write_all(&data)
-            .expect(format!("Could not write bytes to {part} file").as_str());
-    }
-
-    fn save_layers(&self, dir: &Path) {
-        let layers_dir = dir.join("layers");
-        if !layers_dir.exists() {
-            fs::create_dir(layers_dir.clone()).expect("Could not create layers dir");
-        }
-        for (idx, layer) in self.layers.iter_layers().enumerate() {
-            self.save_part(&layers_dir, layer.serialize(), format!("{idx}").as_str());
+impl Traverser {
+    pub fn new() -> Self {
+        Self {
+            results: Results::new(),
         }
     }
 
-    pub fn load(dir: &Path) -> Result<Self, String> {
-        if !dir.exists() {
-            return Err(format!("{dir:?} does not exist"));
+    pub fn insert(&mut self, index: &HNSW, point: &Point) {
+        self.build_insertion_results(index, point);
+        self.make_connections(index);
+    }
+
+    fn build_insertion_results(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
+        trace!("Begin insertion results");
+        if point.id == index.params.ep {
+            warn!("Tried to build insertion results for point {}, but it is the EP, not building results", point.id);
+            return Ok(());
         }
-
-        let points = match File::open(dir.join("points")) {
-            Ok(f) => {
-                let reader = BufReader::new(f);
-                PointsType::deserialize(reader.bytes().map(|b| b.unwrap()).collect())
-            }
-            Err(e) => return Err(format!("Problem reading points file: {e}")),
-        };
-        let params = match File::open(dir.join("params")) {
-            Ok(f) => {
-                let reader = BufReader::new(f);
-                Params::deserialize(reader.bytes().map(|b| b.unwrap()).collect())
-            }
-            Err(e) => return Err(format!("Problem reading params file: {e}")),
-        };
-
-        let mut layers = LayersType::new(params.m);
-        let layers_dir = dir.join("layers");
-        match layers_dir.read_dir() {
-            Ok(dir) => {
-                let mut layer_files = Vec::new();
-                for layer_idx in dir {
-                    layer_files.push(layer_idx.unwrap());
-                }
-                layer_files.sort_by_key(|x| {
-                    x.file_name()
-                        .into_string()
-                        .unwrap()
-                        .parse::<usize>()
-                        .unwrap()
-                });
-
-                for layer_file in layer_files {
-                    let layer = match File::open(layer_file.path()) {
-                        Ok(f) => {
-                            let reader = BufReader::new(f);
-                            Graph::deserialize(reader.bytes().map(|b| b.unwrap()).collect())
-                        }
-                        Err(e) => return Err(format!("Problem reading params file: {e}")),
-                    };
-                    assert_eq!(layers.len(), layer.level as usize);
-                    layers.add_layer(layer);
-                }
-            }
-            Err(e) => panic!("There was a problem reading layers: {e}"),
-        }
-
-        Ok(HNSW {
-            points,
-            layers,
-            params,
-            path: dir.to_string_lossy().to_string(),
-        })
-    }
-
-    pub fn new(path: &str, m: usize, ef_cons: Option<usize>, dim: usize) -> Self {
-        let params = if ef_cons.is_some() {
-            Params::from_m_efcons(m, ef_cons.unwrap(), dim)
-        } else {
-            Params::from_m(m, dim)
-        };
-        let path = Path::new(path);
-        if path.exists() {
-            panic!("Cannot create HNSW index at {path:?}, it already exists")
-        }
-        create_dir_all(&path).unwrap();
-        HNSW {
-            points: PointsType::new(Vec::new(), params.ml, 0, &path.join("points")),
-            layers: LayersType::new(m),
-            params,
-            path: path.to_string_lossy().to_string(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.points.len()
-    }
-
-    pub fn distance(&self, a: NodeID, b: NodeID) -> Option<f32> {
-        self.points.distance(a, b)
-    }
-
-    pub fn get_point(&self, point_id: NodeID) -> Option<Arc<Point>> {
-        self.points.get_point(point_id)
-    }
-
-    pub fn insert_vec(&mut self, vector: &Vec<f32>) -> Result<NodeID, String> {
-        info!("Adding new vector to the index");
-        let point_id = self.store_points(vec![vector.clone()])[0];
-        info!("Stored the vector with ID {point_id}");
-        let point = self.get_point(point_id).unwrap();
-        self.layers.add_node(point.id, point.level as usize);
-        self.insert(point_id, &mut Inserter::new())?;
-        Ok(point_id)
-    }
-
-    /// Determines and sets the neighbors of a point that has been stored in
-    /// the layered graph and in the points field
-    fn insert(&self, point_id: NodeID, inserter: &mut Inserter) -> Result<(), String> {
-        info!("Inserting node {point_id}");
-        let point = self
-            .points
-            .get_point(point_id)
-            .expect(format!("Point {point_id} not found in collection.").as_str());
-
-        inserter.build_insertion_results(&self, &point)?;
-        self.make_connections(inserter.get_results())?;
-        info!("Finished inserting node {point_id}");
+        self.setup_insert(index, point);
+        self.traverse_layers_above(index, point)?;
+        self.traverse_layers_below(index, point)?;
+        trace!("Finish insertion results");
         Ok(())
     }
 
-    pub fn get_layer(&self, layer_nb: usize) -> &Graph {
-        self.layers.get_layer(layer_nb)
+    fn setup_insert(&mut self, index: &HNSW, point: &Point) {
+        trace!("Setting up insertion");
+        self.results.clear_all();
+
+        let dist2ep = index
+            .distance(index.params.ep, point.id)
+            .expect("Could not compute distance between EP and point to insert.");
+        trace!(
+            "Setting up insertion. Distance between {0} and EP {1} is {dist2ep}",
+            point.id,
+            index.params.ep
+        );
+
+        self.results
+            .insert_selected(Dist::new(index.params.ep, dist2ep));
     }
 
-    fn make_connections(&self, results: &Results) -> Result<(), String> {
+    fn traverse_layers_above(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
+        trace!("Traversing Layers above query point");
+        let layers_len = index.layers.len();
+
+        for layer_nb in (point.level as usize + 1..layers_len).rev() {
+            let layer = index.get_layer(layer_nb);
+            trace!(
+                "Looking for nearest neighbors for point {0} in layer {layer_nb}",
+                point.id,
+            );
+            trace!("The layer has {} nodes", layer.nb_nodes());
+            trace!(
+                "The entry point to the layer is {:?}",
+                self.results.selected
+            );
+            self.search_layer(layer, point, &index, 1)?;
+        }
+        Ok(())
+    }
+
+    fn traverse_layers_below(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
+        trace!("Traversing Layers below or equal to query point");
+        let bound = (point.level as usize).min(index.layers.len() - 1);
+        for layer_nb in (0..=bound).rev() {
+            let layer = index.get_layer(layer_nb);
+            trace!(
+                "Looking for nearest neighbors for point {0} in layer {layer_nb}",
+                point.id,
+            );
+            trace!("The layer has {} nodes", layer.nb_nodes());
+            trace!(
+                "The entry points to the layer are {:?}",
+                self.results.selected
+            );
+            self.search_layer(layer, point, &index, index.params.ef_cons)?;
+            // self.select_simple(&mut self.results, index.params.m);
+            self.select_heuristic(layer, point, &index.points, index.params.m, true, true)?;
+            self.results.save_layer_results(layer_nb, point.id);
+        }
+        Ok(())
+    }
+
+    fn make_connections(&self, index: &HNSW) -> Result<(), String> {
         info!("Making connections using results");
-        for (layer_nb, node_data) in results.insertion_results.iter() {
-            let layer = self.get_layer(*layer_nb);
+        for (layer_nb, node_data) in self.results.insertion_results.iter() {
+            let layer = index.get_layer(*layer_nb);
             for (node, neighbors) in node_data.iter() {
                 layer
                     .add_neighbors(*node, neighbors.iter().copied())
                     .unwrap();
                 for n in neighbors {
                     if layer.degree(*n).unwrap() > layer.m {
-                        let query = self.get_point(*n).unwrap();
+                        let query = index.get_point(*n).unwrap();
                         let neighs = layer.neighbors(*n).unwrap();
                         let candidate_dists = neighs.iter().copied().map(|id| {
-                            let point = self.get_point(id).unwrap();
+                            let point = index.get_point(id).unwrap();
                             Dist::new(id, point.dist2other(&query))
                         });
-                        // Deadlocks:
-                        // let neighs = layer.neighbors_lock(*n).unwrap();
-                        // let neighs_locked = neighs.lock().unwrap();
-                        // let candidate_dists = neighs_locked.iter().copied().map(|id| {
-                        //     let point = self.get_point(id).unwrap();
-                        //     Dist::new(id, point.distance(query))
-                        // });
-                        let new = select_simple(candidate_dists, layer.m);
+                        let new = Self::select_simple(candidate_dists, layer.m);
                         layer.replace_neighbors(*n, new.iter().copied()).unwrap();
                     }
                 }
@@ -234,53 +130,151 @@ impl HNSW {
         Ok(())
     }
 
-    fn check_points_dim(&self, dim: usize) {
-        if dim != self.params.dim {
-            panic!(
-                "The current index dimension is {0}, but tried inserting points of dimension {dim}",
-                self.params.dim
-            )
-        }
+    fn select_simple<I>(candidate_dists: I, m: usize) -> IntSet<NodeID>
+    where
+        I: Iterator<Item = Dist>,
+    {
+        let mut cands = Vec::from_iter(candidate_dists);
+        cands.sort();
+        IntSet::from_iter(cands.iter().take(m).map(|dist| dist.id))
     }
 
-    /// Stores the points in the internal `points` field
-    /// and adds them to the index's layers.
-    ///
-    /// This is only the storing part, no indexing can
-    /// be done on these points after this operation,
-    fn store_points(&mut self, vectors: Vec<Vec<f32>>) -> Vec<NodeID> {
-        let new_points_len = vectors.len();
-        if new_points_len == 0 {
-            return vec![];
+    pub fn search_layer(
+        &mut self,
+        layer: &Graph,
+        point: &Point,
+        index: &HNSW,
+        ef: usize,
+    ) -> Result<(), String> {
+        trace!("Searching Layer");
+        self.results.extend_candidates_with_selected();
+        self.results.extend_visited_with_selected();
+
+        while !self.results.candidates.is_empty() {
+            trace!("Begin loop");
+            let cand_dist = self.results.candidates.pop_first().unwrap();
+            let furthest2q_dist = self.results.selected.last().unwrap();
+            trace!("Best candidate: {cand_dist:?}");
+            trace!("Worst selected: {furthest2q_dist:?}");
+            if cand_dist > *furthest2q_dist {
+                trace!("Best candidate is further away than worst selected, breaking from loop");
+                break;
+            }
+            let cand_neighbors_locked = match layer.neighbors_lock(cand_dist.id) {
+                Ok(neighs) => neighs,
+                Err(e) => match e {
+                    GraphError::NodeNotInGraph(n) => {
+                        return Err(format!("Error in search_layer: {n} not in Graph"))
+                    }
+                    _ => panic!("Error in search_layer: got an unexpected error"),
+                },
+            };
+            let cand_neighbors = cand_neighbors_locked.lock().unwrap();
+            trace!("{0} has {1} neighbors", cand_dist.id, cand_neighbors.len());
+
+            trace!(
+                "Getting distances from query {0} to {1}'s neighbors",
+                point.id,
+                cand_dist.id
+            );
+            let q2cand_neighbors_dists: Vec<Dist> = cand_neighbors
+                .iter()
+                .filter(|node| self.results.insert_visited(**node))
+                .map(|node| {
+                    let dist = index
+                        .get_point(*node)
+                        .expect(format!("Could get point {node}").as_str())
+                        .dist2other(point);
+                    Dist::new(*node, dist)
+                })
+                .collect();
+            trace!("Selecting among the best of the candidate's neighbors");
+            for n2q_dist in q2cand_neighbors_dists {
+                let f2q_dist = self.results.selected.last().unwrap();
+
+                if self.results.selected.len() < ef as usize {
+                    trace!("Need to fill selected struct, inserting {n2q_dist:?}");
+                    self.results.insert_selected(n2q_dist);
+                    self.results.insert_candidate(n2q_dist);
+                    continue;
+                }
+
+                if n2q_dist < *f2q_dist {
+                    trace!("Candidate's neighbor {n2q_dist:?} is better than worst selected {f2q_dist:?}, inserting it");
+                    self.results.insert_selected(n2q_dist);
+                    self.results.insert_candidate(n2q_dist);
+
+                    if self.results.selected.len() > ef as usize {
+                        let removed = self.results.selected.pop_last().unwrap();
+                        trace!("Selected was too full, removed {removed:?}");
+                    }
+                }
+            }
         }
-        self.check_points_dim(vectors[0].len()); // assuming they all have the same dim
-        info!(
-            "Storing {} points, EP is {}",
-            new_points_len, self.params.ep
+        trace!(
+            "Finished traversing the Layer. Selected: {:?}",
+            self.results.selected
         );
-        println!("Storing points");
-        let mut ids = Vec::new();
-        for v in vectors.iter() {
-            let point_id = self.points.push(Point::new(v));
-            let level = self.points.get_point(point_id).unwrap().level;
-            self.layers.add_node(point_id, level as usize);
-            ids.push(point_id);
-        }
-        println!("Stored points");
-
-        let max_layer_nb = self.layers.len() - 1;
-        let new_ep = self.get_layer(max_layer_nb).iter_nodes().next().unwrap();
-        // TODO: if index already had points and we insert more,
-        // one of the new points could have a higher level than the
-        // current max. So it will become the new EP, and therefore
-        // needs to be connected in all the layers.
-        // self.insert(new_ep, &mut Inserter::new()).unwrap();
-        self.params.ep = new_ep;
-        info!("Stored {new_points_len} points, the new EP is {new_ep}");
-        ids
+        self.results.clear_candidates();
+        self.results.clear_visited();
+        Ok(())
     }
 
-    pub fn ann_by_vector(
+    pub fn select_simple(&self, results: &mut Results, m: usize) {
+        results.select_simple(m);
+    }
+
+    pub fn select_heuristic(
+        &mut self,
+        layer: &Graph,
+        point: &Point,
+        points: &HNSW,
+        m: usize,
+        extend_cands: bool,
+        keep_pruned: bool,
+    ) -> Result<(), String> {
+        trace!(
+            "Begin select_heuristic, selected is {:?}",
+            self.results.selected
+        );
+        self.results.select_setup();
+        if extend_cands {
+            self.results
+                .extend_candidates_with_neighbors(point, points, layer)?;
+        }
+
+        let node_e = self.results.candidates.pop_first().unwrap();
+        self.results.insert_selected(node_e);
+
+        while (!self.results.candidates.is_empty()) & (self.results.selected.len() < m as usize) {
+            let node_e = self.results.candidates.pop_first().unwrap();
+            let e_point = points.get_point(node_e.id).unwrap();
+
+            let nearest_selected = self.results.get_nearest_from_selected(&e_point, points);
+
+            if node_e < nearest_selected {
+                self.results.insert_selected(node_e);
+            } else if keep_pruned {
+                self.results.insert_visited_h(node_e);
+            }
+        }
+
+        if keep_pruned {
+            while (!self.results.visited_h.is_empty()) & (self.results.selected.len() < m as usize)
+            {
+                let node_e = self.results.visited_h.pop_first().unwrap();
+                self.results.insert_selected(node_e);
+            }
+        }
+
+        trace!(
+            "Finished select_heuristic, selected is {:?}",
+            self.results.selected
+        );
+        Ok(())
+    }
+
+    pub fn ann_by_vec(
         &self,
         vector: &Vec<f32>,
         n: usize,
@@ -288,21 +282,21 @@ impl HNSW {
     ) -> Result<Vec<NodeID>, String> {
         info!("Start ANN search");
         let point = Point::new(vector);
-        let mut results = Results::new();
-        let searcher = Searcher::new();
-        results.insert_selected(Dist::new(
+        self.clear_results();
+        self.results.insert_selected(Dist::new(
             self.params.ep,
             self.points.distance2point(&point, self.params.ep).unwrap(),
         ));
         let nb_layers = self.layers.len();
 
         for layer_nb in (1..nb_layers).rev() {
-            searcher.search_layer(&mut results, self.get_layer(layer_nb), &point, self, 1)?;
+            self.search_layer(self.get_layer(layer_nb), &point, self, 1)?;
         }
 
-        searcher.search_layer(&mut results, &self.get_layer(0), &point, &self, ef)?;
+        self.search_layer(&self.get_layer(0), &point, &self, ef)?;
 
-        let anns: Vec<NodeID> = results
+        let anns: Vec<NodeID> = self
+            .results
             .get_top_selected(n)
             .iter()
             .map(|dist| dist.id)
@@ -311,426 +305,61 @@ impl HNSW {
         Ok(anns)
     }
 
-    fn iter_layers(&self) -> impl Iterator<Item = &Graph> {
-        self.layers.iter_layers()
-    }
+    // pub fn insert_bulk(
+    //     mut self,
+    //     vectors: Vec<Vec<f32>>,
+    //     nb_threads: usize,
+    //     verbose: bool,
+    // ) -> Result<HNSW, String> {
+    //     info!("inserting {0} vectors to index in bulk", vectors.len());
+    //     let stored_ids: HashSet<NodeID> =
+    //         HashSet::from_iter(self.store_points(vectors).iter().cloned());
 
-    pub fn assert_param_compliance(&self) {
-        let mut is_ok = true;
-        for (layer_nb, layer) in self.iter_layers().enumerate() {
-            let max_degree = if layer_nb > 0 {
-                self.params.mmax
-            } else {
-                self.params.mmax0
-            };
-            for (node, neighbors) in layer.nodes.iter() {
-                // I allow degrees to exceed the limit by one,
-                // because I am too lazy to change the current methods.
-                if neighbors.lock().unwrap().len() > ((max_degree as f32) * 1.1).ceil() as usize {
-                    is_ok = false;
-                    println!(
-                        "layer {layer_nb}, {node} degree = {0}, limit = {1}",
-                        neighbors.lock().unwrap().len(),
-                        max_degree
-                    );
-                }
+    //     let bar = get_progress_bar("Building HNSW index".to_string(), stored_ids.len(), verbose);
+    //     let bar_arc = Arc::new(bar);
 
-                if (neighbors.lock().unwrap().is_empty()) & (layer.nb_nodes() > 1) {
-                    is_ok = false;
-                    println!("layer {layer_nb}, {node} degree = 0",);
-                }
-            }
-        }
-        if is_ok {
-            println!("Index complies with params.")
-        }
-    }
+    //     let index_arc = Arc::new(self);
 
-    pub fn print_index(&self) {
-        println!("m = {}", self.params.m);
-        println!("mmax = {}", self.params.mmax);
-        println!("mmax0 = {}", self.params.mmax0);
-        println!("ml = {}", self.params.ml);
-        println!("ef_cons = {}", self.params.ef_cons);
-        println!("Nb. layers = {}", self.layers.len());
-        println!("Nb. of points = {}", self.points.len());
-        for (idx, layer) in self.iter_layers().enumerate() {
-            println!("NB. nodes in layer {idx}: {}", layer.nb_nodes());
-        }
-        println!("ep: {:?}", self.params.ep);
-    }
-}
+    //     for layer_nb in (0..index_arc.layers.len()).rev() {
+    //         let layer = index_arc.layers.get_layer(layer_nb);
+    //         info!("Connecting nodes in layer {layer_nb}, using {nb_threads} threads",);
+    //         let chunks = ((layer.nb_nodes() as f64) / (nb_threads as f64)).ceil() as usize;
+    //         let mut ids: Vec<Vec<NodeID>> = layer
+    //             .iter_nodes()
+    //             .filter(|id| {
+    //                 stored_ids.contains(id)
+    //                     & (index_arc.points.get_point(*id).unwrap().level == layer_nb as u8)
+    //             })
+    //             .collect::<Vec<NodeID>>()
+    //             .chunks(chunks)
+    //             .map(|chunk| Vec::from(chunk))
+    //             .collect();
 
-impl HNSW {
-    pub fn insert_bulk(
-        mut self,
-        vectors: Vec<Vec<f32>>,
-        nb_threads: usize,
-        verbose: bool,
-    ) -> Result<HNSW, String> {
-        info!("inserting {0} vectors to index in bulk", vectors.len());
-        let stored_ids: HashSet<NodeID> =
-            HashSet::from_iter(self.store_points(vectors).iter().cloned());
+    //         let mut handlers = Vec::new();
+    //         let mut idx = 0;
+    //         while let Some(ids_split) = ids.pop() {
+    //             info!("Sending {} node IDs to thread {idx}", ids_split.len());
+    //             let index_copy = Arc::clone(&index_arc);
+    //             let bar_ref = bar_arc.clone();
+    //             let thread = Builder::new()
+    //                 .name(format!("worker {idx}"))
+    //                 .spawn(move || {
+    //                     let mut inserter = Inserter::new();
+    //                     for id in ids_split.iter() {
+    //                         index_copy.insert(*id, &mut inserter).unwrap();
+    //                         bar_ref.inc(1);
+    //                     }
+    //                 })
+    //                 .expect("Could not spawn a thread");
+    //             handlers.push(thread);
+    //             idx += 1;
+    //         }
+    //         for handle in handlers {
+    //             handle.join().unwrap();
+    //         }
+    //     }
 
-        let bar = get_progress_bar("Building HNSW index".to_string(), stored_ids.len(), verbose);
-        let bar_arc = Arc::new(bar);
-
-        let index_arc = Arc::new(self);
-
-        for layer_nb in (0..index_arc.layers.len()).rev() {
-            let layer = index_arc.layers.get_layer(layer_nb);
-            info!("Connecting nodes in layer {layer_nb}, using {nb_threads} threads",);
-            let chunks = ((layer.nb_nodes() as f64) / (nb_threads as f64)).ceil() as usize;
-            let mut ids: Vec<Vec<NodeID>> = layer
-                .iter_nodes()
-                .filter(|id| {
-                    stored_ids.contains(id)
-                        & (index_arc.points.get_point(*id).unwrap().level == layer_nb as u8)
-                })
-                .collect::<Vec<NodeID>>()
-                .chunks(chunks)
-                .map(|chunk| Vec::from(chunk))
-                .collect();
-
-            let mut handlers = Vec::new();
-            let mut idx = 0;
-            while let Some(ids_split) = ids.pop() {
-                info!("Sending {} node IDs to thread {idx}", ids_split.len());
-                let index_copy = Arc::clone(&index_arc);
-                let bar_ref = bar_arc.clone();
-                let thread = Builder::new()
-                    .name(format!("worker {idx}"))
-                    .spawn(move || {
-                        let mut inserter = Inserter::new();
-                        for id in ids_split.iter() {
-                            index_copy.insert(*id, &mut inserter).unwrap();
-                            bar_ref.inc(1);
-                        }
-                    })
-                    .expect("Could not spawn a thread");
-                handlers.push(thread);
-                idx += 1;
-            }
-            for handle in handlers {
-                handle.join().unwrap();
-            }
-        }
-
-        let index = Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
-        Ok(index)
-    }
-}
-
-#[cfg(test)]
-mod test {
-
-    use std::{
-        collections::{BTreeMap, HashSet},
-        fs::File,
-        path::Path,
-    };
-
-    use crate::{
-        helpers::glove::load_glove_array,
-        params::Params,
-        template::{make_rand_vectors, PointsType, HNSW},
-    };
-    use graph::{dist::Dist, graph::Graph, NodeID};
-    use itertools::Itertools;
-    use points::{point::Point, points::Points};
-    use rand::{thread_rng, Rng};
-    use repo_path::repo_path;
-    use vectors::{serializer::Serializer, VecBase};
-
-    const DIM: usize = 128;
-    const N: usize = 100;
-    const M: usize = 12;
-
-    fn init_logs() {
-        let _ = env_logger::builder().is_test(true).try_init();
-    }
-
-    fn init_index(dim: usize) -> HNSW {
-        let tmp_dir = std::env::temp_dir().join("hnsw_tests");
-        let rand = thread_rng().gen::<usize>();
-        HNSW::new(
-            &tmp_dir.join(format!("{rand}")).to_str().unwrap(),
-            M,
-            None,
-            dim,
-        )
-    }
-
-    fn assert_eq_vecs(a: &Vec<f32>, b: &Vec<f32>) {
-        let dist = Point::new(a).dist2other(&Point::new(b));
-        assert!(dist == 0.0);
-    }
-
-    #[test]
-    fn hnsw_init() {
-        let _index: HNSW = init_index(DIM);
-    }
-
-    #[test]
-    fn hnsw_build() {
-        init_logs();
-        let vectors = make_rand_vectors(N, DIM);
-        let index: HNSW = init_index(DIM);
-        let index = index.insert_bulk(vectors.clone(), 1, false).unwrap();
-        assert_eq!(index.len(), N);
-        assert_eq_vecs(&index.get_point(0).unwrap().get_vals(), &vectors[0]);
-        assert_eq_vecs(
-            &index.get_point(N as NodeID - 1).unwrap().get_vals(),
-            &vectors[N - 1],
-        );
-    }
-
-    #[test]
-    fn hnsw_build_multi_block_offload_load() {
-        init_logs();
-        let n = 8_000;
-        let vectors = make_rand_vectors(n, DIM);
-        let index: HNSW = init_index(DIM);
-        let mut index = index.insert_bulk(vectors.clone(), 8, false).unwrap();
-        assert_eq!(index.len(), n);
-        assert_eq_vecs(&index.get_point(0).unwrap().get_vals(), &vectors[0]);
-        assert_eq_vecs(
-            &index.get_point(n as NodeID - 1).unwrap().get_vals(),
-            &vectors[n - 1],
-        );
-        index.points.offload_all();
-        assert_eq!(index.len(), n);
-        assert_eq_vecs(&index.get_point(0).unwrap().get_vals(), &vectors[0]);
-        assert_eq_vecs(
-            &index.get_point(n as NodeID - 1).unwrap().get_vals(),
-            &vectors[n - 1],
-        );
-        assert!(index.distance(0, 12) >= Some(0.0));
-    }
-
-    #[test]
-    fn hnsw_insert_one_after_bulk_insert() {
-        init_logs();
-        let vectors = make_rand_vectors(N, DIM);
-        let index: HNSW = init_index(DIM);
-        let mut index = index.insert_bulk(vectors, 1, false).unwrap();
-
-        assert_eq!(index.len(), N);
-
-        let vector = make_rand_vectors(1, DIM)[0].clone();
-        index.insert_vec(&vector).unwrap();
-
-        assert_eq!(index.len(), N + 1);
-    }
-
-    #[test]
-    fn hnsw_subsequent_bulk_inserts() {
-        init_logs();
-        let index: HNSW = init_index(DIM);
-        let vectors = make_rand_vectors(N, DIM);
-        let index = index.insert_bulk(vectors, 1, false).unwrap();
-
-        assert_eq!(index.len(), N);
-
-        let vectors = make_rand_vectors(N, DIM);
-        let index = index.insert_bulk(vectors, 1, false).unwrap();
-
-        assert_eq!(index.len(), N * 2);
-    }
-
-    #[test]
-    fn hnsw_subsequent_bulk_inserts_multithread() {
-        init_logs();
-        let index: HNSW = init_index(DIM);
-        let vectors = make_rand_vectors(N, DIM);
-        let index = index.insert_bulk(vectors, 4, false).unwrap();
-
-        assert_eq!(index.len(), N);
-
-        let vectors = make_rand_vectors(N, DIM);
-        let index = index.insert_bulk(vectors, 4, false).unwrap();
-
-        assert_eq!(index.len(), N * 2);
-    }
-
-    #[test]
-    #[should_panic]
-    fn can_not_add_different_dim() {
-        init_logs();
-        let index = init_index(DIM);
-
-        // Ok
-        let vectors = make_rand_vectors(10, DIM);
-        let index = index.insert_bulk(vectors, 1, false).unwrap();
-
-        // Should panic
-        let vectors = make_rand_vectors(10, 512);
-        let _index = index.insert_bulk(vectors, 1, false).unwrap();
-    }
-
-    fn get_glove_data() -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
-        let file = File::open(repo_path!("test-data/store.txt").to_str().unwrap()).unwrap();
-        let (_, stored) = load_glove_array(0, file, false).expect("Could not load store vectors");
-        let file = File::open(repo_path!("test-data/queries.txt").to_str().unwrap()).unwrap();
-        let (_, queries) = load_glove_array(0, file, false).expect("Could not load query vectors");
-        return (stored, queries);
-    }
-
-    fn get_actual_nn(queries: &Vec<Vec<f32>>, points: &PointsType) -> Vec<Vec<NodeID>> {
-        let mut queries_nn: Vec<Vec<NodeID>> = Vec::new();
-        for query in queries.iter() {
-            let query_point = Point::new(query);
-            let query_true_nn = (0..points.len() as NodeID)
-                .map(|idx| Dist::new(idx, points.distance2point(&query_point, idx).unwrap()))
-                .sorted()
-                .map(|dist| dist.id)
-                .take(10)
-                .collect();
-            queries_nn.push(query_true_nn);
-        }
-        queries_nn
-    }
-
-    #[test]
-    fn hnsw_glove_accuracy() {
-        init_logs();
-        let (stored, queries) = get_glove_data();
-        let index = init_index(queries[0].len());
-        let index = index.insert_bulk(stored.clone(), 1, false).unwrap();
-
-        let queries_nn = get_actual_nn(&queries, &index.points);
-
-        let mut total_hits = 0;
-        for (idx, query) in queries.iter().enumerate() {
-            let query_ann = index.ann_by_vector(query, 10, 100).unwrap();
-            let query_ann: HashSet<NodeID> = HashSet::from_iter(query_ann.iter().copied());
-
-            let query_true_nn = HashSet::from_iter(queries_nn.get(idx).unwrap().iter().copied());
-            let hits = query_true_nn.intersection(&query_ann).count();
-            total_hits += hits;
-        }
-        let final_acc = total_hits as f32 / (queries.len() * 10) as f32;
-        println!("Final accuracy was {final_acc}");
-        assert!(final_acc >= 0.99);
-    }
-
-    #[test]
-    fn hnsw_glove_no_isolated_nodes() {
-        init_logs();
-        let (stored, queries) = get_glove_data();
-        let index = init_index(queries[0].len());
-        let index = index.insert_bulk(stored.clone(), 1, false).unwrap();
-        for layer in index.layers.iter_layers() {
-            let mut degree_count: BTreeMap<usize, Vec<NodeID>> = BTreeMap::new();
-            for node in layer.iter_nodes() {
-                if layer.nb_nodes() <= 1 {
-                    continue;
-                }
-                degree_count
-                    .entry(layer.degree(node).unwrap())
-                    .and_modify(|v| v.push(node))
-                    .or_insert(vec![node]);
-            }
-            println!(
-                "Layer {0}: M is {1}, nb. nodes is {2}",
-                layer.level,
-                layer.m,
-                layer.nb_nodes()
-            );
-            println!("Degrees:");
-            println!("{degree_count:?}");
-            let min_degree = *degree_count.first_key_value().unwrap().0;
-            assert!(min_degree > 0);
-        }
-    }
-
-    #[test]
-    fn hnsw_save_load() {
-        init_logs();
-        let vectors = make_rand_vectors(N, DIM);
-        let index = init_index(DIM);
-        let index = index.insert_bulk(vectors, 1, false).unwrap();
-
-        let index_path = Path::new("./serialization_test");
-        if index_path.exists() {
-            std::fs::remove_dir_all(index_path).unwrap();
-        }
-        index.save(index_path);
-        let loaded_index = HNSW::load(index_path).unwrap();
-
-        std::fs::remove_dir_all(index_path).unwrap();
-
-        assert_eq!(N, loaded_index.len());
-        for id in index.iter_points().map(|p| p.id) {
-            let index_neighs = index.layers.get_layer(0).neighbors(id).unwrap();
-            let loaded_neighs = loaded_index.layers.get_layer(0).neighbors(id).unwrap();
-
-            let index_diff_loaded: Vec<&NodeID> = index_neighs.difference(&loaded_neighs).collect();
-            assert_eq!(index_diff_loaded.len(), 0);
-
-            let loaded_diff_index: Vec<&NodeID> = loaded_neighs.difference(&index_neighs).collect();
-            assert_eq!(loaded_diff_index.len(), 0);
-
-            assert_eq!(
-                index.get_point(id).unwrap().get_vals(),
-                loaded_index.get_point(id).unwrap().get_vals()
-            );
-        }
-    }
-
-    #[test]
-    fn hnsw_serialize_parts() {
-        init_logs();
-        for _ in 1..100 {
-            let vectors = make_rand_vectors(N, DIM);
-            let index = init_index(DIM);
-            let index = index.insert_bulk(vectors, 1, false).unwrap();
-
-            let params = Params::deserialize(index.params.serialize());
-            assert_eq!(params.ep, index.params.ep);
-            assert_eq!(params.m, index.params.m);
-            assert_eq!(params.mmax, index.params.mmax);
-            assert_eq!(params.mmax0, index.params.mmax0);
-            assert_eq!(params.ml, index.params.ml);
-            assert_eq!(params.ef_cons, index.params.ef_cons);
-            assert_eq!(params.dim, index.params.dim);
-
-            let points = PointsType::deserialize(index.points.serialize());
-            for (p, s_p) in index.iter_points().zip(points.iter_points()) {
-                assert_eq!(p.id, s_p.id);
-                assert_eq!(p.level, s_p.level);
-                assert_eq!(p.dist2other(&s_p), 0.0);
-            }
-
-            for layer in index.layers.iter_layers() {
-                let layer_ser = Graph::deserialize(layer.serialize());
-                for node in layer.iter_nodes() {
-                    assert!(layer_ser.contains(node));
-                    assert_eq!(
-                        layer.neighbors(node).unwrap(),
-                        layer_ser.neighbors(node).unwrap()
-                    );
-                }
-            }
-        }
-    }
-}
-
-fn select_simple<I>(candidate_dists: I, m: usize) -> IntSet<NodeID>
-where
-    I: Iterator<Item = Dist>,
-{
-    let mut cands = Vec::from_iter(candidate_dists);
-    cands.sort();
-    IntSet::from_iter(cands.iter().take(m).map(|dist| dist.id))
-}
-
-pub fn make_rand_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
-    let mut rng = rand::thread_rng();
-    let mut vectors = Vec::new();
-    for _ in 0..n {
-        let vector = (0..dim).map(|_| rng.gen::<f32>()).collect();
-        vectors.push(vector)
-    }
-    vectors
+    //     let index = Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
+    //     Ok(index)
+    // }
 }

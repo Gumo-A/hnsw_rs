@@ -7,18 +7,18 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{FileName, ID, path_to_f_name_str};
+use crate::{FileName, INT, path_to_f_name_str};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub loc: PathBuf,
-    pub id_ranges: Vec<(ID, ID)>,
+    pub id_ranges: Vec<(INT, INT)>,
     #[serde(skip)]
-    pub ids: HashSet<ID>,
+    pub ids: HashSet<INT>,
 }
 
 impl Manifest {
-    pub fn new(loc: &PathBuf, first_id: ID, last_id: ID) -> Self {
+    pub fn new(loc: &PathBuf, first_id: INT, last_id: INT) -> Self {
         let manifest = Manifest {
             loc: loc.clone(),
             ids: HashSet::from_iter(first_id..=last_id),
@@ -27,7 +27,7 @@ impl Manifest {
         manifest
     }
 
-    pub fn with_ranges(loc: &PathBuf, id_ranges: Vec<(ID, ID)>) -> Self {
+    pub fn with_ranges(loc: &PathBuf, id_ranges: Vec<(INT, INT)>) -> Self {
         let mut manifest = Manifest {
             loc: loc.clone(),
             ids: HashSet::new(),
@@ -45,19 +45,19 @@ impl Manifest {
         );
     }
 
-    pub fn get_nb_points(&self) -> ID {
-        self.ids.len() as ID
+    pub fn get_nb_points(&self) -> INT {
+        self.ids.len() as INT
     }
 
-    pub fn contains_id(&self, id: ID) -> bool {
+    pub fn contains_id(&self, id: INT) -> bool {
         self.ids.contains(&id)
     }
 
-    pub fn ids(&self) -> impl Iterator<Item = ID> {
+    pub fn ids(&self) -> impl Iterator<Item = INT> {
         self.ids.iter().copied()
     }
 
-    pub fn ordered_ids(&self) -> impl Iterator<Item = ID> {
+    pub fn ordered_ids(&self) -> impl Iterator<Item = INT> {
         self.id_ranges
             .iter()
             .flat_map(|(first, last)| *first..=*last)
@@ -134,7 +134,7 @@ impl ManifestList {
         Self::parse_int_from_file_name(&path_to_f_name_str(&self.loc))
     }
 
-    pub fn get_manifest_from_id(&self, id: ID) -> Option<&Manifest> {
+    pub fn get_manifest_from_id(&self, id: INT) -> Option<&Manifest> {
         for manifest in self.manifests.iter() {
             if manifest.contains_id(id) {
                 return Some(manifest);
@@ -209,20 +209,20 @@ impl ManifestList {
         Ok(metadata_dir.join(next_file_name))
     }
 
-    pub fn get_nb_points(&self) -> ID {
+    pub fn get_nb_points(&self) -> INT {
         self.manifests
             .iter()
             .map(|manifest| manifest.get_nb_points())
             .sum()
     }
 
-    pub fn get_optimization_plan(&self, optimal_size: ID) -> Vec<Vec<Manifest>> {
+    pub fn get_optimization_plan(&self, optimal_size: INT) -> Vec<Vec<Manifest>> {
         let mut plan = Vec::new();
         let mut manifests = Vec::new();
         let mut to_combine: Vec<_> = self.manifests.iter().collect();
         to_combine.sort_by_key(|m| m.get_nb_points());
         for manif in to_combine.iter() {
-            let n: ID = manifests.iter().map(|m: &Manifest| m.get_nb_points()).sum();
+            let n: INT = manifests.iter().map(|m: &Manifest| m.get_nb_points()).sum();
             if (n <= optimal_size) & ((n + manif.get_nb_points()) > optimal_size) {
                 plan.push(manifests.clone());
                 manifests.clear();
