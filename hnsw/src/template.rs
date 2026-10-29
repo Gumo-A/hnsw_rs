@@ -1,5 +1,7 @@
 // use std::{collections::HashSet, sync::Arc, thread::Builder};
 
+use std::{io, sync::Arc};
+
 use graph::dist::Dist;
 use graph::errors::GraphError;
 use graph::graph::Graph;
@@ -7,6 +9,7 @@ use graph::NodeID;
 use log::{info, trace, warn};
 use nohash_hasher::IntSet;
 use points::point::Point;
+use vectors::VecBase;
 
 use crate::template::results::Results;
 
@@ -14,8 +17,22 @@ mod results;
 
 // use crate::helpers::get_progress_bar;
 
-/// The role of the Inserter is to encapsulate the insertion
-/// logic, exposing a single `insert` method for one point.
+pub type INT = usize;
+
+trait Index {
+    fn distance(&mut self, a: INT, b: INT) -> io::Result<Option<f32>>;
+    fn distance2point(&mut self, id: INT, point: &Point) -> io::Result<Option<f32>>;
+    fn get_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>>;
+    fn get_layer(&mut self, id: INT) -> io::Result<Option<Arc<Graph>>>;
+    fn get_nb_layers(&self) -> io::Result<INT>;
+    fn get_ep(&self) -> INT;
+    fn get_m(&self) -> INT;
+    fn get_ef_cons(&self) -> INT;
+}
+
+/// The role of the Traverser is to encapsulate the navigation
+/// logic of the HNSW data structure, exposing an `insert` and
+/// an `ann_by_vec` methods.
 pub struct Traverser {
     results: Results,
 }
@@ -27,14 +44,18 @@ impl Traverser {
         }
     }
 
-    pub fn insert(&mut self, index: &HNSW, point: &Point) {
+    pub fn insert(&mut self, index: &mut impl Index, point: &Point) {
         self.build_insertion_results(index, point);
         self.make_connections(index);
     }
 
-    fn build_insertion_results(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
+    fn build_insertion_results(
+        &mut self,
+        index: &mut impl Index,
+        point: &Point,
+    ) -> Result<(), String> {
         trace!("Begin insertion results");
-        if point.id == index.params.ep {
+        if point.id == index.get_ep() {
             warn!("Tried to build insertion results for point {}, but it is the EP, not building results", point.id);
             return Ok(());
         }
@@ -45,29 +66,43 @@ impl Traverser {
         Ok(())
     }
 
-    fn setup_insert(&mut self, index: &HNSW, point: &Point) {
+    fn clear_results(&mut self) {
+        self.results.clear_all();
+    }
+
+    fn setup_insert(&mut self, index: &mut impl Index, point: &Point) {
         trace!("Setting up insertion");
         self.results.clear_all();
 
         let dist2ep = index
-            .distance(index.params.ep, point.id)
+            .distance(index.get_ep(), point.id)
+            .expect("IO error computing distance")
             .expect("Could not compute distance between EP and point to insert.");
         trace!(
             "Setting up insertion. Distance between {0} and EP {1} is {dist2ep}",
             point.id,
-            index.params.ep
+            index.get_ep()
         );
 
         self.results
-            .insert_selected(Dist::new(index.params.ep, dist2ep));
+            .insert_selected(Dist::new(index.get_ep(), dist2ep));
     }
 
-    fn traverse_layers_above(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
+    fn traverse_layers_above(
+        &mut self,
+        index: &mut impl Index,
+        point: &Point,
+    ) -> Result<(), String> {
         trace!("Traversing Layers above query point");
-        let layers_len = index.layers.len();
+        let layers_len = index
+            .get_nb_layers()
+            .expect("IO error getting nb of layers");
 
         for layer_nb in (point.level as usize + 1..layers_len).rev() {
-            let layer = index.get_layer(layer_nb);
+            let layer = index
+                .get_layer(layer_nb)
+                .expect("IO error getting layer")
+                .expect("Could not get layer");
             trace!(
                 "Looking for nearest neighbors for point {0} in layer {layer_nb}",
                 point.id,
@@ -77,16 +112,28 @@ impl Traverser {
                 "The entry point to the layer is {:?}",
                 self.results.selected
             );
-            self.search_layer(layer, point, &index, 1)?;
+            self.search_layer(&layer, point, index, 1)?;
         }
         Ok(())
     }
 
-    fn traverse_layers_below(&mut self, index: &HNSW, point: &Point) -> Result<(), String> {
+    fn traverse_layers_below(
+        &mut self,
+        index: &mut impl Index,
+        point: &Point,
+    ) -> Result<(), String> {
         trace!("Traversing Layers below or equal to query point");
-        let bound = (point.level as usize).min(index.layers.len() - 1);
+        let bound = (point.level as usize).min(
+            index
+                .get_nb_layers()
+                .expect("IO error getting number of layers")
+                - 1,
+        );
         for layer_nb in (0..=bound).rev() {
-            let layer = index.get_layer(layer_nb);
+            let layer = index
+                .get_layer(layer_nb)
+                .expect("IO error getting layer")
+                .expect("Could not get layer");
             trace!(
                 "Looking for nearest neighbors for point {0} in layer {layer_nb}",
                 point.id,
@@ -96,28 +143,37 @@ impl Traverser {
                 "The entry points to the layer are {:?}",
                 self.results.selected
             );
-            self.search_layer(layer, point, &index, index.params.ef_cons)?;
-            // self.select_simple(&mut self.results, index.params.m);
-            self.select_heuristic(layer, point, &index.points, index.params.m, true, true)?;
+            self.search_layer(&layer, point, index, index.get_ef_cons())?;
+            // self.select_simple(&mut self.results, index.get_m());
+            self.select_heuristic(index, &layer, point, index.get_m(), true, true)?;
             self.results.save_layer_results(layer_nb, point.id);
         }
         Ok(())
     }
 
-    fn make_connections(&self, index: &HNSW) -> Result<(), String> {
+    fn make_connections(&self, index: &mut impl Index) -> Result<(), String> {
         info!("Making connections using results");
         for (layer_nb, node_data) in self.results.insertion_results.iter() {
-            let layer = index.get_layer(*layer_nb);
+            let layer = index
+                .get_layer(*layer_nb)
+                .expect("IO error getting layer")
+                .expect("Could not get layer");
             for (node, neighbors) in node_data.iter() {
                 layer
                     .add_neighbors(*node, neighbors.iter().copied())
                     .unwrap();
                 for n in neighbors {
                     if layer.degree(*n).unwrap() > layer.m {
-                        let query = index.get_point(*n).unwrap();
+                        let query = index
+                            .get_point(*n)
+                            .expect("IO error getting point")
+                            .expect("Could not get point");
                         let neighs = layer.neighbors(*n).unwrap();
                         let candidate_dists = neighs.iter().copied().map(|id| {
-                            let point = index.get_point(id).unwrap();
+                            let point = index
+                                .get_point(id)
+                                .expect("IO error getting point")
+                                .expect("Could not get point");
                             Dist::new(id, point.dist2other(&query))
                         });
                         let new = Self::select_simple(candidate_dists, layer.m);
@@ -143,7 +199,7 @@ impl Traverser {
         &mut self,
         layer: &Graph,
         point: &Point,
-        index: &HNSW,
+        index: &mut impl Index,
         ef: usize,
     ) -> Result<(), String> {
         trace!("Searching Layer");
@@ -183,7 +239,8 @@ impl Traverser {
                 .map(|node| {
                     let dist = index
                         .get_point(*node)
-                        .expect(format!("Could get point {node}").as_str())
+                        .expect("IO error getting point")
+                        .expect("Could not get point")
                         .dist2other(point);
                     Dist::new(*node, dist)
                 })
@@ -220,15 +277,15 @@ impl Traverser {
         Ok(())
     }
 
-    pub fn select_simple(&self, results: &mut Results, m: usize) {
-        results.select_simple(m);
-    }
+    // pub fn select_simple(&self, results: &mut Results, m: usize) {
+    //     results.select_simple(m);
+    // }
 
     pub fn select_heuristic(
         &mut self,
+        index: &mut impl Index,
         layer: &Graph,
         point: &Point,
-        points: &HNSW,
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
@@ -240,7 +297,7 @@ impl Traverser {
         self.results.select_setup();
         if extend_cands {
             self.results
-                .extend_candidates_with_neighbors(point, points, layer)?;
+                .extend_candidates_with_neighbors(point, index, layer)?;
         }
 
         let node_e = self.results.candidates.pop_first().unwrap();
@@ -248,9 +305,9 @@ impl Traverser {
 
         while (!self.results.candidates.is_empty()) & (self.results.selected.len() < m as usize) {
             let node_e = self.results.candidates.pop_first().unwrap();
-            let e_point = points.get_point(node_e.id).unwrap();
+            let e_point = index.get_point(node_e.id).unwrap().unwrap();
 
-            let nearest_selected = self.results.get_nearest_from_selected(&e_point, points);
+            let nearest_selected = self.results.get_nearest_from_selected(&e_point, index);
 
             if node_e < nearest_selected {
                 self.results.insert_selected(node_e);
@@ -275,7 +332,8 @@ impl Traverser {
     }
 
     pub fn ann_by_vec(
-        &self,
+        &mut self,
+        index: &mut impl Index,
         vector: &Vec<f32>,
         n: usize,
         ef: usize,
@@ -284,16 +342,27 @@ impl Traverser {
         let point = Point::new(vector);
         self.clear_results();
         self.results.insert_selected(Dist::new(
-            self.params.ep,
-            self.points.distance2point(&point, self.params.ep).unwrap(),
+            index.get_ep(),
+            index
+                .distance2point(index.get_ep(), &point)
+                .unwrap()
+                .unwrap(),
         ));
-        let nb_layers = self.layers.len();
+        let nb_layers = index.get_nb_layers().expect("IO error getting nb layers");
 
         for layer_nb in (1..nb_layers).rev() {
-            self.search_layer(self.get_layer(layer_nb), &point, self, 1)?;
+            let layer = index
+                .get_layer(layer_nb)
+                .expect("IO error getting layer")
+                .expect("Could not get layer");
+            self.search_layer(&layer, &point, index, 1)?;
         }
 
-        self.search_layer(&self.get_layer(0), &point, &self, ef)?;
+        let layer0 = index
+            .get_layer(0)
+            .expect("IO error getting layer")
+            .expect("Could not get layer");
+        self.search_layer(&layer0, &point, index, ef)?;
 
         let anns: Vec<NodeID> = self
             .results
@@ -310,25 +379,25 @@ impl Traverser {
     //     vectors: Vec<Vec<f32>>,
     //     nb_threads: usize,
     //     verbose: bool,
-    // ) -> Result<HNSW, String> {
+    // ) -> Result<impl Index, String> {
     //     info!("inserting {0} vectors to index in bulk", vectors.len());
     //     let stored_ids: HashSet<NodeID> =
     //         HashSet::from_iter(self.store_points(vectors).iter().cloned());
 
-    //     let bar = get_progress_bar("Building HNSW index".to_string(), stored_ids.len(), verbose);
+    //     let bar = get_progress_bar("Building index".to_string(), stored_ids.len(), verbose);
     //     let bar_arc = Arc::new(bar);
 
     //     let index_arc = Arc::new(self);
 
-    //     for layer_nb in (0..index_arc.layers.len()).rev() {
-    //         let layer = index_arc.layers.get_layer(layer_nb);
+    //     for layer_nb in (0..index_arc.get_nb_layers()).rev() {
+    //         let layer = index_arc.get_layer(layer_nb);
     //         info!("Connecting nodes in layer {layer_nb}, using {nb_threads} threads",);
     //         let chunks = ((layer.nb_nodes() as f64) / (nb_threads as f64)).ceil() as usize;
     //         let mut ids: Vec<Vec<NodeID>> = layer
     //             .iter_nodes()
     //             .filter(|id| {
     //                 stored_ids.contains(id)
-    //                     & (index_arc.points.get_point(*id).unwrap().level == layer_nb as u8)
+    //                     & (index_arc.get_point(*id).unwrap().level == layer_nb as u8)
     //             })
     //             .collect::<Vec<NodeID>>()
     //             .chunks(chunks)

@@ -6,9 +6,10 @@ use graph::NodeID;
 use log::trace;
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
-use points::points::Points;
 use std::collections::BTreeSet;
 use vectors::VecBase;
+
+use crate::template::Index;
 
 type OrderedDists = BTreeSet<Dist>;
 pub type LayerResult = IntMap<NodeID, IntSet<NodeID>>;
@@ -60,11 +61,13 @@ impl Results {
         }
     }
 
-    pub fn get_nearest_from_selected(&self, point: &Point, points: &impl Points) -> Dist {
-        let selected_points = self
-            .selected
-            .iter()
-            .map(|n| points.get_point(n.id).unwrap());
+    pub fn get_nearest_from_selected(&self, point: &Point, index: &mut impl Index) -> Dist {
+        let selected_points = self.selected.iter().map(|n| {
+            index
+                .get_point(n.id)
+                .expect("IO error getting point")
+                .expect("Could not get point")
+        });
         let distances = point.dist2many(selected_points);
         distances
             .zip(self.selected.iter().map(|n| n.id))
@@ -109,7 +112,7 @@ impl Results {
     pub fn extend_candidates_with_neighbors(
         &mut self,
         point: &Point,
-        points: &impl Points,
+        index: &mut impl Index,
         layer: &Graph,
     ) -> Result<(), String> {
         let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
@@ -122,7 +125,13 @@ impl Results {
                 },
             };
             for neighbor in neighs_mutex.lock().unwrap().iter() {
-                let dist = Dist::new(*neighbor, points.distance(point.id, *neighbor).unwrap());
+                let dist = Dist::new(
+                    *neighbor,
+                    index
+                        .distance(point.id, *neighbor)
+                        .expect("IO error computing distance")
+                        .expect("Could not compute distance"),
+                );
                 self.insert_candidate(dist);
             }
         }

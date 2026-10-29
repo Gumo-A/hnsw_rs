@@ -9,7 +9,7 @@ use std::{
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use hnsw::template::inserter::Inserter;
+use hnsw::template::{Traverser, inserter::Inserter};
 use itertools::Itertools;
 use moka::{policy::EvictionPolicy, sync::Cache};
 use points::point::{Point, VecType};
@@ -17,6 +17,7 @@ use vectors::VecBase;
 
 use crate::{
     INT, get_rand_file_name,
+    hnsw::HNSW,
     manifest::{Manifest, ManifestList},
 };
 
@@ -52,8 +53,11 @@ pub struct Engine {
     debug: bool,
     cache_cap: INT,
     dim: INT,
+    params: HNSW,
 }
 
+// TODO: dont pass dim, infer from first insertion
+// TODO: other build methods, like those in params.rs
 impl Engine {
     pub fn new(loc: PathBuf, dim: INT) -> io::Result<Self> {
         let cap = get_cache_cap(dim);
@@ -228,7 +232,7 @@ impl Engine {
         }
     }
 
-    pub fn insert(&self, payloads: &[Point]) -> io::Result<Manifest> {
+    pub fn insert(&mut self, payloads: &[Point]) -> io::Result<Manifest> {
         if payloads.len() > self.cache_cap as INT {
             self.divide_and_insert(payloads)
         } else {
@@ -249,8 +253,9 @@ impl Engine {
         self.insert(p2)
     }
 
-    fn add_payloads_to_index(&self, manifest: &Manifest) {
-        Inserter::new().insert(index, point);
+    fn add_payloads_to_index(&mut self, manifest: &Manifest) {
+        let inserter = Traverser::new();
+        inserter.insert(self, point);
     }
 
     fn load_points_from_manifest(&self, manifest: &Manifest) -> Vec<Point> {
@@ -461,7 +466,7 @@ mod tests {
     #[test]
     fn add_payloads() {
         let path = "./add-payloads-test";
-        let e = init_engine(path);
+        let mut e = init_engine(path);
         let n = 8;
         for _ in 0..4 {
             let p = gen_rand_points(n);
@@ -475,7 +480,7 @@ mod tests {
     #[test]
     fn add_one_payload() {
         let path = "./add-one-payload-test";
-        let e = init_engine(path);
+        let mut e = init_engine(path);
         for _ in 0..4 {
             let p = gen_rand_points(1);
             let r = e.insert(&p);
