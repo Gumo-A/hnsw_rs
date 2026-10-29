@@ -3,8 +3,6 @@ use graph::dist::Dist;
 use graph::NodeID;
 use indicatif::{ProgressBar, ProgressStyle};
 use points::point::Point;
-use points::points::Points;
-use points::simple_points::SimplePoints;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
@@ -71,40 +69,40 @@ pub fn load_glove_array(
     Ok((words, embeddings))
 }
 
-pub fn brute_force_nns(
-    nb_nns: usize,
-    train_set: Arc<SimplePoints>,
-    test_set: Arc<SimplePoints>,
-    ids: Vec<NodeID>,
-    bar: ProgressBar,
-) -> HashMap<NodeID, Vec<NodeID>> {
-    let mut brute_force_results: HashMap<NodeID, Vec<NodeID>> = HashMap::new();
-    for idx in ids.iter() {
-        let query = test_set
-            .get_point(*idx as NodeID)
-            .expect("Point ID not found in collection.");
-        let nns: Vec<NodeID> = get_nn_bf(&query, &train_set, nb_nns);
-        assert_eq!(nb_nns, nns.len());
-        brute_force_results.insert(*idx, nns);
-        bar.inc(1);
-    }
+// pub fn brute_force_nns(
+//     nb_nns: usize,
+//     train_set: Arc<Vec<NodeID>>,
+//     test_set: Arc<Vec<NodeID>>,
+//     ids: Vec<NodeID>,
+//     bar: ProgressBar,
+// ) -> HashMap<NodeID, Vec<NodeID>> {
+//     let mut brute_force_results: HashMap<NodeID, Vec<NodeID>> = HashMap::new();
+//     for idx in ids.iter() {
+//         let query = test_set
+//             .get_point(*idx as NodeID)
+//             .expect("Point ID not found in collection.");
+//         let nns: Vec<NodeID> = get_nn_bf(&query, &train_set, nb_nns);
+//         assert_eq!(nb_nns, nns.len());
+//         brute_force_results.insert(*idx, nns);
+//         bar.inc(1);
+//     }
 
-    brute_force_results
-}
+//     brute_force_results
+// }
 
-fn get_nn_bf(point: &Point, others: &Arc<SimplePoints>, nb_nns: usize) -> Vec<NodeID> {
-    let sorted = sort_by_distance(point, others);
-    sorted.iter().take(nb_nns).map(|x| x.id).collect()
-}
+// fn get_nn_bf(point: &Point, others: &Arc<SimplePoints>, nb_nns: usize) -> Vec<NodeID> {
+//     let sorted = sort_by_distance(point, others);
+//     sorted.iter().take(nb_nns).map(|x| x.id).collect()
+// }
 
-fn sort_by_distance(point: &Point, others: &Arc<SimplePoints>) -> Vec<Dist> {
-    let iter = others.collection.iter().cloned();
-    let result = point.dist2many(iter.clone());
-    let mut dists = Vec::from_iter(
-        result
-            .zip(iter.clone().map(|p| p.id))
-            .map(|(dist, id)| Dist::new(id, dist)),
-    );
-    dists.sort();
-    dists
-}
+// fn sort_by_distance(point: &Point, others: &Arc<SimplePoints>) -> Vec<Dist> {
+//     let iter = others.collection.iter().cloned();
+//     let result = point.dist2many(iter.clone());
+//     let mut dists = Vec::from_iter(
+//         result
+//             .zip(iter.clone().map(|p| p.id))
+//             .map(|(dist, id)| Dist::new(id, dist)),
+//     );
+//     dists.sort();
+//     dists
+// }

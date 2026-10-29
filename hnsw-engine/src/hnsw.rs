@@ -4,62 +4,42 @@ pub mod traverser;
 use graph::NodeID;
 use serde::{Deserialize, Serialize};
 
+use crate::engine::INT;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HNSW {
     pub ep: NodeID,
-    pub m: usize,
-    pub mmax: usize,
-    pub mmax0: usize,
+    pub m: INT,
+    pub mmax: INT,
+    pub mmax0: INT,
     pub ml: f32,
-    pub ef_cons: usize,
-    pub dim: usize,
+    pub ef_cons: INT,
+    pub cache_cap: INT,
+    pub dim: Option<INT>,
 }
 
-pub fn get_default_ml(m: usize) -> f32 {
-    1.0 / (m as f32).ln()
+const CACHE_SIZE_BYTES: INT = 134217728; // 128MiB
+const DEFAULT_CACHE_CAP: INT = 130056; // 128MiB worth of dim-1024 QuantVecs
+fn get_cache_cap(dim: INT) -> INT {
+    CACHE_SIZE_BYTES / (8 + dim)
 }
 
 impl HNSW {
-    pub fn from_m(m: usize, dim: usize) -> HNSW {
-        HNSW {
-            m,
-            mmax: m,
-            mmax0: m * 2,
-            ml: get_default_ml(m),
-            ef_cons: m * 2,
-            dim,
-            ep: 0,
-        }
-    }
-
-    pub fn from_m_efcons(m: usize, ef_cons: usize, dim: usize) -> HNSW {
+    pub fn new(m: INT) -> HNSW {
         HNSW {
             m,
             mmax: m,
             mmax0: m * 2,
             ml: 1.0 / (m as f32).ln(),
-            ef_cons,
-            dim,
+            ef_cons: m * 2,
+            dim: None,
             ep: 0,
+            cache_cap: DEFAULT_CACHE_CAP,
         }
     }
 
-    pub fn from(
-        m: usize,
-        ef_cons: Option<usize>,
-        mmax: Option<usize>,
-        mmax0: Option<usize>,
-        ml: Option<f32>,
-        dim: usize,
-    ) -> HNSW {
-        HNSW {
-            m,
-            mmax: mmax.unwrap_or(m),
-            mmax0: mmax0.unwrap_or(m * 2),
-            ml: ml.unwrap_or(1.0 / (m as f32).ln()),
-            ef_cons: ef_cons.unwrap_or(m * 2),
-            dim,
-            ep: 0,
-        }
+    pub fn set_dim(&mut self, dim: INT) {
+        self.dim = Some(dim);
+        self.cache_cap = get_cache_cap(dim);
     }
 }

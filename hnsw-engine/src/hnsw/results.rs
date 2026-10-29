@@ -3,13 +3,13 @@ use graph::NodeID;
 use graph::dist::Dist;
 use graph::errors::GraphError;
 use graph::graph::Graph;
-use log::{info, trace, warn};
-use nohash_hasher::IntSet;
+use log::trace;
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;
-use points::points::Points;
 use std::collections::BTreeSet;
 use vectors::VecBase;
+
+use crate::{engine::INT, index::Index};
 
 type OrderedDists = BTreeSet<Dist>;
 pub type LayerResult = IntMap<NodeID, IntSet<NodeID>>;
@@ -61,11 +61,11 @@ impl Results {
         }
     }
 
-    pub fn get_nearest_from_selected(&self, point: &Point, points: &impl Points) -> Dist {
+    pub fn get_nearest_from_selected(&self, point: &Point, points: &mut impl Index) -> Dist {
         let selected_points = self
             .selected
             .iter()
-            .map(|n| points.get_point(n.id).unwrap());
+            .map(|n| points.get_point(n.id).unwrap().unwrap());
         let distances = point.dist2many(selected_points);
         distances
             .zip(self.selected.iter().map(|n| n.id))
@@ -109,8 +109,8 @@ impl Results {
 
     pub fn extend_candidates_with_neighbors(
         &mut self,
-        point: &Point,
-        points: &impl Points,
+        id: INT,
+        points: &mut impl Index,
         layer: &Graph,
     ) -> Result<(), String> {
         let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
@@ -123,7 +123,7 @@ impl Results {
                 },
             };
             for neighbor in neighs_mutex.lock().unwrap().iter() {
-                let dist = Dist::new(*neighbor, points.distance(point.id, *neighbor).unwrap());
+                let dist = Dist::new(*neighbor, points.distance(id, *neighbor).unwrap().unwrap());
                 self.insert_candidate(dist);
             }
         }
@@ -175,7 +175,7 @@ impl Results {
 mod test {
     use graph::dist::Dist;
 
-    use crate::template::results::Results;
+    use crate::hnsw::results::Results;
 
     fn get_results() -> Results {
         let mut r = Results::new();

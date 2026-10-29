@@ -9,15 +9,14 @@ use std::{
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use hnsw::template::{Traverser, inserter::Inserter};
 use itertools::Itertools;
 use moka::{policy::EvictionPolicy, sync::Cache};
 use points::point::{Point, VecType};
 use vectors::VecBase;
 
 use crate::{
-    INT, get_rand_file_name,
-    hnsw::HNSW,
+    get_rand_file_name,
+    hnsw::{HNSW, traverser::Traverser},
     manifest::{Manifest, ManifestList},
 };
 
@@ -36,12 +35,8 @@ macro_rules! timeit {
     };
 }
 
-const CACHE_SIZE_BYTES: INT = 134217728; // 128MiB
+pub type INT = usize;
 const LAYERS: [&str; 3] = ["metadata-layer", "data-layer", "index-layer"];
-
-fn get_cache_cap(dim: INT) -> INT {
-    CACHE_SIZE_BYTES / (8 + dim)
-}
 
 enum Error {
     IncorrectDimension,
@@ -51,32 +46,26 @@ pub struct Engine {
     loc: PathBuf,
     cache: Cache<INT, Arc<Point>>,
     debug: bool,
-    cache_cap: INT,
-    dim: INT,
     params: HNSW,
 }
 
-// TODO: dont pass dim, infer from first insertion
-// TODO: other build methods, like those in params.rs
 impl Engine {
-    pub fn new(loc: PathBuf, dim: INT) -> io::Result<Self> {
-        let cap = get_cache_cap(dim);
+    pub fn new(loc: PathBuf, m: INT) -> io::Result<Self> {
+        let params = Self::init_at_loc(&loc, m)?;
         let cache = Cache::builder()
-            .max_capacity(cap as u64)
+            .max_capacity(params.cache_cap as u64)
             .eviction_policy(EvictionPolicy::lru())
             .build();
         let engine = Self {
             loc: loc.clone(),
             cache,
             debug: env::var("HNSW_DEBUG").is_ok(),
-            cache_cap: cap,
-            dim,
+            params,
         };
-        Self::init_at_loc(&loc, dim)?;
         Ok(engine)
     }
 
-    pub fn distance(&self, a: INT, b: INT) -> io::Result<f32> {
+    pub fn distance(&mut self, a: INT, b: INT) -> io::Result<f32> {
         let point_a = self
             .get_point(a)?
             .expect("could not get point while computing distance");
@@ -86,7 +75,7 @@ impl Engine {
         Ok(point_a.dist2other(&point_b))
     }
 
-    fn init_at_loc(loc: &PathBuf, dim: INT) -> io::Result<()> {
+    fn init_at_loc(loc: &PathBuf, dim: INT) -> io::Result<HNSW> {
         if loc.exists() {
             if loc.is_dir() {
                 Self::check_can_use_dir(&loc)?;
@@ -98,12 +87,11 @@ impl Engine {
                 Ok(()) => (),
                 Err(e) => match e.kind() {
                     io::ErrorKind::AlreadyExists => (),
-                    _ => panic!("Could not create {loc:?}: {e}"),
+                    _ => return Err(e),
                 },
             };
         }
-        Self::check_or_create_dir_structure(&loc, dim)?;
-        Ok(())
+        Self::check_or_create_dir_structure(&loc, dim)
     }
 
     fn check_can_use_dir(loc: &PathBuf) -> io::Result<()> {
@@ -128,39 +116,36 @@ impl Engine {
         }
     }
 
-    fn check_or_create_dir_structure(loc: &PathBuf, dim: INT) -> io::Result<()> {
+    fn check_or_create_dir_structure(loc: &PathBuf, m: INT) -> io::Result<HNSW> {
         for layer in LAYERS {
             Self::try_create_dir(loc.join(layer))?;
         }
-        Self::check_or_create_dim_file(loc.join("metadata-layer"), dim)
+        Self::check_or_create_dim_file(loc.join("metadata-layer"), m)
     }
 
-    fn check_or_create_dim_file(metadata_dir: PathBuf, dim: INT) -> io::Result<()> {
+    fn check_or_create_dim_file(metadata_dir: PathBuf, m: INT) -> io::Result<HNSW> {
         let dim_file = metadata_dir.join("dim.txt");
         match File::create_new(&dim_file) {
             Ok(mut f) => {
-                let dim_bytes: Vec<u8> = format!("{dim}").bytes().collect();
-                f.write_all(&dim_bytes)
+                let params = HNSW::new(m);
+                let params_ser = serde_json::to_vec_pretty(&params)
+                    .expect("Could not serialize new params struct");
+                f.write_all(&params_ser);
+                Ok(params)
             }
             Err(e) => match e.kind() {
-                io::ErrorKind::AlreadyExists => {
-                    let existing_dim = Self::read_dim_file(&dim_file)?;
-                    if existing_dim == dim {
-                        Ok(())
-                    } else {
-                        Err(ErrorKind::InvalidInput.into())
-                    }
-                }
+                io::ErrorKind::AlreadyExists => Self::read_params_file(&dim_file),
                 _ => Err(e),
             },
         }
     }
-    fn read_dim_file(path: &PathBuf) -> io::Result<INT> {
+    fn read_params_file(path: &PathBuf) -> io::Result<HNSW> {
         match File::open(path) {
             Ok(mut f) => {
-                let mut dim_str = String::new();
-                f.read_to_string(&mut dim_str)?;
-                Ok(dim_str.parse::<INT>().unwrap())
+                let mut buf = Vec::new();
+                f.read_to_end(&mut buf)?;
+                let params = serde_json::from_slice(&buf)?;
+                Ok(params)
             }
             Err(e) => Err(e),
         }
@@ -233,7 +218,8 @@ impl Engine {
     }
 
     pub fn insert(&mut self, payloads: &[Point]) -> io::Result<Manifest> {
-        if payloads.len() > self.cache_cap as INT {
+        self.check_payloads(payloads);
+        if payloads.len() > self.params.cache_cap as INT {
             self.divide_and_insert(payloads)
         } else {
             self.write_lock();
@@ -245,7 +231,23 @@ impl Engine {
         }
     }
 
-    fn divide_and_insert(&self, payloads: &[Point]) -> io::Result<Manifest> {
+    fn check_payloads(&mut self, payloads: &[Point]) -> io::Result<()> {
+        if payloads.len() == 0 {
+            return Err(ErrorKind::InvalidData.into());
+        } else if self.params.dim.is_none() {
+            self.params.set_dim(payloads[0].dim());
+        }
+
+        let dim = self.params.dim.unwrap();
+        let nb_valid = payloads.iter().filter(|p| p.dim() == dim).count();
+        if nb_valid != payloads.len() {
+            Err(ErrorKind::InvalidData.into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn divide_and_insert(&mut self, payloads: &[Point]) -> io::Result<Manifest> {
         let mid = payloads.len() / 2;
         let p1 = &payloads[..mid];
         let p2 = &payloads[mid..];
@@ -255,7 +257,9 @@ impl Engine {
 
     fn add_payloads_to_index(&mut self, manifest: &Manifest) {
         let inserter = Traverser::new();
-        inserter.insert(self, point);
+        for id in manifest.ids() {
+            inserter.insert(self, id);
+        }
     }
 
     fn load_points_from_manifest(&self, manifest: &Manifest) -> Vec<Point> {
@@ -362,7 +366,7 @@ impl Engine {
 
     pub fn optimize(&self) -> io::Result<ManifestList> {
         let old_manifest_list = self.get_current_manifest_list()?;
-        let op_plan = old_manifest_list.get_optimization_plan(self.cache_cap);
+        let op_plan = old_manifest_list.get_optimization_plan(self.params.cache_cap);
 
         let mut optimized_manifest_list = Vec::new();
         for to_combine in op_plan.iter() {
@@ -418,7 +422,7 @@ mod tests {
     };
     use vectors::{VecBase, gen_rand_vecs};
 
-    use crate::{INT, engine::Engine};
+    use crate::engine::{Engine, INT};
 
     const DIM: INT = 1024;
     const IOMSG: &str = "IO error ocurred";

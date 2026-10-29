@@ -7,7 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{FileName, INT, path_to_f_name_str};
+use crate::{FileName, engine::INT, path_to_f_name_str};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
