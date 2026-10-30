@@ -14,4 +14,5 @@ pub trait Index {
     fn get_ep(&self) -> INT;
     fn get_m(&self) -> INT;
     fn get_ef_cons(&self) -> INT;
+    fn layers_at_level(&mut self, level: INT) -> impl Iterator<Item = INT>;
 }

@@ -12,11 +12,13 @@ use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use itertools::Itertools;
 use moka::{policy::EvictionPolicy, sync::Cache};
 use points::point::{Point, VecType};
+use rand::{Rng, rngs::ThreadRng, thread_rng};
 use vectors::VecBase;
 
 use crate::{
     get_rand_file_name,
     hnsw::{HNSW, traverser::Traverser},
+    index::Index,
     manifest::{Manifest, ManifestList},
 };
 
@@ -38,15 +40,56 @@ macro_rules! timeit {
 pub type INT = usize;
 const LAYERS: [&str; 3] = ["metadata-layer", "data-layer", "index-layer"];
 
-enum Error {
-    IncorrectDimension,
-}
-
 pub struct Engine {
     loc: PathBuf,
     cache: Cache<INT, Arc<Point>>,
     debug: bool,
     params: HNSW,
+}
+
+impl Index for Engine {
+    fn get_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
+        let result = if let Some(p) = self.cache.get(&id) {
+            Some(p)
+        } else {
+            self.load_point(id)?
+        };
+        Ok(result)
+    }
+
+    fn distance(&mut self, a: INT, b: INT) -> io::Result<Option<f32>> {
+        match (self.get_point(a)?, self.get_point(b)?) {
+            (Some(a), Some(b)) => Ok(Some(a.dist2other(&b))),
+            _ => Ok(None),
+        }
+    }
+
+    fn distance2point(&mut self, id: INT, point: &Point) -> io::Result<Option<f32>> {
+        match self.get_point(id)? {
+            Some(p) => Ok(Some(p.dist2other(point))),
+            None => Ok(None),
+        }
+    }
+
+    fn get_layer(&mut self, id: INT) -> io::Result<Option<Arc<graph::graph::Graph>>> {
+        todo!("load a Graph from cache or from disk")
+    }
+
+    fn get_nb_layers(&self) -> io::Result<INT> {
+        todo!("count how many layer files there are on disk")
+    }
+
+    fn get_ep(&self) -> INT {
+        self.params.ep
+    }
+
+    fn get_m(&self) -> INT {
+        self.params.m
+    }
+
+    fn get_ef_cons(&self) -> INT {
+        self.params.ef_cons
+    }
 }
 
 impl Engine {
@@ -63,16 +106,6 @@ impl Engine {
             params,
         };
         Ok(engine)
-    }
-
-    pub fn distance(&mut self, a: INT, b: INT) -> io::Result<f32> {
-        let point_a = self
-            .get_point(a)?
-            .expect("could not get point while computing distance");
-        let point_b = self
-            .get_point(b)?
-            .expect("could not get point while computing distance");
-        Ok(point_a.dist2other(&point_b))
     }
 
     fn init_at_loc(loc: &PathBuf, dim: INT) -> io::Result<HNSW> {
@@ -120,12 +153,12 @@ impl Engine {
         for layer in LAYERS {
             Self::try_create_dir(loc.join(layer))?;
         }
-        Self::check_or_create_dim_file(loc.join("metadata-layer"), m)
+        Self::load_or_create_param_file(loc.join("metadata-layer"), m)
     }
 
-    fn check_or_create_dim_file(metadata_dir: PathBuf, m: INT) -> io::Result<HNSW> {
-        let dim_file = metadata_dir.join("dim.txt");
-        match File::create_new(&dim_file) {
+    fn load_or_create_param_file(metadata_dir: PathBuf, m: INT) -> io::Result<HNSW> {
+        let param_file = metadata_dir.join("params.json");
+        match File::create_new(&param_file) {
             Ok(mut f) => {
                 let params = HNSW::new(m);
                 let params_ser = serde_json::to_vec_pretty(&params)
@@ -134,7 +167,7 @@ impl Engine {
                 Ok(params)
             }
             Err(e) => match e.kind() {
-                io::ErrorKind::AlreadyExists => Self::read_params_file(&dim_file),
+                io::ErrorKind::AlreadyExists => Self::read_params_file(&param_file),
                 _ => Err(e),
             },
         }
@@ -188,15 +221,6 @@ impl Engine {
         }
     }
 
-    pub fn get_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
-        let result = if let Some(p) = self.cache.get(&id) {
-            Some(p)
-        } else {
-            self.load_point(id)?
-        };
-        Ok(result)
-    }
-
     /// Also caches points stored in the same data file
     fn load_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
         let manifest_list = self.get_current_manifest_list()?;
@@ -218,7 +242,7 @@ impl Engine {
     }
 
     pub fn insert(&mut self, payloads: &[Point]) -> io::Result<Manifest> {
-        self.check_payloads(payloads);
+        self.check_payloads(payloads)?;
         if payloads.len() > self.params.cache_cap as INT {
             self.divide_and_insert(payloads)
         } else {
@@ -235,7 +259,7 @@ impl Engine {
         if payloads.len() == 0 {
             return Err(ErrorKind::InvalidData.into());
         } else if self.params.dim.is_none() {
-            self.params.set_dim(payloads[0].dim());
+            self.update_dim(payloads)?;
         }
 
         let dim = self.params.dim.unwrap();
@@ -247,6 +271,15 @@ impl Engine {
         }
     }
 
+    fn update_dim(&mut self, payloads: &[Point]) -> io::Result<()> {
+        self.params.set_dim(payloads[0].dim());
+        let param_file = self.loc.join("metadata-layer").join("params.json");
+        let params_ser = serde_json::to_vec_pretty(&self.params)?;
+        let mut f = File::create(&param_file)?;
+        f.write_all(&params_ser);
+        Ok(())
+    }
+
     fn divide_and_insert(&mut self, payloads: &[Point]) -> io::Result<Manifest> {
         let mid = payloads.len() / 2;
         let p1 = &payloads[..mid];
@@ -255,10 +288,25 @@ impl Engine {
         self.insert(p2)
     }
 
+    fn get_level(&self, rng: &mut ThreadRng) -> INT {
+        let mut rand_nb = 0.0;
+        loop {
+            if (rand_nb == 0.0) | (rand_nb == 1.0) {
+                rand_nb = rng.r#gen::<f32>();
+            } else {
+                break;
+            }
+        }
+
+        let level = (-rand_nb.ln() * self.params.ml).floor() as usize;
+        level
+    }
+
     fn add_payloads_to_index(&mut self, manifest: &Manifest) {
-        let inserter = Traverser::new();
+        let mut inserter = Traverser::new();
+        let mut rng = thread_rng();
         for id in manifest.ids() {
-            inserter.insert(self, id);
+            inserter.insert(self, id, self.get_level(&mut rng));
         }
     }
 
@@ -415,6 +463,8 @@ mod tests {
         u64,
     };
 
+    use env_logger::init;
+    use log::trace;
     use points::point::Point;
     use rand::{
         Rng,
@@ -422,9 +472,12 @@ mod tests {
     };
     use vectors::{VecBase, gen_rand_vecs};
 
-    use crate::engine::{Engine, INT};
+    use crate::{
+        engine::{Engine, INT},
+        index::Index,
+    };
 
-    const DIM: INT = 1024;
+    const DIM: INT = 128;
     const IOMSG: &str = "IO error ocurred";
 
     fn remove_path_if_exists(path: &str) -> PathBuf {
@@ -436,17 +489,9 @@ mod tests {
     }
 
     fn init_engine(path: &str) -> Engine {
+        // env_logger::init();
         let path = remove_path_if_exists(path);
         Engine::new(path, DIM).unwrap()
-    }
-
-    fn init_engine_dim(path: &str, dim: INT, remove: bool) -> Result<Engine, std::io::Error> {
-        let path = if remove {
-            remove_path_if_exists(path)
-        } else {
-            Path::new(path).to_path_buf()
-        };
-        Engine::new(path, dim)
     }
 
     fn gen_rand_points(n: INT) -> Vec<Point> {
@@ -458,12 +503,27 @@ mod tests {
         points
     }
 
+    fn gen_rand_point(dim: INT) -> Vec<Point> {
+        let vs = gen_rand_vecs(dim, 1);
+        let mut points = vec![];
+        for (idx, v) in vs.iter().enumerate() {
+            points.push(Point::with_level_and_id(v, 0, idx));
+        }
+        points
+    }
+
     #[test]
     fn different_dimension_not_allowed() {
         let path = "./diff-dim-test";
-        let r = init_engine_dim(path, 4, true);
+        let mut e = init_engine(path);
+        assert!(e.params.dim.is_none());
+
+        let r = e.insert(&vec![gen_rand_point(4)[0].clone()]);
         assert!(r.is_ok());
-        assert!(init_engine_dim(path, 8, false).is_err());
+        assert_eq!(e.params.dim, Some(4));
+
+        let r = e.insert(&vec![gen_rand_point(8)[0].clone()]);
+        assert!(r.is_err());
         remove_dir_all(path).unwrap()
     }
 
@@ -564,25 +624,25 @@ mod tests {
         let mut e = init_engine(path);
 
         let mut rng = rand::thread_rng();
-        let n = 2_usize.pow(16);
+        let n = 2_usize.pow(12);
         timeit!(let points = gen_rand_points(n));
-        let sample: Vec<INT> = Uniform::new(0, points.len())
+        timeit!(let sample = Uniform::new(0, points.len())
             .sample_iter(rng.clone())
             .take(1000)
-            .collect();
+            .collect::<Vec<INT>>());
         let mut cursor = 0;
+        let mut len = points.len();
         let mut insertions = 0;
         let mut insert_loop = |e: &mut Engine| {
             loop {
                 insertions += 1;
-                let jump = rng.gen_range(1..n);
-                if cursor + jump >= points.len() {
-                    e.insert(&points[cursor..]).unwrap();
-                    break;
-                } else {
-                    e.insert(&points[cursor..cursor + jump]).unwrap();
-                }
+                let jump = (len / 2) - rng.gen_range(0..(len / 2).max(1)) + 1;
+                e.insert(&points[cursor..cursor + jump]).unwrap();
+                len -= jump;
                 cursor += jump;
+                if cursor == points.len() {
+                    break;
+                }
             }
         };
         let mut check_sample = |e: &mut Engine| {

@@ -9,7 +9,7 @@ use points::point::Point;
 use std::collections::BTreeSet;
 use vectors::VecBase;
 
-use crate::{engine::INT, index::Index};
+use crate::{engine::INT, hnsw::Error, index::Index};
 
 type OrderedDists = BTreeSet<Dist>;
 pub type LayerResult = IntMap<NodeID, IntSet<NodeID>>;
@@ -112,7 +112,7 @@ impl Results {
         id: INT,
         points: &mut impl Index,
         layer: &Graph,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
         for node in cands {
             let neighs_mutex = match layer.neighbors_lock(node) {

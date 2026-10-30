@@ -3,16 +3,20 @@ use graph::NodeID;
 use graph::dist::Dist;
 use graph::errors::GraphError;
 use graph::graph::Graph;
-use log::{info, trace, warn};
+use log::{info, trace};
 use nohash_hasher::IntSet;
 use points::point::Point;
 use vectors::VecBase;
 
-use crate::{engine::INT, hnsw::results::Results, index::Index};
+use crate::{
+    engine::INT,
+    hnsw::{Error, results::Results},
+    index::Index,
+};
 
 enum Query {
     ID(INT),
-    Vector(Point),
+    Point(Point),
 }
 /// The role of the Traverser is to encapsulate the navigation
 /// logic of the HNSW data structure, exposing an `insert` and
@@ -28,9 +32,10 @@ impl Traverser {
         }
     }
 
-    pub fn insert(&mut self, index: &mut impl Index, id: INT, level: INT) {
-        self.build_insertion_results(index, id, level);
-        self.make_connections(index);
+    pub fn insert(&mut self, index: &mut impl Index, id: INT, level: INT) -> Result<(), Error> {
+        self.build_insertion_results(index, id, level)?;
+        self.make_connections(index)?;
+        Ok(())
     }
 
     fn build_insertion_results(
@@ -38,16 +43,16 @@ impl Traverser {
         index: &mut impl Index,
         id: INT,
         level: INT,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         trace!("Begin insertion results");
-        if id == index.get_ep() {
-            warn!(
-                "Tried to build insertion results for point {}, but it is the EP, not building results",
-                id
-            );
-            return Ok(());
-        }
-        self.setup_insert(index, id);
+        // if id == index.get_ep() {
+        //     warn!(
+        //         "Tried to build insertion results for point {}, but it is the EP, not building results",
+        //         id
+        //     );
+        //     return Ok(());
+        // }
+        self.setup_insert(index, id, level)?;
         self.traverse_layers_above(index, id, level)?;
         self.traverse_layers_below(index, id, level)?;
         trace!("Finish insertion results");
@@ -58,9 +63,18 @@ impl Traverser {
         self.results.clear_all();
     }
 
-    fn setup_insert(&mut self, index: &mut impl Index, id: INT) {
+    fn setup_insert(&mut self, index: &mut impl Index, id: INT, level: INT) -> Result<(), Error> {
         trace!("Setting up insertion");
-        self.results.clear_all();
+        self.clear_results();
+
+        let layer_indices: Vec<INT> = index.layers_at_level(level).collect();
+        for layer_idx in layer_indices {
+            let layer = index
+                .get_layer(layer_idx)
+                .expect("IO error getting layer")
+                .expect("Couldn't get layer");
+            layer.add_node(id);
+        }
 
         let dist2ep = index
             .distance(index.get_ep(), id)
@@ -74,6 +88,7 @@ impl Traverser {
 
         self.results
             .insert_selected(Dist::new(index.get_ep(), dist2ep));
+        Ok(())
     }
 
     fn traverse_layers_above(
@@ -81,7 +96,7 @@ impl Traverser {
         index: &mut impl Index,
         id: INT,
         level: INT,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         trace!("Traversing Layers above query point");
         let layers_len = index
             .get_nb_layers()
@@ -111,7 +126,7 @@ impl Traverser {
         index: &mut impl Index,
         id: INT,
         level: INT,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         trace!("Traversing Layers below or equal to query point");
         let bound = (level as usize).min(
             index
@@ -141,7 +156,7 @@ impl Traverser {
         Ok(())
     }
 
-    fn make_connections(&self, index: &mut impl Index) -> Result<(), String> {
+    fn make_connections(&self, index: &mut impl Index) -> Result<(), Error> {
         info!("Making connections using results");
         for (layer_nb, node_data) in self.results.insertion_results.iter() {
             let layer = index
@@ -185,13 +200,13 @@ impl Traverser {
         IntSet::from_iter(cands.iter().take(m).map(|dist| dist.id))
     }
 
-    pub fn search_layer(
+    fn search_layer(
         &mut self,
         layer: &Graph,
         query: &Query,
         index: &mut impl Index,
         ef: usize,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         trace!("Searching Layer");
         self.results.extend_candidates_with_selected();
         self.results.extend_visited_with_selected();
@@ -210,7 +225,7 @@ impl Traverser {
                 Ok(neighs) => neighs,
                 Err(e) => match e {
                     GraphError::NodeNotInGraph(n) => {
-                        return Err(format!("Error in search_layer: {n} not in Graph"));
+                        return Err(Error::Other);
                     }
                     _ => panic!("Error in search_layer: got an unexpected error"),
                 },
@@ -227,7 +242,7 @@ impl Traverser {
                             .distance(*node, *id)
                             .expect("IO error computing distance")
                             .expect("Could not compute distance"),
-                        Query::Vector(p) => index
+                        Query::Point(p) => index
                             .get_point(*node)
                             .expect("IO error getting point")
                             .expect("Could not get point")
@@ -282,7 +297,7 @@ impl Traverser {
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         trace!(
             "Begin select_heuristic, selected is {:?}",
             self.results.selected
@@ -330,7 +345,7 @@ impl Traverser {
         vector: &Vec<f32>,
         n: usize,
         ef: usize,
-    ) -> Result<Vec<NodeID>, String> {
+    ) -> Result<Vec<NodeID>, Error> {
         info!("Start ANN search");
         let point = Point::new(vector);
         self.clear_results();
@@ -343,7 +358,7 @@ impl Traverser {
         ));
         let nb_layers = index.get_nb_layers().expect("IO error getting nb layers");
 
-        let query = Query::Vector(point);
+        let query = Query::Point(point);
         for layer_nb in (1..nb_layers).rev() {
             let layer = index
                 .get_layer(layer_nb)
