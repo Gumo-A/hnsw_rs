@@ -110,20 +110,17 @@ impl Results {
     pub fn extend_candidates_with_neighbors(
         &mut self,
         id: INT,
-        points: &mut impl Index,
-        layer: &Graph,
+        index: &mut impl Index,
+        layer: INT,
     ) -> Result<(), Error> {
         let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
         for node in cands {
-            let neighs_mutex = match layer.neighbors_lock(node) {
+            let neighs = match index.neighbors(node, layer) {
                 Ok(n) => n,
-                Err(e) => match e {
-                    GraphError::NodeNotInGraph(n) => panic!("Node {n} is not in the Graph"),
-                    _ => panic!("Error while extending candidates"),
-                },
+                Err(_) => return Err(Error::Other),
             };
-            for neighbor in neighs_mutex.lock().unwrap().iter() {
-                let dist = Dist::new(*neighbor, points.distance(id, *neighbor).unwrap().unwrap());
+            for neighbor in neighs.iter() {
+                let dist = Dist::new(*neighbor, index.distance(id, *neighbor).unwrap().unwrap());
                 self.insert_candidate(dist);
             }
         }

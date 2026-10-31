@@ -11,25 +11,32 @@ use crate::{FileName, engine::INT, path_to_f_name_str};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
-    pub loc: PathBuf,
+    pub data_loc: PathBuf,
+    pub index_loc: PathBuf,
     pub id_ranges: Vec<(INT, INT)>,
     #[serde(skip)]
     pub ids: HashSet<INT>,
 }
 
 impl Manifest {
-    pub fn new(loc: &PathBuf, first_id: INT, last_id: INT) -> Self {
+    pub fn new(data_loc: &PathBuf, index_loc: &PathBuf, first_id: INT, last_id: INT) -> Self {
         let manifest = Manifest {
-            loc: loc.clone(),
+            data_loc: data_loc.clone(),
+            index_loc: index_loc.clone(),
             ids: HashSet::from_iter(first_id..=last_id),
             id_ranges: vec![(first_id, last_id)],
         };
         manifest
     }
 
-    pub fn with_ranges(loc: &PathBuf, id_ranges: Vec<(INT, INT)>) -> Self {
+    pub fn with_ranges(
+        data_loc: &PathBuf,
+        index_loc: &PathBuf,
+        id_ranges: Vec<(INT, INT)>,
+    ) -> Self {
         let mut manifest = Manifest {
-            loc: loc.clone(),
+            data_loc: data_loc.clone(),
+            index_loc: index_loc.clone(),
             ids: HashSet::new(),
             id_ranges,
         };

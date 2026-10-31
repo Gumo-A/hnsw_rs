@@ -9,6 +9,7 @@ use std::{
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use graph::graph::Graph;
 use itertools::Itertools;
 use moka::{policy::EvictionPolicy, sync::Cache};
 use points::point::{Point, VecType};
@@ -18,7 +19,7 @@ use vectors::VecBase;
 use crate::{
     get_rand_file_name,
     hnsw::{HNSW, traverser::Traverser},
-    index::Index,
+    index::{Index, IndexEntry},
     manifest::{Manifest, ManifestList},
 };
 
@@ -38,7 +39,10 @@ macro_rules! timeit {
 }
 
 pub type INT = usize;
-const LAYERS: [&str; 3] = ["metadata-layer", "data-layer", "index-layer"];
+const METADATA_LAYER: &str = "metadata-layer";
+const DATA_LAYER: &str = "data-layer";
+const INDEX_LAYER: &str = "index-layer";
+const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 
 pub struct Engine {
     loc: PathBuf,
@@ -71,14 +75,6 @@ impl Index for Engine {
         }
     }
 
-    fn get_layer(&mut self, id: INT) -> io::Result<Option<Arc<graph::graph::Graph>>> {
-        todo!("load a Graph from cache or from disk")
-    }
-
-    fn get_nb_layers(&self) -> io::Result<INT> {
-        todo!("count how many layer files there are on disk")
-    }
-
     fn get_ep(&self) -> INT {
         self.params.ep
     }
@@ -87,8 +83,46 @@ impl Index for Engine {
         self.params.m
     }
 
+    fn get_m_at_layer(&self, layer: INT) -> INT {
+        if layer == 0 {
+            self.params.mmax0
+        } else {
+            self.params.mmax
+        }
+    }
+
     fn get_ef_cons(&self) -> INT {
         self.params.ef_cons
+    }
+
+    fn degree(&self, id: INT, layer: INT) -> io::Result<INT> {
+        todo!("fetch nb of neighbors of id at layer")
+    }
+
+    fn add_node(&self, id: INT, layer_idx: INT) -> io::Result<()> {
+        todo!(
+            "makes sure the IndexEntry for id contains at least layer_idx + 1 entries in 'levels'"
+        )
+    }
+
+    fn add_edge(&self, a: INT, b: INT, layer: INT) -> io::Result<()> {
+        // this would trigger disk io on every edge addition, there should be some
+        // kind of build up logic of many edge addtions before committing to a write
+        todo!(
+            "get the file(s) containing the entries for a and b, add the neighbors, write new file, create and write new manifest"
+        )
+    }
+
+    fn remove_edge(&self, a: INT, b: INT, layer: INT) -> io::Result<()> {
+        todo!("similar as add_edge")
+    }
+
+    fn neighbors(&self, id: INT, layer: INT) -> io::Result<std::collections::HashSet<INT>> {
+        todo!("get neighbors either from non-stale cache or from disk")
+    }
+
+    fn get_nb_layers(&self) -> io::Result<INT> {
+        todo!("count how many layer files there are on disk")
     }
 }
 
@@ -249,7 +283,7 @@ impl Engine {
             self.write_lock();
             let mut manifest_list = self.get_current_manifest_list()?;
             let manifest = self.add_payloads_to_store(&mut manifest_list, payloads);
-            self.add_payloads_to_index(&manifest);
+            // self.add_payloads_to_index(&manifest);
             self.write_unlock();
             Ok(manifest)
         }
@@ -312,7 +346,7 @@ impl Engine {
 
     fn load_points_from_manifest(&self, manifest: &Manifest) -> Vec<Point> {
         let mut bytes = vec![];
-        File::open(&manifest.loc)
+        File::open(&manifest.data_loc)
             .expect("Could not open payload file")
             .read_to_end(&mut bytes)
             .expect("Could not read payload file");
@@ -344,9 +378,11 @@ impl Engine {
     fn save_payloads(&self, manifest_list: &ManifestList, payloads: &[Point]) -> Manifest {
         let first = manifest_list.get_nb_points();
         let last = first + payloads.len() as INT - 1;
-        let path = self.loc.join("data-layer").join(get_rand_file_name());
-        let _written_bytes = self.save_serialized_payloads(&path, payloads);
-        Manifest::new(&path, first, last)
+        let data_path = self.loc.join(DATA_LAYER).join(get_rand_file_name());
+        let index_path = self.loc.join(INDEX_LAYER).join(get_rand_file_name());
+        self.save_serialized_payloads(&data_path, payloads);
+        self.save_serialized_index_entries(&index_path, payloads);
+        Manifest::new(&data_path, &index_path, first, last)
     }
 
     fn save_serialized_payloads(&self, path: &PathBuf, payloads: &[Point]) -> INT {
@@ -359,6 +395,35 @@ impl Engine {
             Ok(bytes_written) => bytes_written,
             Err(e) => panic!("Could not write payload to file {path:?}: {e}"),
         }
+    }
+
+    fn save_serialized_index_entries(&self, path: &PathBuf, payloads: &[Point]) -> INT {
+        let mut file = match File::create_new(path) {
+            Ok(f) => f,
+            Err(e) => panic!("Could not create index file at {path:?}: {e}"),
+        };
+        let entries_ser = self.serialize_index_entries(&payloads);
+        match file.write(&entries_ser) {
+            Ok(bytes_written) => bytes_written,
+            Err(e) => panic!("Could not write index to file {path:?}: {e}"),
+        }
+    }
+
+    fn serialize_index_entries(&self, payloads: &[Point]) -> Vec<u8> {
+        if self.debug {
+            self.serialize_index_entries_debug(payloads)
+        } else {
+            self.serialize_index_entries_uncompressed(payloads)
+        }
+    }
+
+    fn serialize_index_entries_uncompressed(&self, payloads: &[Point]) -> Vec<u8> {
+        let mut rng = thread_rng();
+        let p: Vec<IndexEntry> = Vec::from_iter(
+            (0..payloads.len()).map(|id| IndexEntry::new(id, self.get_level(&mut rng))),
+        );
+        let ser = rmp_serde::encode::to_vec(&p).expect("Could not serialize index entries");
+        ser
     }
 
     fn serialize_payloads(&self, payloads: &[Point]) -> Vec<u8> {
@@ -402,6 +467,14 @@ impl Engine {
         serde_json::to_vec_pretty(&p).expect("Could not encode payload")
     }
 
+    fn serialize_index_entries_debug(&self, payloads: &[Point]) -> Vec<u8> {
+        let mut rng = thread_rng();
+        let p: Vec<IndexEntry> = Vec::from_iter(
+            (0..payloads.len()).map(|id| IndexEntry::new(id, self.get_level(&mut rng))),
+        );
+        serde_json::to_vec_pretty(&p).expect("Could not encode index entries")
+    }
+
     fn deserialize_payloads_debug(&self, bytes: &Vec<u8>, manifest: &Manifest) -> Vec<Point> {
         let vecs: Vec<VecType> = serde_json::from_slice(bytes).expect("Could not decode payload");
         let ids = manifest.ids();
@@ -436,21 +509,24 @@ impl Engine {
 
     fn purge_old_manifest_list_data(&self, manifest_list: &ManifestList) -> io::Result<()> {
         for manifest in manifest_list.manifests.iter() {
-            remove_file(&manifest.loc)?;
+            remove_file(&manifest.data_loc)?;
         }
         Ok(())
     }
 
     fn combine_manifests(&self, to_combine: &Vec<Manifest>) -> Manifest {
+        // TODO: Combine index entries as well
+        // let mut combined_index_entries = Vec::new();
         let mut combined_points = Vec::new();
         let mut id_ranges = Vec::new();
         for manifest in to_combine.iter() {
             combined_points.extend(self.load_points_from_manifest(manifest));
             id_ranges.extend(manifest.id_ranges.clone());
         }
-        let path = self.loc.join("data-layer").join(get_rand_file_name());
-        let _written_bytes = self.save_serialized_payloads(&path, &combined_points);
-        Manifest::with_ranges(&path, id_ranges)
+        let data_path = self.loc.join(DATA_LAYER).join(get_rand_file_name());
+        let index_path = self.loc.join(INDEX_LAYER).join(get_rand_file_name());
+        let _written_bytes = self.save_serialized_payloads(&data_path, &combined_points);
+        Manifest::with_ranges(&data_path, &index_path, id_ranges)
     }
 }
 
@@ -668,6 +744,6 @@ mod tests {
 
         timeit!(check_sample(&mut e));
 
-        // remove_dir_all(path).unwrap();
+        remove_dir_all(path).unwrap();
     }
 }
