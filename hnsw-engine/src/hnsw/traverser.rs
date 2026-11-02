@@ -29,18 +29,13 @@ impl Traverser {
         }
     }
 
-    pub fn insert(&mut self, index: &mut impl Index, id: INT, level: INT) -> Result<(), Error> {
-        self.build_insertion_results(index, id, level)?;
+    pub fn insert(&mut self, index: &mut impl Index, id: INT) -> Result<(), Error> {
+        self.build_insertion_results(index, id)?;
         self.make_connections(index)?;
         Ok(())
     }
 
-    fn build_insertion_results(
-        &mut self,
-        index: &mut impl Index,
-        id: INT,
-        level: INT,
-    ) -> Result<(), Error> {
+    fn build_insertion_results(&mut self, index: &mut impl Index, id: INT) -> Result<(), Error> {
         trace!("Begin insertion results");
         // if id == index.get_ep() {
         //     warn!(
@@ -50,6 +45,9 @@ impl Traverser {
         //     return Ok(());
         // }
         self.setup_insert(index, id)?;
+        // TODO
+        // let level = index.get_level(id);
+        let level = 0;
         self.traverse_layers_above(index, id, level)?;
         self.traverse_layers_below(index, id, level)?;
         trace!("Finish insertion results");

@@ -39,9 +39,9 @@ macro_rules! timeit {
 }
 
 pub type INT = usize;
-const METADATA_LAYER: &str = "metadata-layer";
-const DATA_LAYER: &str = "data-layer";
-const INDEX_LAYER: &str = "index-layer";
+pub const METADATA_LAYER: &str = "metadata-layer";
+pub const DATA_LAYER: &str = "data-layer";
+pub const INDEX_LAYER: &str = "index-layer";
 const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 
 pub struct Engine {
@@ -49,6 +49,228 @@ pub struct Engine {
     cache: Cache<INT, Arc<Point>>,
     debug: bool,
     params: HNSW,
+}
+
+impl Engine {
+    pub fn new(loc: PathBuf, m: INT) -> io::Result<Self> {
+        let params = Self::init_at_loc(&loc, m)?;
+        let cache = Cache::builder()
+            .max_capacity(params.cache_cap as u64)
+            .eviction_policy(EvictionPolicy::lru())
+            .build();
+        let engine = Self {
+            loc: loc.clone(),
+            cache,
+            debug: env::var("HNSW_DEBUG").is_ok(),
+            params,
+        };
+        Ok(engine)
+    }
+
+    fn init_at_loc(loc: &PathBuf, dim: INT) -> io::Result<HNSW> {
+        if loc.exists() {
+            if loc.is_dir() {
+                Self::check_can_use_dir(&loc)?;
+            } else {
+                return Err(io::ErrorKind::NotADirectory.into());
+            }
+        } else {
+            match create_dir_all(&loc) {
+                Ok(()) => (),
+                Err(e) => match e.kind() {
+                    io::ErrorKind::AlreadyExists => (),
+                    _ => return Err(e),
+                },
+            };
+        }
+        Self::check_or_create_dir_structure(&loc, dim)
+    }
+
+    fn check_can_use_dir(loc: &PathBuf) -> io::Result<()> {
+        let check = |p| loc.join(p).exists();
+        let empty = loc.read_dir()?.count() == 0;
+        if empty {
+            Ok(())
+        } else if check(METADATA_LAYER) & check(DATA_LAYER) & check(INDEX_LAYER) {
+            Ok(())
+        } else {
+            Err(io::ErrorKind::DirectoryNotEmpty.into())
+        }
+    }
+
+    fn try_create_dir(path: PathBuf) -> io::Result<()> {
+        match create_dir(&path) {
+            Ok(()) => Ok(()),
+            Err(e) => match e.kind() {
+                io::ErrorKind::AlreadyExists => Ok(()),
+                _ => Err(e),
+            },
+        }
+    }
+
+    fn check_or_create_dir_structure(loc: &PathBuf, m: INT) -> io::Result<HNSW> {
+        for layer in LAYERS {
+            Self::try_create_dir(loc.join(layer))?;
+        }
+        Self::load_or_create_param_file(loc.join(METADATA_LAYER), m)
+    }
+
+    fn load_or_create_param_file(metadata_dir: PathBuf, m: INT) -> io::Result<HNSW> {
+        let param_file = metadata_dir.join("params.json");
+        match File::create_new(&param_file) {
+            Ok(mut f) => {
+                let params = HNSW::new(m);
+                let params_ser = serde_json::to_vec_pretty(&params)
+                    .expect("Could not serialize new params struct");
+                f.write_all(&params_ser);
+                Ok(params)
+            }
+            Err(e) => match e.kind() {
+                io::ErrorKind::AlreadyExists => Self::read_params_file(&param_file),
+                _ => Err(e),
+            },
+        }
+    }
+
+    fn read_params_file(path: &PathBuf) -> io::Result<HNSW> {
+        match File::open(path) {
+            Ok(mut f) => {
+                let mut buf = Vec::new();
+                f.read_to_end(&mut buf)?;
+                let params = serde_json::from_slice(&buf)?;
+                Ok(params)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn wait(&self, micros: u64) {
+        sleep(Duration::from_micros(micros));
+    }
+
+    fn write_lock(&self) {
+        let lock_file = self.loc.join(METADATA_LAYER).join("write-lock-file");
+        while lock_file.exists() {
+            self.wait(100);
+        }
+        self.create_lock_file(&lock_file);
+    }
+
+    fn create_lock_file(&self, lock_file: &PathBuf) {
+        match File::create_new(lock_file) {
+            Ok(_) => (),
+            Err(e) => match e.kind() {
+                io::ErrorKind::AlreadyExists => {
+                    self.write_lock();
+                }
+                _ => panic!("Could not create {lock_file:?}: {e}"),
+            },
+        }
+    }
+
+    fn write_unlock(&self) {
+        let lock_file = self.loc.join(METADATA_LAYER).join("write-lock-file");
+        if lock_file.exists() {
+            match remove_file(&lock_file) {
+                Ok(()) => (),
+                Err(e) => match e.kind() {
+                    io::ErrorKind::NotFound => (),
+                    _ => panic!("Could not delete {lock_file:?}: {e}"),
+                },
+            };
+        }
+    }
+
+    /// Also caches points stored in the same data file
+    fn load_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
+        let manifest_list = self.get_current_manifest_list()?;
+        if manifest_list.get_nb_points() <= id {
+            Ok(None)
+        } else {
+            if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
+                let points = manifest.load_data();
+                for p in points {
+                    if !self.cache.contains_key(&(p.id as INT)) {
+                        self.cache.insert(p.id as INT, Arc::new(p));
+                    }
+                }
+                Ok(self.cache.get(&id))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn insert(&mut self, points: &[Point]) -> io::Result<Manifest> {
+        self.check_points(points)?;
+        if points.len() > self.params.cache_cap as INT {
+            self.divide_and_insert(points)
+        } else {
+            self.write_lock();
+            let manifest = self.get_current_manifest_list()?.add_data(points)?;
+            // self.add_points_to_index(&manifest);
+            self.write_unlock();
+            Ok(manifest)
+        }
+    }
+
+    pub fn optimize(&mut self) -> io::Result<()> {
+        self.get_current_manifest_list()?
+            .optimize(self.params.cache_cap)
+    }
+
+    fn check_points(&mut self, points: &[Point]) -> io::Result<()> {
+        if points.len() == 0 {
+            return Err(ErrorKind::InvalidData.into());
+        } else if self.params.dim.is_none() {
+            self.update_dim(points)?;
+        }
+
+        let dim = self.params.dim.unwrap();
+        let nb_valid = points.iter().filter(|p| p.dim() == dim).count();
+        if nb_valid != points.len() {
+            Err(ErrorKind::InvalidData.into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn update_dim(&mut self, points: &[Point]) -> io::Result<()> {
+        self.params.set_dim(points[0].dim());
+        let param_file = self.loc.join(METADATA_LAYER).join("params.json");
+        let params_ser = serde_json::to_vec_pretty(&self.params)?;
+        let mut f = File::create(&param_file)?;
+        f.write_all(&params_ser);
+        Ok(())
+    }
+
+    fn divide_and_insert(&mut self, points: &[Point]) -> io::Result<Manifest> {
+        let mid = points.len() / 2;
+        let p1 = &points[..mid];
+        let p2 = &points[mid..];
+        self.insert(p1)?;
+        self.insert(p2)
+    }
+
+    fn add_points_to_index(&mut self, manifest: &Manifest) {
+        let mut inserter = Traverser::new();
+        let mut rng = thread_rng();
+        for id in manifest.ids() {
+            inserter.insert(self, id);
+        }
+    }
+
+    pub fn get_current_manifest_list(&self) -> io::Result<ManifestList> {
+        ManifestList::new(&self.loc)
+    }
+
+    pub fn get_number_of_manifests(&self) -> io::Result<INT> {
+        Ok(self.get_current_manifest_list()?.manifests.len())
+    }
+
+    pub fn get_nb_points(&self) -> io::Result<INT> {
+        Ok(self.get_current_manifest_list()?.get_nb_points())
+    }
 }
 
 impl Index for Engine {
@@ -122,412 +344,33 @@ impl Index for Engine {
     }
 
     fn get_nb_layers(&self) -> io::Result<INT> {
-        todo!("count how many layer files there are on disk")
+        // let entry = self.get_index_entry(self.get_ep());
+        todo!("count how many layers there are in EP's IndexEntry")
     }
 }
 
-impl Engine {
-    pub fn new(loc: PathBuf, m: INT) -> io::Result<Self> {
-        let params = Self::init_at_loc(&loc, m)?;
-        let cache = Cache::builder()
-            .max_capacity(params.cache_cap as u64)
-            .eviction_policy(EvictionPolicy::lru())
-            .build();
-        let engine = Self {
-            loc: loc.clone(),
-            cache,
-            debug: env::var("HNSW_DEBUG").is_ok(),
-            params,
-        };
-        Ok(engine)
-    }
+// impl Engine {
+//     fn get_index_entry(&self, id: INT) -> IndexEntry {
+//         self.get_current_manifest_list()
+//             .unwrap()
+//             .get_manifest_from_id(id)
+//             .unwrap()
+//             .load_index_entry(id)
+//     }
+// }
 
-    fn init_at_loc(loc: &PathBuf, dim: INT) -> io::Result<HNSW> {
-        if loc.exists() {
-            if loc.is_dir() {
-                Self::check_can_use_dir(&loc)?;
-            } else {
-                return Err(io::ErrorKind::NotADirectory.into());
-            }
+pub fn get_level(ml: f32, rng: &mut ThreadRng) -> INT {
+    let mut rand_nb = 0.0;
+    loop {
+        if (rand_nb == 0.0) | (rand_nb == 1.0) {
+            rand_nb = rng.r#gen::<f32>();
         } else {
-            match create_dir_all(&loc) {
-                Ok(()) => (),
-                Err(e) => match e.kind() {
-                    io::ErrorKind::AlreadyExists => (),
-                    _ => return Err(e),
-                },
-            };
-        }
-        Self::check_or_create_dir_structure(&loc, dim)
-    }
-
-    fn check_can_use_dir(loc: &PathBuf) -> io::Result<()> {
-        let check = |p| loc.join(p).exists();
-        let empty = loc.read_dir()?.count() == 0;
-        if empty {
-            Ok(())
-        } else if check("metadata-layer") & check("data-layer") & check("index-layer") {
-            Ok(())
-        } else {
-            Err(io::ErrorKind::DirectoryNotEmpty.into())
+            break;
         }
     }
 
-    fn try_create_dir(path: PathBuf) -> io::Result<()> {
-        match create_dir(&path) {
-            Ok(()) => Ok(()),
-            Err(e) => match e.kind() {
-                io::ErrorKind::AlreadyExists => Ok(()),
-                _ => Err(e),
-            },
-        }
-    }
-
-    fn check_or_create_dir_structure(loc: &PathBuf, m: INT) -> io::Result<HNSW> {
-        for layer in LAYERS {
-            Self::try_create_dir(loc.join(layer))?;
-        }
-        Self::load_or_create_param_file(loc.join("metadata-layer"), m)
-    }
-
-    fn load_or_create_param_file(metadata_dir: PathBuf, m: INT) -> io::Result<HNSW> {
-        let param_file = metadata_dir.join("params.json");
-        match File::create_new(&param_file) {
-            Ok(mut f) => {
-                let params = HNSW::new(m);
-                let params_ser = serde_json::to_vec_pretty(&params)
-                    .expect("Could not serialize new params struct");
-                f.write_all(&params_ser);
-                Ok(params)
-            }
-            Err(e) => match e.kind() {
-                io::ErrorKind::AlreadyExists => Self::read_params_file(&param_file),
-                _ => Err(e),
-            },
-        }
-    }
-    fn read_params_file(path: &PathBuf) -> io::Result<HNSW> {
-        match File::open(path) {
-            Ok(mut f) => {
-                let mut buf = Vec::new();
-                f.read_to_end(&mut buf)?;
-                let params = serde_json::from_slice(&buf)?;
-                Ok(params)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    fn wait(&self, micros: u64) {
-        sleep(Duration::from_micros(micros));
-    }
-
-    fn write_lock(&self) {
-        let lock_file = self.loc.join("metadata-layer").join("write-lock-file");
-        while lock_file.exists() {
-            self.wait(100);
-        }
-        self.create_lock_file(&lock_file);
-    }
-
-    fn create_lock_file(&self, lock_file: &PathBuf) {
-        match File::create_new(lock_file) {
-            Ok(_) => (),
-            Err(e) => match e.kind() {
-                io::ErrorKind::AlreadyExists => {
-                    self.write_lock();
-                }
-                _ => panic!("Could not create {lock_file:?}: {e}"),
-            },
-        }
-    }
-
-    fn write_unlock(&self) {
-        let lock_file = self.loc.join("metadata-layer").join("write-lock-file");
-        if lock_file.exists() {
-            match remove_file(&lock_file) {
-                Ok(()) => (),
-                Err(e) => match e.kind() {
-                    io::ErrorKind::NotFound => (),
-                    _ => panic!("Could not delete {lock_file:?}: {e}"),
-                },
-            };
-        }
-    }
-
-    /// Also caches points stored in the same data file
-    fn load_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
-        let manifest_list = self.get_current_manifest_list()?;
-        if manifest_list.get_nb_points() <= id {
-            Ok(None)
-        } else {
-            if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
-                let points = self.load_points_from_manifest(manifest);
-                for p in points {
-                    if !self.cache.contains_key(&(p.id as INT)) {
-                        self.cache.insert(p.id as INT, Arc::new(p));
-                    }
-                }
-                Ok(self.cache.get(&id))
-            } else {
-                Ok(None)
-            }
-        }
-    }
-
-    pub fn insert(&mut self, payloads: &[Point]) -> io::Result<Manifest> {
-        self.check_payloads(payloads)?;
-        if payloads.len() > self.params.cache_cap as INT {
-            self.divide_and_insert(payloads)
-        } else {
-            self.write_lock();
-            let mut manifest_list = self.get_current_manifest_list()?;
-            let manifest = self.add_payloads_to_store(&mut manifest_list, payloads);
-            // self.add_payloads_to_index(&manifest);
-            self.write_unlock();
-            Ok(manifest)
-        }
-    }
-
-    fn check_payloads(&mut self, payloads: &[Point]) -> io::Result<()> {
-        if payloads.len() == 0 {
-            return Err(ErrorKind::InvalidData.into());
-        } else if self.params.dim.is_none() {
-            self.update_dim(payloads)?;
-        }
-
-        let dim = self.params.dim.unwrap();
-        let nb_valid = payloads.iter().filter(|p| p.dim() == dim).count();
-        if nb_valid != payloads.len() {
-            Err(ErrorKind::InvalidData.into())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn update_dim(&mut self, payloads: &[Point]) -> io::Result<()> {
-        self.params.set_dim(payloads[0].dim());
-        let param_file = self.loc.join("metadata-layer").join("params.json");
-        let params_ser = serde_json::to_vec_pretty(&self.params)?;
-        let mut f = File::create(&param_file)?;
-        f.write_all(&params_ser);
-        Ok(())
-    }
-
-    fn divide_and_insert(&mut self, payloads: &[Point]) -> io::Result<Manifest> {
-        let mid = payloads.len() / 2;
-        let p1 = &payloads[..mid];
-        let p2 = &payloads[mid..];
-        self.insert(p1)?;
-        self.insert(p2)
-    }
-
-    fn get_level(&self, rng: &mut ThreadRng) -> INT {
-        let mut rand_nb = 0.0;
-        loop {
-            if (rand_nb == 0.0) | (rand_nb == 1.0) {
-                rand_nb = rng.r#gen::<f32>();
-            } else {
-                break;
-            }
-        }
-
-        let level = (-rand_nb.ln() * self.params.ml).floor() as usize;
-        level
-    }
-
-    fn add_payloads_to_index(&mut self, manifest: &Manifest) {
-        let mut inserter = Traverser::new();
-        let mut rng = thread_rng();
-        for id in manifest.ids() {
-            inserter.insert(self, id, self.get_level(&mut rng));
-        }
-    }
-
-    fn load_points_from_manifest(&self, manifest: &Manifest) -> Vec<Point> {
-        let mut bytes = vec![];
-        File::open(&manifest.data_loc)
-            .expect("Could not open payload file")
-            .read_to_end(&mut bytes)
-            .expect("Could not read payload file");
-        self.deserialize_payloads(&bytes, manifest)
-    }
-
-    pub fn get_current_manifest_list(&self) -> io::Result<ManifestList> {
-        ManifestList::new(&self.loc)
-    }
-
-    pub fn get_number_of_manifests(&self) -> io::Result<INT> {
-        Ok(self.get_current_manifest_list()?.manifests.len())
-    }
-
-    pub fn get_nb_points(&self) -> io::Result<INT> {
-        Ok(self.get_current_manifest_list()?.get_nb_points())
-    }
-
-    fn add_payloads_to_store(
-        &self,
-        manifest_list: &mut ManifestList,
-        mut payloads: &[Point],
-    ) -> Manifest {
-        let new_manifest = self.save_payloads(manifest_list, &mut payloads);
-        manifest_list.update(&new_manifest);
-        new_manifest
-    }
-
-    fn save_payloads(&self, manifest_list: &ManifestList, payloads: &[Point]) -> Manifest {
-        let first = manifest_list.get_nb_points();
-        let last = first + payloads.len() as INT - 1;
-        let data_path = self.loc.join(DATA_LAYER).join(get_rand_file_name());
-        let index_path = self.loc.join(INDEX_LAYER).join(get_rand_file_name());
-        self.save_serialized_payloads(&data_path, payloads);
-        self.save_serialized_index_entries(&index_path, payloads);
-        Manifest::new(&data_path, &index_path, first, last)
-    }
-
-    fn save_serialized_payloads(&self, path: &PathBuf, payloads: &[Point]) -> INT {
-        let mut file = match File::create_new(path) {
-            Ok(f) => f,
-            Err(e) => panic!("Could not create payload file at {path:?}: {e}"),
-        };
-        let payloads_ser = self.serialize_payloads(&payloads);
-        match file.write(&payloads_ser) {
-            Ok(bytes_written) => bytes_written,
-            Err(e) => panic!("Could not write payload to file {path:?}: {e}"),
-        }
-    }
-
-    fn save_serialized_index_entries(&self, path: &PathBuf, payloads: &[Point]) -> INT {
-        let mut file = match File::create_new(path) {
-            Ok(f) => f,
-            Err(e) => panic!("Could not create index file at {path:?}: {e}"),
-        };
-        let entries_ser = self.serialize_index_entries(&payloads);
-        match file.write(&entries_ser) {
-            Ok(bytes_written) => bytes_written,
-            Err(e) => panic!("Could not write index to file {path:?}: {e}"),
-        }
-    }
-
-    fn serialize_index_entries(&self, payloads: &[Point]) -> Vec<u8> {
-        if self.debug {
-            self.serialize_index_entries_debug(payloads)
-        } else {
-            self.serialize_index_entries_uncompressed(payloads)
-        }
-    }
-
-    fn serialize_index_entries_uncompressed(&self, payloads: &[Point]) -> Vec<u8> {
-        let mut rng = thread_rng();
-        let p: Vec<IndexEntry> = Vec::from_iter(
-            (0..payloads.len()).map(|id| IndexEntry::new(id, self.get_level(&mut rng))),
-        );
-        let ser = rmp_serde::encode::to_vec(&p).expect("Could not serialize index entries");
-        ser
-    }
-
-    fn serialize_payloads(&self, payloads: &[Point]) -> Vec<u8> {
-        if self.debug {
-            self.serialize_payloads_debug(payloads)
-        } else {
-            self.serialize_payloads_uncompressed(payloads)
-        }
-    }
-
-    fn serialize_payloads_uncompressed(&self, payloads: &[Point]) -> Vec<u8> {
-        let p: Vec<&VecType> = payloads.iter().map(|p| &p.vector).collect();
-        let ser = rmp_serde::encode::to_vec(&p).expect("Could not serialize payload");
-        ser
-    }
-
-    fn deserialize_payloads(&self, bytes: &Vec<u8>, manifest: &Manifest) -> Vec<Point> {
-        if self.debug {
-            self.deserialize_payloads_debug(bytes, manifest)
-        } else {
-            self.deserialize_payloads_uncompressed(bytes, manifest)
-        }
-    }
-
-    fn deserialize_payloads_uncompressed(
-        &self,
-        bytes: &Vec<u8>,
-        manifest: &Manifest,
-    ) -> Vec<Point> {
-        let vecs: Vec<VecType> =
-            rmp_serde::decode::from_slice(&bytes).expect("Could not decode payload");
-        let mut points = vec![];
-        for (v, id) in vecs.iter().zip_eq(manifest.ordered_ids()) {
-            points.push(Point::with_vec_and_id(v, id));
-        }
-        points
-    }
-
-    fn serialize_payloads_debug(&self, payloads: &[Point]) -> Vec<u8> {
-        let p: Vec<&VecType> = payloads.iter().map(|p| &p.vector).collect();
-        serde_json::to_vec_pretty(&p).expect("Could not encode payload")
-    }
-
-    fn serialize_index_entries_debug(&self, payloads: &[Point]) -> Vec<u8> {
-        let mut rng = thread_rng();
-        let p: Vec<IndexEntry> = Vec::from_iter(
-            (0..payloads.len()).map(|id| IndexEntry::new(id, self.get_level(&mut rng))),
-        );
-        serde_json::to_vec_pretty(&p).expect("Could not encode index entries")
-    }
-
-    fn deserialize_payloads_debug(&self, bytes: &Vec<u8>, manifest: &Manifest) -> Vec<Point> {
-        let vecs: Vec<VecType> = serde_json::from_slice(bytes).expect("Could not decode payload");
-        let ids = manifest.ids();
-        let mut points = vec![];
-        for (v, id) in vecs.iter().zip_eq(ids) {
-            points.push(Point::with_vec_and_id(v, id));
-        }
-        points
-    }
-
-    pub fn optimize(&self) -> io::Result<ManifestList> {
-        let old_manifest_list = self.get_current_manifest_list()?;
-        let op_plan = old_manifest_list.get_optimization_plan(self.params.cache_cap);
-
-        let mut optimized_manifest_list = Vec::new();
-        for to_combine in op_plan.iter() {
-            optimized_manifest_list.push(self.combine_manifests(to_combine));
-        }
-        let new_manifest_list = ManifestList::from_manifests(&self.loc, optimized_manifest_list)?;
-        remove_file(&old_manifest_list.loc)?;
-        self.remove_old_manifest_lists(&old_manifest_list)?;
-        self.purge_old_manifest_list_data(&old_manifest_list)?;
-        Ok(new_manifest_list)
-    }
-
-    fn remove_old_manifest_lists(&self, manifest_list: &ManifestList) -> io::Result<()> {
-        for old_manifest_list in manifest_list.get_prev_manifest_list_paths()?.iter() {
-            remove_file(&old_manifest_list)?;
-        }
-        Ok(())
-    }
-
-    fn purge_old_manifest_list_data(&self, manifest_list: &ManifestList) -> io::Result<()> {
-        for manifest in manifest_list.manifests.iter() {
-            remove_file(&manifest.data_loc)?;
-        }
-        Ok(())
-    }
-
-    fn combine_manifests(&self, to_combine: &Vec<Manifest>) -> Manifest {
-        // TODO: Combine index entries as well
-        // let mut combined_index_entries = Vec::new();
-        let mut combined_points = Vec::new();
-        let mut id_ranges = Vec::new();
-        for manifest in to_combine.iter() {
-            combined_points.extend(self.load_points_from_manifest(manifest));
-            id_ranges.extend(manifest.id_ranges.clone());
-        }
-        let data_path = self.loc.join(DATA_LAYER).join(get_rand_file_name());
-        let index_path = self.loc.join(INDEX_LAYER).join(get_rand_file_name());
-        let _written_bytes = self.save_serialized_payloads(&data_path, &combined_points);
-        Manifest::with_ranges(&data_path, &index_path, id_ranges)
-    }
+    let level = (-rand_nb.ln() * ml).floor() as usize;
+    level
 }
 
 #[cfg(test)]
@@ -744,6 +587,6 @@ mod tests {
 
         timeit!(check_sample(&mut e));
 
-        remove_dir_all(path).unwrap();
+        // remove_dir_all(path).unwrap();
     }
 }
