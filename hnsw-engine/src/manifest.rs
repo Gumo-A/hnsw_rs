@@ -1,18 +1,19 @@
 use std::{
     collections::HashSet,
+    env,
     fs::{File, remove_file},
     io::{self, BufReader, BufWriter, Read, Write},
     path::PathBuf,
 };
 
 use itertools::Itertools;
-use log::debug;
 use points::point::{Point, VecType};
+use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     FileName,
-    engine::{DATA_LAYER, INDEX_LAYER, INT},
+    engine::{DATA_LAYER, INDEX_LAYER, INT, METADATA_LAYER, get_level},
     get_rand_file_name,
     index::IndexEntry,
     path_to_f_name_str,
@@ -28,24 +29,20 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    pub fn new(data_loc: &PathBuf, index_loc: &PathBuf, first_id: INT, last_id: INT) -> Self {
+    pub fn new(data_loc: PathBuf, index_loc: PathBuf, first_id: INT, last_id: INT) -> Self {
         let manifest = Manifest {
-            data_loc: data_loc.clone(),
-            index_loc: index_loc.clone(),
+            data_loc,
+            index_loc,
             ids: HashSet::from_iter(first_id..=last_id),
             id_ranges: vec![(first_id, last_id)],
         };
         manifest
     }
 
-    pub fn with_ranges(
-        data_loc: &PathBuf,
-        index_loc: &PathBuf,
-        id_ranges: Vec<(INT, INT)>,
-    ) -> Self {
+    pub fn with_ranges(data_loc: PathBuf, index_loc: PathBuf, id_ranges: Vec<(INT, INT)>) -> Self {
         let mut manifest = Manifest {
-            data_loc: data_loc.clone(),
-            index_loc: index_loc.clone(),
+            data_loc,
+            index_loc,
             ids: HashSet::new(),
             id_ranges,
         };
@@ -79,59 +76,119 @@ impl Manifest {
             .flat_map(|(first, last)| *first..=*last)
     }
 
-    pub fn load_entries(&self) -> Vec<IndexEntry> {
+    pub fn read_entries(&self) -> Vec<IndexEntry> {
         let mut bytes = vec![];
         File::open(&self.index_loc)
             .expect("Could not open entry file")
             .read_to_end(&mut bytes)
             .expect("Could not read entry file");
-        self.deserialize_entries(&bytes)
+        if env::var("HNSW_DEBUG").is_ok() {
+            match self.deserialize_entries_debug(&bytes) {
+                Ok(r) => r,
+                Err(_) => self.deserialize_entries(&bytes),
+            }
+        } else {
+            self.deserialize_entries(&bytes)
+        }
     }
 
-    pub fn load_data(&self) -> Vec<Point> {
+    pub fn read_data(&self) -> Vec<Point> {
         let mut bytes = vec![];
         File::open(&self.data_loc)
             .expect("Could not open data file")
             .read_to_end(&mut bytes)
             .expect("Could not read data file");
-        self.deserialize_data(&bytes)
+        if env::var("HNSW_DEBUG").is_ok() {
+            match self.deserialize_data_debug(&bytes) {
+                Ok(r) => r,
+                Err(_) => self.deserialize_data(&bytes),
+            }
+        } else {
+            self.deserialize_data(&bytes)
+        }
     }
 
-    fn deserialize_data_uncompressed(&self, bytes: &Vec<u8>) -> Vec<Point> {
+    fn write_data(&self, data: &[Point]) -> INT {
+        let mut file = match File::create_new(&self.data_loc) {
+            Ok(f) => f,
+            Err(e) => panic!("Could not create data file at {:?}: {e}", self.data_loc),
+        };
+        let decoded_data = if env::var("HNSW_DEBUG").is_ok() {
+            match self.serialize_data_debug(&data) {
+                Ok(r) => r,
+                Err(_) => self.serialize_data(&data),
+            }
+        } else {
+            self.serialize_data(&data)
+        };
+        match file.write(&decoded_data) {
+            Ok(bytes_written) => bytes_written,
+            Err(e) => panic!("Could not write data to file {:?}: {e}", self.data_loc),
+        }
+    }
+
+    fn write_entries(&self, entries: &[IndexEntry]) -> INT {
+        let mut file = match File::create_new(&self.index_loc) {
+            Ok(f) => f,
+            Err(e) => panic!("Could not create index file at {:?}: {e}", self.index_loc),
+        };
+        let encoded_entries = if env::var("HNSW_DEBUG").is_ok() {
+            match self.serialize_entries_debug(&entries) {
+                Ok(r) => r,
+                Err(_) => self.serialize_entries(&entries),
+            }
+        } else {
+            self.serialize_entries(&entries)
+        };
+        match file.write(&encoded_entries) {
+            Ok(bytes_written) => bytes_written,
+            Err(e) => panic!("Could not write index to file {:?}: {e}", self.index_loc),
+        }
+    }
+
+    fn serialize_entries(&self, data: &[IndexEntry]) -> Vec<u8> {
+        rmp_serde::encode::to_vec(data).expect("Could not encode index entries")
+    }
+
+    fn serialize_data(&self, data: &[Point]) -> Vec<u8> {
+        let p: Vec<&VecType> = data.iter().map(|p| &p.vector).collect();
+        rmp_serde::encode::to_vec(&p).expect("Could not encode data")
+    }
+
+    fn serialize_data_debug(&self, data: &[Point]) -> io::Result<Vec<u8>> {
+        let p: Vec<&VecType> = data.iter().map(|p| &p.vector).collect();
+        Ok(serde_json::to_vec_pretty(&p)?)
+    }
+
+    fn serialize_entries_debug(&self, data: &[IndexEntry]) -> io::Result<Vec<u8>> {
+        Ok(serde_json::to_vec_pretty(&data)?)
+    }
+
+    fn deserialize_data(&self, bytes: &Vec<u8>) -> Vec<Point> {
         let vecs: Vec<VecType> =
             rmp_serde::decode::from_slice(&bytes).expect("Could not decode data");
-        let mut points = vec![];
-        for (v, id) in vecs.iter().zip_eq(self.ordered_ids()) {
-            points.push(Point::with_vec_and_id(v, id));
-        }
-        points
-    }
-
-    fn deserialize_data_debug(&self, bytes: &Vec<u8>) -> Vec<Point> {
-        let vecs: Vec<VecType> = serde_json::from_slice(bytes).expect("Could not decode data");
         Vec::from_iter(
             vecs.iter()
-                .zip_eq(self.ids())
+                .zip_eq(self.ordered_ids())
                 .map(|(v, id)| Point::with_vec_and_id(v, id)),
         )
     }
 
+    fn deserialize_data_debug(&self, bytes: &Vec<u8>) -> io::Result<Vec<Point>> {
+        let vecs: Vec<VecType> = serde_json::from_slice(bytes)?;
+        Ok(Vec::from_iter(
+            vecs.iter()
+                .zip_eq(self.ordered_ids())
+                .map(|(v, id)| Point::with_vec_and_id(v, id)),
+        ))
+    }
+
     fn deserialize_entries(&self, bytes: &Vec<u8>) -> Vec<IndexEntry> {
-        // self.deserialize_entries_debug(bytes)
-        self.deserialize_entries_uncompressed(bytes)
-    }
-
-    fn deserialize_data(&self, bytes: &Vec<u8>) -> Vec<Point> {
-        // self.deserialize_data_debug(bytes)
-        self.deserialize_data_uncompressed(bytes)
-    }
-
-    fn deserialize_entries_uncompressed(&self, bytes: &Vec<u8>) -> Vec<IndexEntry> {
         rmp_serde::decode::from_slice(&bytes).expect("Could not decode entries")
     }
 
-    fn deserialize_entries_debug(&self, bytes: &Vec<u8>) -> Vec<IndexEntry> {
-        serde_json::from_slice(bytes).expect("Could not decode entries")
+    fn deserialize_entries_debug(&self, bytes: &Vec<u8>) -> io::Result<Vec<IndexEntry>> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 }
 
@@ -143,7 +200,7 @@ pub struct ManifestList {
 
 impl ManifestList {
     pub fn new(loc: &PathBuf) -> io::Result<Self> {
-        let metadata_dir = loc.join("metadata-layer");
+        let metadata_dir = loc.join(METADATA_LAYER);
         match Self::read_current_manifest_list(&metadata_dir) {
             Ok(s) => Ok(s),
             Err(e) => match e.kind() {
@@ -154,100 +211,55 @@ impl ManifestList {
     }
 
     pub fn from_manifests(loc: &PathBuf, manifests: Vec<Manifest>) -> io::Result<Self> {
-        let metadata_dir = loc.join("metadata-layer");
-        let loc = Self::get_next_manifest_list_path(&metadata_dir)?;
-        let writer = BufWriter::new(
-            File::create_new(&loc).expect("Could not create next manifest list file"),
-        );
-        let s = Self { manifests, loc };
-        serde_json::to_writer_pretty(writer, &s)
-            .expect("Could not write contents to new manifest list file");
+        let s = Self {
+            manifests,
+            loc: Self::get_next_manifest_list_path(&loc.join(METADATA_LAYER))?,
+        };
+        Self::write_self(&s)?;
         Ok(s)
     }
 
-    pub fn add_data(&mut self, mut data: &[Point]) -> io::Result<Manifest> {
-        let new_manifest = self.write_new_data(&mut data);
+    pub fn add_data(&mut self, mut data: &[Point], ml: f32) -> io::Result<Manifest> {
+        let new_manifest = self.write_new_data(&mut data, ml);
         self.update(&new_manifest)?;
         Ok(new_manifest)
     }
 
-    fn write_new_data(&self, data: &[Point]) -> Manifest {
+    fn write_new_data(&self, data: &[Point], ml: f32) -> Manifest {
         let first = self.get_nb_points();
         let last = first + data.len() as INT - 1;
         let data_path = self.get_data_layer().join(get_rand_file_name());
         let index_path = self.get_index_layer().join(get_rand_file_name());
-        self.save_serialized_data(&data_path, data);
-        self.save_serialized_entries(&index_path, &self.gen_entries(data));
-        Manifest::new(&data_path, &index_path, first, last)
+        let manifest = Manifest::new(data_path, index_path, first, last);
+        manifest.write_data(data);
+        manifest.write_entries(&self.gen_entries(data, ml));
+        manifest
     }
 
-    fn gen_entries(&self, data: &[Point]) -> Vec<IndexEntry> {
-        Vec::from_iter(data.iter().map(|p| IndexEntry::new(p.id, 0)))
-    }
-
-    fn save_serialized_data(&self, path: &PathBuf, data: &[Point]) -> INT {
-        let mut file = match File::create_new(path) {
-            Ok(f) => f,
-            Err(e) => panic!("Could not create data file at {path:?}: {e}"),
-        };
-        match file.write(&self.serialize_data(&data)) {
-            Ok(bytes_written) => bytes_written,
-            Err(e) => panic!("Could not write data to file {path:?}: {e}"),
-        }
-    }
-
-    fn save_serialized_entries(&self, path: &PathBuf, data: &[IndexEntry]) -> INT {
-        let mut file = match File::create_new(path) {
-            Ok(f) => f,
-            Err(e) => panic!("Could not create index file at {path:?}: {e}"),
-        };
-        match file.write(&self.serialize_index_entries(&data)) {
-            Ok(bytes_written) => bytes_written,
-            Err(e) => panic!("Could not write index to file {path:?}: {e}"),
-        }
-    }
-
-    fn serialize_index_entries_uncompressed(&self, data: &[IndexEntry]) -> Vec<u8> {
-        rmp_serde::encode::to_vec(data).expect("Could not serialize index entries")
-    }
-
-    fn serialize_index_entries(&self, data: &[IndexEntry]) -> Vec<u8> {
-        // self.serialize_index_entries_debug(data)
-        self.serialize_index_entries_uncompressed(data)
-    }
-
-    fn serialize_data(&self, data: &[Point]) -> Vec<u8> {
-        // self.serialize_data_debug(data)
-        self.serialize_data_uncompressed(data)
-    }
-
-    fn serialize_data_uncompressed(&self, data: &[Point]) -> Vec<u8> {
-        let p: Vec<&VecType> = data.iter().map(|p| &p.vector).collect();
-        rmp_serde::encode::to_vec(&p).expect("Could not serialize data")
-    }
-
-    fn serialize_data_debug(&self, data: &[Point]) -> Vec<u8> {
-        let p: Vec<&VecType> = data.iter().map(|p| &p.vector).collect();
-        serde_json::to_vec_pretty(&p).expect("Could not encode data")
-    }
-
-    fn serialize_index_entries_debug(&self, data: &[IndexEntry]) -> Vec<u8> {
-        let p: Vec<IndexEntry> = Vec::from_iter((0..data.len()).map(|id| IndexEntry::new(id, 0)));
-        serde_json::to_vec_pretty(&p).expect("Could not encode index entries")
+    fn gen_entries(&self, data: &[Point], ml: f32) -> Vec<IndexEntry> {
+        Vec::from_iter(
+            data.iter()
+                .map(|p| IndexEntry::new(p.id, get_level(ml, &mut thread_rng()))),
+        )
     }
 
     fn create_first_manifest_list(metadata_dir: PathBuf) -> io::Result<Self> {
-        let first_manifest_list_path = metadata_dir.join("0-manifest-list.json");
-        let writer = BufWriter::new(
-            File::create_new(&first_manifest_list_path)
-                .expect("Could not create first manifest list file"),
-        );
         let manifest_list = ManifestList {
-            loc: first_manifest_list_path,
+            loc: metadata_dir.join("0-manifest-list.json"),
             manifests: Vec::new(),
         };
-        serde_json::to_writer_pretty(writer, &manifest_list)?;
+        Self::write_self(&manifest_list)?;
         Ok(manifest_list)
+    }
+
+    fn write_self(manifest_list: &ManifestList) -> io::Result<()> {
+        let writer = BufWriter::new(File::create_new(&manifest_list.loc)?);
+        if env::var("HNSW_DEBUG").is_ok() {
+            serde_json::to_writer_pretty(writer, &manifest_list)?;
+        } else {
+            serde_json::to_writer(writer, &manifest_list)?;
+        }
+        Ok(())
     }
 
     fn read_current_manifest_list(metadata_dir: &PathBuf) -> io::Result<Self> {
@@ -325,20 +337,15 @@ impl ManifestList {
 
     /// we assume we have the write lock here
     pub fn update(&mut self, new_manifest: &Manifest) -> io::Result<()> {
-        let new_path = Self::get_next_manifest_list_path(
+        self.loc = Self::get_next_manifest_list_path(
             &self
                 .loc
                 .parent()
                 .expect("Could not get metadata dir from manifest list path")
                 .to_path_buf(),
         )?;
-        let writer = BufWriter::new(
-            File::create_new(&new_path).expect("Could not create next manifest list file"),
-        );
-        self.loc = new_path;
         self.manifests.push(new_manifest.clone());
-        serde_json::to_writer_pretty(writer, &self)
-            .expect("Could not write contents to new manifest list file");
+        Self::write_self(&self)?;
         Ok(())
     }
 
@@ -400,15 +407,16 @@ impl ManifestList {
         let mut combined_entries = Vec::new();
         let mut id_ranges = Vec::new();
         for manifest in to_combine.iter() {
-            combined_points.extend(manifest.load_data());
-            combined_entries.extend(manifest.load_entries());
+            combined_points.extend(manifest.read_data());
+            combined_entries.extend(manifest.read_entries());
             id_ranges.extend(manifest.id_ranges.clone());
         }
         let data_path = self.get_data_layer().join(get_rand_file_name());
         let index_path = self.get_index_layer().join(get_rand_file_name());
-        self.save_serialized_data(&data_path, &combined_points);
-        self.save_serialized_entries(&index_path, &combined_entries);
-        Manifest::with_ranges(&data_path, &index_path, id_ranges)
+        let manifest = Manifest::with_ranges(data_path, index_path, id_ranges);
+        manifest.write_data(&combined_points);
+        manifest.write_entries(&combined_entries);
+        manifest
     }
 
     fn get_optimization_plan(&self, optimal_size: INT) -> Vec<Vec<Manifest>> {

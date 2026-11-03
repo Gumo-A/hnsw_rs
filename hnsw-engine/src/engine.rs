@@ -47,7 +47,6 @@ const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 pub struct Engine {
     loc: PathBuf,
     cache: Cache<INT, Arc<Point>>,
-    debug: bool,
     params: HNSW,
 }
 
@@ -61,7 +60,6 @@ impl Engine {
         let engine = Self {
             loc: loc.clone(),
             cache,
-            debug: env::var("HNSW_DEBUG").is_ok(),
             params,
         };
         Ok(engine)
@@ -120,8 +118,11 @@ impl Engine {
         match File::create_new(&param_file) {
             Ok(mut f) => {
                 let params = HNSW::new(m);
-                let params_ser = serde_json::to_vec_pretty(&params)
-                    .expect("Could not serialize new params struct");
+                let params_ser = if env::var("HNSW_DEBUG").is_ok() {
+                    serde_json::to_vec_pretty(&params)?
+                } else {
+                    serde_json::to_vec(&params)?
+                };
                 f.write_all(&params_ser);
                 Ok(params)
             }
@@ -188,7 +189,7 @@ impl Engine {
             Ok(None)
         } else {
             if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
-                let points = manifest.load_data();
+                let points = manifest.read_data();
                 for p in points {
                     if !self.cache.contains_key(&(p.id as INT)) {
                         self.cache.insert(p.id as INT, Arc::new(p));
@@ -207,7 +208,9 @@ impl Engine {
             self.divide_and_insert(points)
         } else {
             self.write_lock();
-            let manifest = self.get_current_manifest_list()?.add_data(points)?;
+            let manifest = self
+                .get_current_manifest_list()?
+                .add_data(points, self.params.ml)?;
             // self.add_points_to_index(&manifest);
             self.write_unlock();
             Ok(manifest)
@@ -238,7 +241,11 @@ impl Engine {
     fn update_dim(&mut self, points: &[Point]) -> io::Result<()> {
         self.params.set_dim(points[0].dim());
         let param_file = self.loc.join(METADATA_LAYER).join("params.json");
-        let params_ser = serde_json::to_vec_pretty(&self.params)?;
+        let params_ser = if env::var("HNSW_DEBUG").is_ok() {
+            serde_json::to_vec_pretty(&self.params)?
+        } else {
+            serde_json::to_vec(&self.params)?
+        };
         let mut f = File::create(&param_file)?;
         f.write_all(&params_ser);
         Ok(())
