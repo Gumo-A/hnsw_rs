@@ -1,3 +1,5 @@
+use std::io;
+
 use graph::NodeID;
 use graph::dist::Dist;
 use log::{info, trace};
@@ -37,17 +39,11 @@ impl Traverser {
 
     fn build_insertion_results(&mut self, index: &mut impl Index, id: INT) -> Result<(), Error> {
         trace!("Begin insertion results");
-        // if id == index.get_ep() {
-        //     warn!(
-        //         "Tried to build insertion results for point {}, but it is the EP, not building results",
-        //         id
-        //     );
-        //     return Ok(());
-        // }
+        let level = match index.get_level(id).map_err(Self::handle_io_error)? {
+            Some(x) => x,
+            None => return Err(Error::Other),
+        };
         self.setup_insert(index, id)?;
-        // TODO
-        // let level = index.get_level(id);
-        let level = 0;
         self.traverse_layers_above(index, id, level)?;
         self.traverse_layers_below(index, id, level)?;
         trace!("Finish insertion results");
@@ -58,22 +54,22 @@ impl Traverser {
         self.results.clear_all();
     }
 
+    fn handle_io_error(e: io::Error) -> Error {
+        match e.kind() {
+            _ => panic!("IO error: {e:?}"),
+        }
+    }
+
     fn setup_insert(&mut self, index: &mut impl Index, id: INT) -> Result<(), Error> {
         trace!("Setting up insertion");
         self.clear_results();
-
+        let ep = index.get_ep();
         let dist2ep = index
-            .distance(index.get_ep(), id)
-            .expect("IO error computing distance")
+            .distance(ep, id)
+            .map_err(Self::handle_io_error)?
             .expect("Could not compute distance between EP and point to insert.");
-        trace!(
-            "Setting up insertion. Distance between {0} and EP {1} is {dist2ep}",
-            id,
-            index.get_ep()
-        );
-
-        self.results
-            .insert_selected(Dist::new(index.get_ep(), dist2ep));
+        trace!("Distance between {id} and EP {ep} is {dist2ep}",);
+        self.results.insert_selected(Dist::new(ep, dist2ep));
         Ok(())
     }
 
@@ -83,21 +79,12 @@ impl Traverser {
         id: INT,
         level: INT,
     ) -> Result<(), Error> {
-        trace!("Traversing Layers above query point");
-        let layers_len = index
-            .get_nb_layers()
-            .expect("IO error getting nb of layers");
-
-        for layer_nb in (level as usize + 1..layers_len).rev() {
-            trace!(
-                "Looking for nearest neighbors for point {0} in layer {layer_nb}",
-                id,
-            );
-            trace!(
-                "The entry point to the layer is {:?}",
-                self.results.selected
-            );
-            self.search_layer(layer_nb, &Query::ID(id), index, 1)?;
+        trace!("Traversing levels above query point");
+        let nb_levels = index.get_nb_levels().map_err(Self::handle_io_error)?;
+        for level_nb in (level + 1..nb_levels).rev() {
+            trace!("Searching NNs for {id} at level {level_nb}",);
+            trace!("Entry point is {:?}", self.results.selected);
+            self.search_level(level_nb, &Query::ID(id), index, 1)?;
         }
         Ok(())
     }
@@ -108,26 +95,16 @@ impl Traverser {
         id: INT,
         level: INT,
     ) -> Result<(), Error> {
-        trace!("Traversing Layers below or equal to query point");
-        let bound = (level as usize).min(
-            index
-                .get_nb_layers()
-                .expect("IO error getting number of layers")
-                - 1,
-        );
-        for layer_nb in (0..=bound).rev() {
-            trace!(
-                "Looking for nearest neighbors for point {0} in layer {layer_nb}",
-                id,
-            );
-            trace!(
-                "The entry points to the layer are {:?}",
-                self.results.selected
-            );
-            self.search_layer(layer_nb, &Query::ID(id), index, index.get_ef_cons())?;
+        trace!("Traversing levels below or equal to query point");
+        // let bound = level.min(index.get_nb_levels().map_err(Self::handle_io_error)? - 1);
+        // for level_nb in (0..=bound).rev() {
+        for level_nb in (0..level + 1).rev() {
+            trace!("Searching NNs for {id} at level {level_nb}",);
+            trace!("Entry point is {:?}", self.results.selected);
+            self.search_level(level_nb, &Query::ID(id), index, index.get_ef_cons())?;
             // self.select_simple(&mut self.results, index.get_m());
-            self.select_heuristic(index, layer_nb, id, index.get_m(), true, true)?;
-            self.results.save_layer_results(layer_nb, id);
+            self.select_heuristic(index, level_nb, id, index.get_m(), true, true)?;
+            self.results.save_layer_results(level_nb, id);
         }
         Ok(())
     }
@@ -140,10 +117,10 @@ impl Traverser {
                     .add_neighbors(*node, neighbors.iter().copied(), *layer_nb)
                     .unwrap();
                 for n in neighbors {
-                    if index.degree(*n, *layer_nb).unwrap() > index.get_m_at_layer(*layer_nb) {
+                    if index.degree(*n, *layer_nb).unwrap() > index.get_m_at_level(*layer_nb) {
                         let query = index
                             .get_point(*n)
-                            .expect("IO error getting point")
+                            .map_err(Self::handle_io_error)?
                             .expect("Could not get point");
                         let neighs = index.neighbors(*n, *layer_nb).unwrap();
                         let candidate_dists = neighs
@@ -152,13 +129,14 @@ impl Traverser {
                             .map(|id| {
                                 let point = index
                                     .get_point(id)
-                                    .expect("IO error getting point")
+                                    .map_err(Self::handle_io_error)
+                                    .expect("Could not get point, IO error")
                                     .expect("Could not get point");
                                 Dist::new(id, point.dist2other(&query))
                             })
                             .collect();
                         let new =
-                            Self::select_simple(candidate_dists, index.get_m_at_layer(*layer_nb));
+                            Self::select_simple(candidate_dists, index.get_m_at_level(*layer_nb));
                         index
                             .replace_neighbors(*n, new.iter().copied(), *layer_nb)
                             .unwrap();
@@ -175,7 +153,7 @@ impl Traverser {
         IntSet::from_iter(cands.iter().take(m).map(|dist| dist.id))
     }
 
-    fn search_layer(
+    fn search_level(
         &mut self,
         layer: INT,
         query: &Query,
@@ -209,11 +187,13 @@ impl Traverser {
                     let dist = match query {
                         Query::ID(id) => index
                             .distance(*node, *id)
-                            .expect("IO error computing distance")
+                            .map_err(Self::handle_io_error)
+                            .unwrap()
                             .expect("Could not compute distance"),
                         Query::Point(p) => index
                             .get_point(*node)
-                            .expect("IO error getting point")
+                            .map_err(Self::handle_io_error)
+                            .unwrap()
                             .expect("Could not get point")
                             .dist2other(p),
                     };
@@ -325,13 +305,13 @@ impl Traverser {
                 .unwrap()
                 .unwrap(),
         ));
-        let nb_layers = index.get_nb_layers().expect("IO error getting nb layers");
+        let nb_layers = index.get_nb_levels().map_err(Self::handle_io_error)?;
 
         let query = Query::Point(point);
         for layer_nb in (1..nb_layers).rev() {
-            self.search_layer(layer_nb, &query, index, 1)?;
+            self.search_level(layer_nb, &query, index, 1)?;
         }
-        self.search_layer(0, &query, index, ef)?;
+        self.search_level(0, &query, index, ef)?;
 
         let anns: Vec<NodeID> = self
             .results

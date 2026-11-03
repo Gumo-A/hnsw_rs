@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::INT;
 
+#[derive(Debug, Clone)]
 pub enum Error {
     Other,
 }

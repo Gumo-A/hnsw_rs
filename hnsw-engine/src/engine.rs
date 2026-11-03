@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     fs::{File, create_dir, create_dir_all, remove_file},
     io::{self, ErrorKind, Read, Write},
@@ -39,6 +40,7 @@ macro_rules! timeit {
 }
 
 pub type INT = usize;
+const PARAMS_FILE_NAME: &str = "params.json";
 pub const METADATA_LAYER: &str = "metadata-layer";
 pub const DATA_LAYER: &str = "data-layer";
 pub const INDEX_LAYER: &str = "index-layer";
@@ -46,20 +48,26 @@ const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 
 pub struct Engine {
     loc: PathBuf,
-    cache: Cache<INT, Arc<Point>>,
+    point_cache: Cache<INT, Arc<Point>>,
+    entry_cache: Cache<INT, IndexEntry>,
     params: HNSW,
 }
 
 impl Engine {
     pub fn new(loc: PathBuf, m: INT) -> io::Result<Self> {
         let params = Self::init_at_loc(&loc, m)?;
-        let cache = Cache::builder()
+        let point_cache = Cache::builder()
+            .max_capacity(params.cache_cap as u64)
+            .eviction_policy(EvictionPolicy::lru())
+            .build();
+        let entry_cache = Cache::builder()
             .max_capacity(params.cache_cap as u64)
             .eviction_policy(EvictionPolicy::lru())
             .build();
         let engine = Self {
             loc: loc.clone(),
-            cache,
+            point_cache,
+            entry_cache,
             params,
         };
         Ok(engine)
@@ -114,27 +122,26 @@ impl Engine {
     }
 
     fn load_or_create_param_file(metadata_dir: PathBuf, m: INT) -> io::Result<HNSW> {
-        let param_file = metadata_dir.join("params.json");
-        match File::create_new(&param_file) {
-            Ok(mut f) => {
-                let params = HNSW::new(m);
-                let params_ser = if env::var("HNSW_DEBUG").is_ok() {
-                    serde_json::to_vec_pretty(&params)?
-                } else {
-                    serde_json::to_vec(&params)?
-                };
-                f.write_all(&params_ser);
-                Ok(params)
-            }
+        let params = HNSW::new(m);
+        match Self::write_params(&metadata_dir, &params, false) {
+            Ok(()) => Ok(params),
             Err(e) => match e.kind() {
-                io::ErrorKind::AlreadyExists => Self::read_params_file(&param_file),
+                ErrorKind::AlreadyExists => Self::read_params_file(&metadata_dir),
                 _ => Err(e),
             },
         }
     }
 
-    fn read_params_file(path: &PathBuf) -> io::Result<HNSW> {
-        match File::open(path) {
+    fn ser_params(params: &HNSW) -> io::Result<Vec<u8>> {
+        if env::var("HNSW_DEBUG").is_ok() {
+            Ok(serde_json::to_vec_pretty(&params)?)
+        } else {
+            Ok(serde_json::to_vec(&params)?)
+        }
+    }
+
+    fn read_params_file(metadata_dir: &PathBuf) -> io::Result<HNSW> {
+        match File::open(Self::get_param_path(metadata_dir)) {
             Ok(mut f) => {
                 let mut buf = Vec::new();
                 f.read_to_end(&mut buf)?;
@@ -143,6 +150,10 @@ impl Engine {
             }
             Err(e) => Err(e),
         }
+    }
+
+    fn get_param_path(metadata_dir: &PathBuf) -> PathBuf {
+        metadata_dir.join(PARAMS_FILE_NAME)
     }
 
     fn wait(&self, micros: u64) {
@@ -191,11 +202,11 @@ impl Engine {
             if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
                 let points = manifest.read_data();
                 for p in points {
-                    if !self.cache.contains_key(&(p.id as INT)) {
-                        self.cache.insert(p.id as INT, Arc::new(p));
+                    if !self.point_cache.contains_key(&(p.id as INT)) {
+                        self.point_cache.insert(p.id as INT, Arc::new(p));
                     }
                 }
-                Ok(self.cache.get(&id))
+                Ok(self.point_cache.get(&id))
             } else {
                 Ok(None)
             }
@@ -211,7 +222,7 @@ impl Engine {
             let manifest = self
                 .get_current_manifest_list()?
                 .add_data(points, self.params.ml)?;
-            // self.add_points_to_index(&manifest);
+            self.add_points_to_index(&manifest);
             self.write_unlock();
             Ok(manifest)
         }
@@ -240,15 +251,18 @@ impl Engine {
 
     fn update_dim(&mut self, points: &[Point]) -> io::Result<()> {
         self.params.set_dim(points[0].dim());
-        let param_file = self.loc.join(METADATA_LAYER).join("params.json");
-        let params_ser = if env::var("HNSW_DEBUG").is_ok() {
-            serde_json::to_vec_pretty(&self.params)?
+        Self::write_params(&self.loc.join(METADATA_LAYER), &self.params, true)
+    }
+
+    fn write_params(metadata_dir: &PathBuf, params: &HNSW, overwrite: bool) -> io::Result<()> {
+        let param_file = Self::get_param_path(metadata_dir);
+        let params_ser = Self::ser_params(params)?;
+        let mut f = if overwrite {
+            File::create(&param_file)?
         } else {
-            serde_json::to_vec(&self.params)?
+            File::create_new(&param_file)?
         };
-        let mut f = File::create(&param_file)?;
-        f.write_all(&params_ser);
-        Ok(())
+        f.write_all(&params_ser)
     }
 
     fn divide_and_insert(&mut self, points: &[Point]) -> io::Result<Manifest> {
@@ -261,7 +275,6 @@ impl Engine {
 
     fn add_points_to_index(&mut self, manifest: &Manifest) {
         let mut inserter = Traverser::new();
-        let mut rng = thread_rng();
         for id in manifest.ids() {
             inserter.insert(self, id);
         }
@@ -282,7 +295,7 @@ impl Engine {
 
 impl Index for Engine {
     fn get_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
-        let result = if let Some(p) = self.cache.get(&id) {
+        let result = if let Some(p) = self.point_cache.get(&id) {
             Some(p)
         } else {
             self.load_point(id)?
@@ -312,8 +325,8 @@ impl Index for Engine {
         self.params.m
     }
 
-    fn get_m_at_layer(&self, layer: INT) -> INT {
-        if layer == 0 {
+    fn get_m_at_level(&self, level: INT) -> INT {
+        if level == 0 {
             self.params.mmax0
         } else {
             self.params.mmax
@@ -324,11 +337,11 @@ impl Index for Engine {
         self.params.ef_cons
     }
 
-    fn degree(&self, id: INT, layer: INT) -> io::Result<INT> {
+    fn degree(&self, id: INT, level: INT) -> io::Result<INT> {
         todo!("fetch nb of neighbors of id at layer")
     }
 
-    fn add_node(&self, id: INT, layer_idx: INT) -> io::Result<()> {
+    fn add_node(&self, id: INT, level: INT) -> io::Result<()> {
         todo!(
             "makes sure the IndexEntry for id contains at least layer_idx + 1 entries in 'levels'"
         )
@@ -336,7 +349,7 @@ impl Index for Engine {
 
     fn add_edge(&self, a: INT, b: INT, layer: INT) -> io::Result<()> {
         // this would trigger disk io on every edge addition, there should be some
-        // kind of build up logic of many edge addtions before committing to a write
+        // kind of build-up logic of many edge addtions before committing to a write
         todo!(
             "get the file(s) containing the entries for a and b, add the neighbors, write new file, create and write new manifest"
         )
@@ -346,25 +359,33 @@ impl Index for Engine {
         todo!("similar as add_edge")
     }
 
-    fn neighbors(&self, id: INT, layer: INT) -> io::Result<std::collections::HashSet<INT>> {
-        todo!("get neighbors either from non-stale cache or from disk")
+    fn neighbors(&self, id: INT, level: INT) -> io::Result<std::collections::HashSet<INT>> {
+        let entry = self.get_entry(self.get_ep())?;
+        let neighs_vec = entry.levels.get(level).unwrap();
+        let neighbors = HashSet::from_iter(neighs_vec.iter().cloned());
+        Ok(neighbors)
     }
 
-    fn get_nb_layers(&self) -> io::Result<INT> {
-        // let entry = self.get_index_entry(self.get_ep());
-        todo!("count how many layers there are in EP's IndexEntry")
+    fn get_nb_levels(&self) -> io::Result<INT> {
+        Ok(self.get_entry(self.get_ep())?.levels.len())
     }
 }
 
-// impl Engine {
-//     fn get_index_entry(&self, id: INT) -> IndexEntry {
-//         self.get_current_manifest_list()
-//             .unwrap()
-//             .get_manifest_from_id(id)
-//             .unwrap()
-//             .load_index_entry(id)
-//     }
-// }
+impl Engine {
+    fn get_entry(&self, id: INT) -> io::Result<IndexEntry> {
+        if !self.entry_cache.contains_key(&id) {
+            let manifest_entries = self
+                .get_current_manifest_list()?
+                .get_manifest_from_id(id)
+                .unwrap()
+                .read_entries();
+            for entry in manifest_entries.iter() {
+                self.entry_cache.insert(entry.id, entry.clone());
+            }
+        }
+        Ok(self.entry_cache.get(&id).unwrap())
+    }
+}
 
 pub fn get_level(ml: f32, rng: &mut ThreadRng) -> INT {
     let mut rand_nb = 0.0;
@@ -521,15 +542,15 @@ mod tests {
         assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
 
         let mut check_cache_updates = |idx| {
-            assert_eq!(e.cache.contains_key(&idx), false);
-            assert_eq!(e.cache.contains_key(&(idx + 1)), false);
-            assert_eq!(e.cache.contains_key(&(idx + 2)), false);
-            assert_eq!(e.cache.contains_key(&(idx + 3)), false);
+            assert_eq!(e.point_cache.contains_key(&idx), false);
+            assert_eq!(e.point_cache.contains_key(&(idx + 1)), false);
+            assert_eq!(e.point_cache.contains_key(&(idx + 2)), false);
+            assert_eq!(e.point_cache.contains_key(&(idx + 3)), false);
             e.get_point(idx);
-            assert_eq!(e.cache.contains_key(&idx), true);
-            assert_eq!(e.cache.contains_key(&(idx + 1)), true);
-            assert_eq!(e.cache.contains_key(&(idx + 2)), true);
-            assert_eq!(e.cache.contains_key(&(idx + 3)), true);
+            assert_eq!(e.point_cache.contains_key(&idx), true);
+            assert_eq!(e.point_cache.contains_key(&(idx + 1)), true);
+            assert_eq!(e.point_cache.contains_key(&(idx + 2)), true);
+            assert_eq!(e.point_cache.contains_key(&(idx + 3)), true);
         };
 
         check_cache_updates(0);

@@ -11,32 +11,39 @@ pub trait Index {
     fn get_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>>;
     fn get_ep(&self) -> INT;
     fn get_m(&self) -> INT;
-    fn get_m_at_layer(&self, layer: INT) -> INT;
+    fn get_m_at_level(&self, level: INT) -> INT;
     fn get_ef_cons(&self) -> INT;
-    fn get_nb_layers(&self) -> io::Result<INT>;
-    fn degree(&self, id: INT, layer: INT) -> io::Result<INT>;
-    fn add_node(&self, id: INT, layer: INT) -> io::Result<()>;
-    fn add_edge(&self, a: INT, b: INT, layer: INT) -> io::Result<()>;
-    fn remove_edge(&self, a: INT, b: INT, layer: INT) -> io::Result<()>;
-    fn neighbors(&self, id: INT, layer: INT) -> io::Result<HashSet<INT>>;
+    fn get_nb_levels(&self) -> io::Result<INT>;
+    fn degree(&self, id: INT, level: INT) -> io::Result<INT>;
+    fn add_node(&self, id: INT, level: INT) -> io::Result<()>;
+    fn add_edge(&self, a: INT, b: INT, level: INT) -> io::Result<()>;
+    fn remove_edge(&self, a: INT, b: INT, level: INT) -> io::Result<()>;
+    fn neighbors(&self, id: INT, level: INT) -> io::Result<HashSet<INT>>;
 
-    fn add_neighbors<I>(&self, id: INT, new_neighbors: I, layer: INT) -> io::Result<()>
+    fn get_level(&mut self, id: INT) -> io::Result<Option<INT>> {
+        match self.get_point(id)? {
+            Some(point) => Ok(Some(point.level.into())),
+            None => Ok(None),
+        }
+    }
+
+    fn add_neighbors<I>(&self, id: INT, new_neighbors: I, level: INT) -> io::Result<()>
     where
         I: Iterator<Item = INT>,
     {
         for i in new_neighbors {
-            self.add_edge(id, i, layer)?;
+            self.add_edge(id, i, level)?;
         }
 
         Ok(())
     }
 
-    fn remove_neighbors<I>(&self, id: INT, old_neighbors: I, layer: INT) -> io::Result<()>
+    fn remove_neighbors<I>(&self, id: INT, old_neighbors: I, level: INT) -> io::Result<()>
     where
         I: Iterator<Item = INT>,
     {
         for n in old_neighbors {
-            match self.remove_edge(id, n, layer) {
+            match self.remove_edge(id, n, level) {
                 Ok(()) => (),
                 Err(e) => match e {
                     // GraphError::IsolatedNode(a) => {
@@ -50,24 +57,24 @@ pub trait Index {
         Ok(())
     }
 
-    fn replace_neighbors<I>(&self, id: INT, new_neighbors: I, layer: INT) -> io::Result<()>
+    fn replace_neighbors<I>(&self, id: INT, new_neighbors: I, level: INT) -> io::Result<()>
     where
         I: Iterator<Item = INT>,
     {
         let new_neighbors = HashSet::from_iter(new_neighbors);
-        let current_neighbors = self.neighbors(id, layer)?;
+        let current_neighbors = self.neighbors(id, level)?;
         let to_remove = current_neighbors.difference(&new_neighbors).copied();
         let to_add = new_neighbors.difference(&current_neighbors).copied();
-        self.add_neighbors(id, to_add, layer)?;
-        self.remove_neighbors(id, to_remove, layer)?;
+        self.add_neighbors(id, to_add, level)?;
+        self.remove_neighbors(id, to_remove, level)?;
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexEntry {
-    id: INT,
-    levels: Vec<Vec<INT>>,
+    pub id: INT,
+    pub levels: Vec<Vec<INT>>,
 }
 
 impl IndexEntry {
