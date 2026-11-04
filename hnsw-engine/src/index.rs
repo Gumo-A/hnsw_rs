@@ -5,29 +5,47 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::INT;
 
+#[derive(Debug)]
+pub enum HNSWErr {
+    Other,
+    IDNotFound(INT),
+    IDPairNotFound(INT, INT),
+    IOError(io::Error),
+    JSONErr(serde_json::Error),
+    NothingToInsert,
+    InvalidDimension,
+    CacheMiss,
+}
+
+pub fn map_io_err(e: io::Error) -> HNSWErr {
+    HNSWErr::IOError(e)
+}
+
+pub fn map_json_err(e: serde_json::Error) -> HNSWErr {
+    HNSWErr::JSONErr(e)
+}
+
 pub trait Index {
-    fn distance(&mut self, a: INT, b: INT) -> io::Result<Option<f32>>;
-    fn distance2point(&mut self, id: INT, point: &Point) -> io::Result<Option<f32>>;
-    fn get_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>>;
+    fn distance(&mut self, a: INT, b: INT) -> Result<f32, HNSWErr>;
+    fn distance2point(&mut self, id: INT, point: &Point) -> Result<f32, HNSWErr>;
+    fn get_point(&mut self, id: INT) -> Result<Arc<Point>, HNSWErr>;
+    fn get_entry(&mut self, id: INT) -> Result<Arc<IndexEntry>, HNSWErr>;
     fn get_ep(&self) -> INT;
     fn get_m(&self) -> INT;
     fn get_m_at_level(&self, level: INT) -> INT;
     fn get_ef_cons(&self) -> INT;
-    fn get_nb_levels(&self) -> io::Result<INT>;
-    fn degree(&self, id: INT, level: INT) -> io::Result<INT>;
-    fn add_node(&self, id: INT, level: INT) -> io::Result<()>;
-    fn add_edge(&self, a: INT, b: INT, level: INT) -> io::Result<()>;
-    fn remove_edge(&self, a: INT, b: INT, level: INT) -> io::Result<()>;
-    fn neighbors(&self, id: INT, level: INT) -> io::Result<HashSet<INT>>;
+    fn get_nb_levels(&mut self) -> Result<INT, HNSWErr>;
+    fn degree(&mut self, id: INT, level: INT) -> Result<INT, HNSWErr>;
+    fn add_node(&mut self, id: INT, level: INT) -> Result<(), HNSWErr>;
+    fn add_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
+    fn remove_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
+    fn neighbors(&mut self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr>;
 
-    fn get_level(&mut self, id: INT) -> io::Result<Option<INT>> {
-        match self.get_point(id)? {
-            Some(point) => Ok(Some(point.level.into())),
-            None => Ok(None),
-        }
+    fn get_level(&mut self, id: INT) -> Result<INT, HNSWErr> {
+        Ok(self.get_point(id)?.level.into())
     }
 
-    fn add_neighbors<I>(&self, id: INT, new_neighbors: I, level: INT) -> io::Result<()>
+    fn add_neighbors<I>(&mut self, id: INT, new_neighbors: I, level: INT) -> Result<(), HNSWErr>
     where
         I: Iterator<Item = INT>,
     {
@@ -38,7 +56,7 @@ pub trait Index {
         Ok(())
     }
 
-    fn remove_neighbors<I>(&self, id: INT, old_neighbors: I, level: INT) -> io::Result<()>
+    fn remove_neighbors<I>(&mut self, id: INT, old_neighbors: I, level: INT) -> Result<(), HNSWErr>
     where
         I: Iterator<Item = INT>,
     {
@@ -57,7 +75,7 @@ pub trait Index {
         Ok(())
     }
 
-    fn replace_neighbors<I>(&self, id: INT, new_neighbors: I, level: INT) -> io::Result<()>
+    fn replace_neighbors<I>(&mut self, id: INT, new_neighbors: I, level: INT) -> Result<(), HNSWErr>
     where
         I: Iterator<Item = INT>,
     {
@@ -74,14 +92,14 @@ pub trait Index {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexEntry {
     pub id: INT,
-    pub levels: Vec<Vec<INT>>,
+    pub levels: Vec<HashSet<INT>>,
 }
 
 impl IndexEntry {
     pub fn new(id: INT, level: INT) -> Self {
         Self {
             id,
-            levels: Vec::from_iter((0..level + 1).map(|_| Vec::new())),
+            levels: Vec::from_iter((0..level + 1).map(|_| HashSet::new())),
         }
     }
 }

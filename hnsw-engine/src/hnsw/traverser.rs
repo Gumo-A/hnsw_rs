@@ -1,5 +1,3 @@
-use std::io;
-
 use graph::NodeID;
 use graph::dist::Dist;
 use log::{info, trace};
@@ -9,8 +7,8 @@ use vectors::VecBase;
 
 use crate::{
     engine::INT,
-    hnsw::{Error, results::Results},
-    index::Index,
+    hnsw::results::Results,
+    index::{HNSWErr, Index},
 };
 
 enum Query {
@@ -31,18 +29,16 @@ impl Traverser {
         }
     }
 
-    pub fn insert(&mut self, index: &mut impl Index, id: INT) -> Result<(), Error> {
+    pub fn insert(&mut self, index: &mut impl Index, id: INT) -> Result<(), HNSWErr> {
         self.build_insertion_results(index, id)?;
         self.make_connections(index)?;
+        index.write_entries();
         Ok(())
     }
 
-    fn build_insertion_results(&mut self, index: &mut impl Index, id: INT) -> Result<(), Error> {
+    fn build_insertion_results(&mut self, index: &mut impl Index, id: INT) -> Result<(), HNSWErr> {
         trace!("Begin insertion results");
-        let level = match index.get_level(id).map_err(Self::handle_io_error)? {
-            Some(x) => x,
-            None => return Err(Error::Other),
-        };
+        let level = index.get_level(id)?;
         self.setup_insert(index, id)?;
         self.traverse_layers_above(index, id, level)?;
         self.traverse_layers_below(index, id, level)?;
@@ -54,20 +50,11 @@ impl Traverser {
         self.results.clear_all();
     }
 
-    fn handle_io_error(e: io::Error) -> Error {
-        match e.kind() {
-            _ => panic!("IO error: {e:?}"),
-        }
-    }
-
-    fn setup_insert(&mut self, index: &mut impl Index, id: INT) -> Result<(), Error> {
+    fn setup_insert(&mut self, index: &mut impl Index, id: INT) -> Result<(), HNSWErr> {
         trace!("Setting up insertion");
         self.clear_results();
         let ep = index.get_ep();
-        let dist2ep = index
-            .distance(ep, id)
-            .map_err(Self::handle_io_error)?
-            .expect("Could not compute distance between EP and point to insert.");
+        let dist2ep = index.distance(ep, id)?;
         trace!("Distance between {id} and EP {ep} is {dist2ep}",);
         self.results.insert_selected(Dist::new(ep, dist2ep));
         Ok(())
@@ -78,9 +65,9 @@ impl Traverser {
         index: &mut impl Index,
         id: INT,
         level: INT,
-    ) -> Result<(), Error> {
+    ) -> Result<(), HNSWErr> {
         trace!("Traversing levels above query point");
-        let nb_levels = index.get_nb_levels().map_err(Self::handle_io_error)?;
+        let nb_levels = index.get_nb_levels()?;
         for level_nb in (level + 1..nb_levels).rev() {
             trace!("Searching NNs for {id} at level {level_nb}",);
             trace!("Entry point is {:?}", self.results.selected);
@@ -94,9 +81,9 @@ impl Traverser {
         index: &mut impl Index,
         id: INT,
         level: INT,
-    ) -> Result<(), Error> {
+    ) -> Result<(), HNSWErr> {
         trace!("Traversing levels below or equal to query point");
-        // let bound = level.min(index.get_nb_levels().map_err(Self::handle_io_error)? - 1);
+        // let bound = level.min(index.get_nb_levels()? - 1);
         // for level_nb in (0..=bound).rev() {
         for level_nb in (0..level + 1).rev() {
             trace!("Searching NNs for {id} at level {level_nb}",);
@@ -109,37 +96,23 @@ impl Traverser {
         Ok(())
     }
 
-    fn make_connections(&self, index: &mut impl Index) -> Result<(), Error> {
+    fn make_connections(&self, index: &mut impl Index) -> Result<(), HNSWErr> {
         info!("Making connections using results");
         for (layer_nb, node_data) in self.results.insertion_results.iter() {
             for (node, neighbors) in node_data.iter() {
-                index
-                    .add_neighbors(*node, neighbors.iter().copied(), *layer_nb)
-                    .unwrap();
+                index.add_neighbors(*node, neighbors.iter().copied(), *layer_nb)?;
                 for n in neighbors {
-                    if index.degree(*n, *layer_nb).unwrap() > index.get_m_at_level(*layer_nb) {
-                        let query = index
-                            .get_point(*n)
-                            .map_err(Self::handle_io_error)?
-                            .expect("Could not get point");
-                        let neighs = index.neighbors(*n, *layer_nb).unwrap();
-                        let candidate_dists = neighs
-                            .iter()
-                            .copied()
-                            .map(|id| {
-                                let point = index
-                                    .get_point(id)
-                                    .map_err(Self::handle_io_error)
-                                    .expect("Could not get point, IO error")
-                                    .expect("Could not get point");
-                                Dist::new(id, point.dist2other(&query))
-                            })
-                            .collect();
+                    if index.degree(*n, *layer_nb)? > index.get_m_at_level(*layer_nb) {
+                        let query = index.get_point(*n)?;
+                        let neighs = index.neighbors(*n, *layer_nb)?;
+                        let mut candidate_dists = Vec::new();
+                        for id in neighs.iter().copied() {
+                            candidate_dists
+                                .push(Dist::new(id, index.get_point(id)?.dist2other(&query)));
+                        }
                         let new =
                             Self::select_simple(candidate_dists, index.get_m_at_level(*layer_nb));
-                        index
-                            .replace_neighbors(*n, new.iter().copied(), *layer_nb)
-                            .unwrap();
+                        index.replace_neighbors(*n, new.iter().copied(), *layer_nb)?;
                     }
                 }
             }
@@ -159,7 +132,7 @@ impl Traverser {
         query: &Query,
         index: &mut impl Index,
         ef: usize,
-    ) -> Result<(), Error> {
+    ) -> Result<(), HNSWErr> {
         trace!("Searching Layer");
         self.results.extend_candidates_with_selected();
         self.results.extend_visited_with_selected();
@@ -174,32 +147,22 @@ impl Traverser {
                 trace!("Best candidate is further away than worst selected, breaking from loop");
                 break;
             }
-            let cand_neighbors = match index.neighbors(cand_dist.id, layer) {
-                Ok(neighs) => neighs,
-                Err(_) => return Err(Error::Other),
-            };
+            let cand_neighbors = index.neighbors(cand_dist.id, layer)?;
             trace!("{0} has {1} neighbors", cand_dist.id, cand_neighbors.len());
 
-            let q2cand_neighbors_dists: Vec<Dist> = cand_neighbors
+            let mut q2cand_neighbors_dists: Vec<Dist> = Vec::new();
+            for node in cand_neighbors
                 .iter()
                 .filter(|node| self.results.insert_visited(**node))
-                .map(|node| {
-                    let dist = match query {
-                        Query::ID(id) => index
-                            .distance(*node, *id)
-                            .map_err(Self::handle_io_error)
-                            .unwrap()
-                            .expect("Could not compute distance"),
-                        Query::Point(p) => index
-                            .get_point(*node)
-                            .map_err(Self::handle_io_error)
-                            .unwrap()
-                            .expect("Could not get point")
-                            .dist2other(p),
-                    };
-                    Dist::new(*node, dist)
-                })
-                .collect();
+                .copied()
+            {
+                let dist = match query {
+                    Query::ID(id) => index.distance(node, *id)?,
+                    Query::Point(p) => index.get_point(node)?.dist2other(p),
+                };
+                q2cand_neighbors_dists.push(Dist::new(node, dist));
+            }
+
             trace!("Selecting among the best of the candidate's neighbors");
             for n2q_dist in q2cand_neighbors_dists {
                 let f2q_dist = self.results.selected.last().unwrap();
@@ -246,7 +209,7 @@ impl Traverser {
         m: usize,
         extend_cands: bool,
         keep_pruned: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), HNSWErr> {
         trace!(
             "Begin select_heuristic, selected is {:?}",
             self.results.selected
@@ -262,7 +225,7 @@ impl Traverser {
 
         while (!self.results.candidates.is_empty()) & (self.results.selected.len() < m as usize) {
             let node_e = self.results.candidates.pop_first().unwrap();
-            let e_point = index.get_point(node_e.id).unwrap().unwrap();
+            let e_point = index.get_point(node_e.id)?;
 
             let nearest_selected = self.results.get_nearest_from_selected(&e_point, index);
 
@@ -294,18 +257,15 @@ impl Traverser {
         vector: &Vec<f32>,
         n: usize,
         ef: usize,
-    ) -> Result<Vec<NodeID>, Error> {
+    ) -> Result<Vec<NodeID>, HNSWErr> {
         info!("Start ANN search");
         let point = Point::new(vector);
         self.clear_results();
         self.results.insert_selected(Dist::new(
             index.get_ep(),
-            index
-                .distance2point(index.get_ep(), &point)
-                .unwrap()
-                .unwrap(),
+            index.distance2point(index.get_ep(), &point)?,
         ));
-        let nb_layers = index.get_nb_levels().map_err(Self::handle_io_error)?;
+        let nb_layers = index.get_nb_levels()?;
 
         let query = Query::Point(point);
         for layer_nb in (1..nb_layers).rev() {

@@ -6,11 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::INT;
 
-#[derive(Debug, Clone)]
-pub enum Error {
-    Other,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HNSW {
     pub ep: NodeID,

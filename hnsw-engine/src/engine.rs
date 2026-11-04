@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     env,
     fs::{File, create_dir, create_dir_all, remove_file},
-    io::{self, ErrorKind, Read, Write},
+    io::{self, BufReader, ErrorKind, Read, Write},
     path::PathBuf,
     sync::Arc,
     thread::sleep,
@@ -20,7 +20,7 @@ use vectors::VecBase;
 use crate::{
     get_rand_file_name,
     hnsw::{HNSW, traverser::Traverser},
-    index::{Index, IndexEntry},
+    index::{HNSWErr, Index, IndexEntry, map_io_err, map_json_err},
     manifest::{Manifest, ManifestList},
 };
 
@@ -49,12 +49,12 @@ const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 pub struct Engine {
     loc: PathBuf,
     point_cache: Cache<INT, Arc<Point>>,
-    entry_cache: Cache<INT, IndexEntry>,
+    entry_cache: Cache<INT, Arc<IndexEntry>>,
     params: HNSW,
 }
 
 impl Engine {
-    pub fn new(loc: PathBuf, m: INT) -> io::Result<Self> {
+    pub fn new(loc: PathBuf, m: INT) -> Result<Self, HNSWErr> {
         let params = Self::init_at_loc(&loc, m)?;
         let point_cache = Cache::builder()
             .max_capacity(params.cache_cap as u64)
@@ -73,83 +73,80 @@ impl Engine {
         Ok(engine)
     }
 
-    fn init_at_loc(loc: &PathBuf, dim: INT) -> io::Result<HNSW> {
+    fn init_at_loc(loc: &PathBuf, dim: INT) -> Result<HNSW, HNSWErr> {
         if loc.exists() {
             if loc.is_dir() {
                 Self::check_can_use_dir(&loc)?;
             } else {
-                return Err(io::ErrorKind::NotADirectory.into());
+                return Err(HNSWErr::IOError(io::ErrorKind::NotADirectory.into()));
             }
         } else {
             match create_dir_all(&loc) {
                 Ok(()) => (),
                 Err(e) => match e.kind() {
                     io::ErrorKind::AlreadyExists => (),
-                    _ => return Err(e),
+                    _ => return Err(HNSWErr::IOError(e)),
                 },
             };
         }
         Self::check_or_create_dir_structure(&loc, dim)
     }
 
-    fn check_can_use_dir(loc: &PathBuf) -> io::Result<()> {
+    fn check_can_use_dir(loc: &PathBuf) -> Result<(), HNSWErr> {
         let check = |p| loc.join(p).exists();
-        let empty = loc.read_dir()?.count() == 0;
+        let empty = loc.read_dir().map_err(|e| HNSWErr::IOError(e))?.count() == 0;
         if empty {
             Ok(())
         } else if check(METADATA_LAYER) & check(DATA_LAYER) & check(INDEX_LAYER) {
             Ok(())
         } else {
-            Err(io::ErrorKind::DirectoryNotEmpty.into())
+            Err(HNSWErr::IOError(io::ErrorKind::DirectoryNotEmpty.into()))
         }
     }
 
-    fn try_create_dir(path: PathBuf) -> io::Result<()> {
+    fn try_create_dir(path: PathBuf) -> Result<(), HNSWErr> {
         match create_dir(&path) {
             Ok(()) => Ok(()),
             Err(e) => match e.kind() {
                 io::ErrorKind::AlreadyExists => Ok(()),
-                _ => Err(e),
+                _ => Err(HNSWErr::IOError(e)),
             },
         }
     }
 
-    fn check_or_create_dir_structure(loc: &PathBuf, m: INT) -> io::Result<HNSW> {
+    fn check_or_create_dir_structure(loc: &PathBuf, m: INT) -> Result<HNSW, HNSWErr> {
         for layer in LAYERS {
             Self::try_create_dir(loc.join(layer))?;
         }
         Self::load_or_create_param_file(loc.join(METADATA_LAYER), m)
     }
 
-    fn load_or_create_param_file(metadata_dir: PathBuf, m: INT) -> io::Result<HNSW> {
+    fn load_or_create_param_file(metadata_dir: PathBuf, m: INT) -> Result<HNSW, HNSWErr> {
         let params = HNSW::new(m);
         match Self::write_params(&metadata_dir, &params, false) {
             Ok(()) => Ok(params),
-            Err(e) => match e.kind() {
-                ErrorKind::AlreadyExists => Self::read_params_file(&metadata_dir),
+            Err(e) => match e {
+                HNSWErr::IOError(e) => match e.kind() {
+                    ErrorKind::AlreadyExists => Self::read_params_file(&metadata_dir),
+                    _ => Err(HNSWErr::IOError(e)),
+                },
                 _ => Err(e),
             },
         }
     }
 
-    fn ser_params(params: &HNSW) -> io::Result<Vec<u8>> {
+    fn ser_params(params: &HNSW) -> Result<Vec<u8>, HNSWErr> {
         if env::var("HNSW_DEBUG").is_ok() {
-            Ok(serde_json::to_vec_pretty(&params)?)
+            serde_json::to_vec_pretty(&params).map_err(map_json_err)
         } else {
-            Ok(serde_json::to_vec(&params)?)
+            serde_json::to_vec(&params).map_err(map_json_err)
         }
     }
 
-    fn read_params_file(metadata_dir: &PathBuf) -> io::Result<HNSW> {
-        match File::open(Self::get_param_path(metadata_dir)) {
-            Ok(mut f) => {
-                let mut buf = Vec::new();
-                f.read_to_end(&mut buf)?;
-                let params = serde_json::from_slice(&buf)?;
-                Ok(params)
-            }
-            Err(e) => Err(e),
-        }
+    fn read_params_file(metadata_dir: &PathBuf) -> Result<HNSW, HNSWErr> {
+        let f = File::open(Self::get_param_path(metadata_dir)).map_err(map_io_err)?;
+        let reader = BufReader::new(f);
+        serde_json::from_reader(reader).map_err(map_json_err)
     }
 
     fn get_param_path(metadata_dir: &PathBuf) -> PathBuf {
@@ -194,26 +191,33 @@ impl Engine {
     }
 
     /// Also caches points stored in the same data file
-    fn load_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
+    fn load_point(&mut self, id: INT) -> Result<Arc<Point>, HNSWErr> {
         let manifest_list = self.get_current_manifest_list()?;
-        if manifest_list.get_nb_points() <= id {
-            Ok(None)
-        } else {
-            if let Some(manifest) = manifest_list.get_manifest_from_id(id) {
-                let points = manifest.read_data();
-                for p in points {
-                    if !self.point_cache.contains_key(&(p.id as INT)) {
-                        self.point_cache.insert(p.id as INT, Arc::new(p));
-                    }
-                }
-                Ok(self.point_cache.get(&id))
-            } else {
-                Ok(None)
+        let points = manifest_list
+            .get_manifest_from_id(id)
+            .ok_or(HNSWErr::IDNotFound(id))?
+            .read_data();
+        for p in points {
+            if !self.point_cache.contains_key(&(p.id as INT)) {
+                self.point_cache.insert(p.id as INT, Arc::new(p));
             }
         }
+        self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss)
     }
 
-    pub fn insert(&mut self, points: &[Point]) -> io::Result<Manifest> {
+    fn load_entry(&mut self, id: INT) -> Result<Arc<IndexEntry>, HNSWErr> {
+        let manifest_entries = self
+            .get_current_manifest_list()?
+            .get_manifest_from_id(id)
+            .unwrap()
+            .read_entries();
+        for entry in manifest_entries {
+            self.entry_cache.insert(entry.id, Arc::new(entry));
+        }
+        self.entry_cache.get(&id).ok_or(HNSWErr::CacheMiss)
+    }
+
+    pub fn insert(&mut self, points: &[Point]) -> Result<Manifest, HNSWErr> {
         self.check_points(points)?;
         if points.len() > self.params.cache_cap as INT {
             self.divide_and_insert(points)
@@ -221,21 +225,23 @@ impl Engine {
             self.write_lock();
             let manifest = self
                 .get_current_manifest_list()?
-                .add_data(points, self.params.ml)?;
+                .add_data(points, self.params.ml)
+                .map_err(map_io_err)?;
             self.add_points_to_index(&manifest);
             self.write_unlock();
             Ok(manifest)
         }
     }
 
-    pub fn optimize(&mut self) -> io::Result<()> {
+    pub fn optimize(&mut self) -> Result<(), HNSWErr> {
         self.get_current_manifest_list()?
             .optimize(self.params.cache_cap)
+            .map_err(map_io_err)
     }
 
-    fn check_points(&mut self, points: &[Point]) -> io::Result<()> {
+    fn check_points(&mut self, points: &[Point]) -> Result<(), HNSWErr> {
         if points.len() == 0 {
-            return Err(ErrorKind::InvalidData.into());
+            return Err(HNSWErr::NothingToInsert);
         } else if self.params.dim.is_none() {
             self.update_dim(points)?;
         }
@@ -243,29 +249,30 @@ impl Engine {
         let dim = self.params.dim.unwrap();
         let nb_valid = points.iter().filter(|p| p.dim() == dim).count();
         if nb_valid != points.len() {
-            Err(ErrorKind::InvalidData.into())
+            Err(HNSWErr::InvalidDimension)
         } else {
             Ok(())
         }
     }
 
-    fn update_dim(&mut self, points: &[Point]) -> io::Result<()> {
+    fn update_dim(&mut self, points: &[Point]) -> Result<(), HNSWErr> {
         self.params.set_dim(points[0].dim());
         Self::write_params(&self.loc.join(METADATA_LAYER), &self.params, true)
     }
 
-    fn write_params(metadata_dir: &PathBuf, params: &HNSW, overwrite: bool) -> io::Result<()> {
+    fn write_params(metadata_dir: &PathBuf, params: &HNSW, overwrite: bool) -> Result<(), HNSWErr> {
         let param_file = Self::get_param_path(metadata_dir);
         let params_ser = Self::ser_params(params)?;
         let mut f = if overwrite {
-            File::create(&param_file)?
+            File::create(&param_file).map_err(map_io_err)?
         } else {
-            File::create_new(&param_file)?
+            File::create_new(&param_file).map_err(map_io_err)?
         };
-        f.write_all(&params_ser)
+        f.write_all(&params_ser);
+        Ok(())
     }
 
-    fn divide_and_insert(&mut self, points: &[Point]) -> io::Result<Manifest> {
+    fn divide_and_insert(&mut self, points: &[Point]) -> Result<Manifest, HNSWErr> {
         let mid = points.len() / 2;
         let p1 = &points[..mid];
         let p2 = &points[mid..];
@@ -280,41 +287,46 @@ impl Engine {
         }
     }
 
-    pub fn get_current_manifest_list(&self) -> io::Result<ManifestList> {
-        ManifestList::new(&self.loc)
+    pub fn get_current_manifest_list(&self) -> Result<ManifestList, HNSWErr> {
+        ManifestList::new(&self.loc).map_err(map_io_err)
     }
 
-    pub fn get_number_of_manifests(&self) -> io::Result<INT> {
+    pub fn get_number_of_manifests(&self) -> Result<INT, HNSWErr> {
         Ok(self.get_current_manifest_list()?.manifests.len())
     }
 
-    pub fn get_nb_points(&self) -> io::Result<INT> {
+    pub fn get_nb_points(&self) -> Result<INT, HNSWErr> {
         Ok(self.get_current_manifest_list()?.get_nb_points())
+    }
+
+    pub fn write_entries(&self) -> Result<(), HNSWErr> {
+        todo!("persist changes to index entries to disk")
     }
 }
 
 impl Index for Engine {
-    fn get_point(&mut self, id: INT) -> io::Result<Option<Arc<Point>>> {
-        let result = if let Some(p) = self.point_cache.get(&id) {
-            Some(p)
-        } else {
-            self.load_point(id)?
-        };
-        Ok(result)
-    }
-
-    fn distance(&mut self, a: INT, b: INT) -> io::Result<Option<f32>> {
-        match (self.get_point(a)?, self.get_point(b)?) {
-            (Some(a), Some(b)) => Ok(Some(a.dist2other(&b))),
-            _ => Ok(None),
+    fn get_point(&mut self, id: INT) -> Result<Arc<Point>, HNSWErr> {
+        match self.point_cache.get(&id) {
+            Some(p) => Ok(p),
+            None => self.load_point(id),
         }
     }
 
-    fn distance2point(&mut self, id: INT, point: &Point) -> io::Result<Option<f32>> {
-        match self.get_point(id)? {
-            Some(p) => Ok(Some(p.dist2other(point))),
-            None => Ok(None),
+    fn get_entry(&mut self, id: INT) -> Result<Arc<IndexEntry>, HNSWErr> {
+        match self.entry_cache.get(&id) {
+            Some(p) => Ok(p),
+            None => self.load_entry(id),
         }
+    }
+
+    fn distance(&mut self, a: INT, b: INT) -> Result<f32, HNSWErr> {
+        let p_a = self.get_point(a)?;
+        let p_b = self.get_point(b)?;
+        Ok(p_a.dist2other(&p_b))
+    }
+
+    fn distance2point(&mut self, id: INT, point: &Point) -> Result<f32, HNSWErr> {
+        Ok(self.get_point(id)?.dist2other(point))
     }
 
     fn get_ep(&self) -> INT {
@@ -337,53 +349,68 @@ impl Index for Engine {
         self.params.ef_cons
     }
 
-    fn degree(&self, id: INT, level: INT) -> io::Result<INT> {
-        todo!("fetch nb of neighbors of id at layer")
+    fn degree(&mut self, id: INT, level: INT) -> Result<INT, HNSWErr> {
+        Ok(self
+            .get_entry(id)?
+            .levels
+            .get(level)
+            .expect("Could not get level while getting a degree")
+            .len())
     }
 
-    fn add_node(&self, id: INT, level: INT) -> io::Result<()> {
-        todo!(
-            "makes sure the IndexEntry for id contains at least layer_idx + 1 entries in 'levels'"
-        )
+    fn add_node(&mut self, id: INT, level: INT) -> Result<(), HNSWErr> {
+        let mut entry = self.get_entry(id)?;
+        while entry.levels.len() <= level {
+            entry.levels.push(HashSet::new());
+        }
+        Ok(())
     }
 
-    fn add_edge(&self, a: INT, b: INT, layer: INT) -> io::Result<()> {
-        // this would trigger disk io on every edge addition, there should be some
-        // kind of build-up logic of many edge addtions before committing to a write
-        todo!(
-            "get the file(s) containing the entries for a and b, add the neighbors, write new file, create and write new manifest"
-        )
+    fn add_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
+        let mut a_entry = self.get_entry(a)?;
+        let a_neighbors = a_entry
+            .levels
+            .get_mut(level)
+            .expect("Could not get level of `a` while adding edge");
+        let mut b_entry = self.get_entry(b)?;
+        let b_neighbors = b_entry
+            .levels
+            .get_mut(level)
+            .expect("Could not get level of `b` while adding edge");
+        a_neighbors.insert(b);
+        b_neighbors.insert(a);
+        Ok(())
     }
 
-    fn remove_edge(&self, a: INT, b: INT, layer: INT) -> io::Result<()> {
-        todo!("similar as add_edge")
+    fn remove_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
+        let mut a_entry = self.get_entry(a)?;
+        let a_neighbors = a_entry
+            .levels
+            .get_mut(level)
+            .expect("Could not get level of `a` while removing edge");
+        let mut b_entry = self.get_entry(b)?;
+        let b_neighbors = b_entry
+            .levels
+            .get_mut(level)
+            .expect("Could not get level of `b` while removing edge");
+        a_neighbors.remove(&b);
+        b_neighbors.remove(&a);
+        Ok(())
     }
 
-    fn neighbors(&self, id: INT, level: INT) -> io::Result<std::collections::HashSet<INT>> {
+    fn neighbors(
+        &mut self,
+        id: INT,
+        level: INT,
+    ) -> Result<std::collections::HashSet<INT>, HNSWErr> {
         let entry = self.get_entry(self.get_ep())?;
         let neighs_vec = entry.levels.get(level).unwrap();
         let neighbors = HashSet::from_iter(neighs_vec.iter().cloned());
         Ok(neighbors)
     }
 
-    fn get_nb_levels(&self) -> io::Result<INT> {
+    fn get_nb_levels(&mut self) -> Result<INT, HNSWErr> {
         Ok(self.get_entry(self.get_ep())?.levels.len())
-    }
-}
-
-impl Engine {
-    fn get_entry(&self, id: INT) -> io::Result<IndexEntry> {
-        if !self.entry_cache.contains_key(&id) {
-            let manifest_entries = self
-                .get_current_manifest_list()?
-                .get_manifest_from_id(id)
-                .unwrap()
-                .read_entries();
-            for entry in manifest_entries.iter() {
-                self.entry_cache.insert(entry.id, entry.clone());
-            }
-        }
-        Ok(self.entry_cache.get(&id).unwrap())
     }
 }
 
@@ -406,6 +433,7 @@ mod tests {
     use std::{
         fs::remove_dir_all,
         path::{Path, PathBuf},
+        sync::Arc,
         time::Instant,
         u64,
     };
@@ -421,7 +449,7 @@ mod tests {
 
     use crate::{
         engine::{Engine, INT},
-        index::Index,
+        index::{HNSWErr, Index},
     };
 
     const DIM: INT = 128;
@@ -512,20 +540,27 @@ mod tests {
         assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
 
         for i in 0..8 {
-            let a = e
-                .get_point(i)
-                .expect(IOMSG)
-                .expect("The point was not found");
+            let a = e.get_point(i).expect("Error getting point");
             let b = points[i as INT].clone();
             assert_eq!(a.get_vals(), b.get_vals());
             assert_eq!(a.id, b.id);
             assert_eq!(a.level, b.level);
         }
 
-        assert!(e.get_point(8).expect(IOMSG).is_none());
-        assert!(e.get_point(16).expect(IOMSG).is_none());
-        assert!(e.get_point(1024).expect(IOMSG).is_none());
-        assert!(e.get_point(INT::MAX).expect(IOMSG).is_none());
+        let mut f = |e: &mut Engine, id: INT| -> bool {
+            match e.get_point(id) {
+                Err(e) => match e {
+                    HNSWErr::IDNotFound(other_id) => id == other_id,
+                    _ => false,
+                },
+                Ok(_) => false,
+            }
+        };
+
+        assert!(f(&mut e, 8));
+        assert!(f(&mut e, 16));
+        assert!(f(&mut e, 1024));
+        assert!(f(&mut e, INT::MAX));
 
         remove_dir_all(path).unwrap();
     }
@@ -540,6 +575,8 @@ mod tests {
         let _ = e.insert(&points[4..]).unwrap();
 
         assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
+
+        e.point_cache.invalidate_all();
 
         let mut check_cache_updates = |idx| {
             assert_eq!(e.point_cache.contains_key(&idx), false);
@@ -597,10 +634,7 @@ mod tests {
                 let p = points.get(id).unwrap();
                 assert_eq!(id, p.id as INT);
 
-                let a = e
-                    .get_point(id as INT)
-                    .expect(IOMSG)
-                    .expect("The point was not found");
+                let a = e.get_point(id as INT).expect("The point was not found");
 
                 assert_eq!(a.id, p.id);
                 assert_eq!(a.get_vals(), p.get_vals());

@@ -9,7 +9,10 @@ use points::point::Point;
 use std::collections::BTreeSet;
 use vectors::VecBase;
 
-use crate::{engine::INT, hnsw::Error, index::Index};
+use crate::{
+    engine::INT,
+    index::{HNSWErr, Index},
+};
 
 type OrderedDists = BTreeSet<Dist>;
 pub type LayerResult = IntMap<NodeID, IntSet<NodeID>>;
@@ -65,7 +68,7 @@ impl Results {
         let selected_points = self
             .selected
             .iter()
-            .map(|n| points.get_point(n.id).unwrap().unwrap());
+            .map(|n| points.get_point(n.id).unwrap());
         let distances = point.dist2many(selected_points);
         distances
             .zip(self.selected.iter().map(|n| n.id))
@@ -112,15 +115,15 @@ impl Results {
         id: INT,
         index: &mut impl Index,
         layer: INT,
-    ) -> Result<(), Error> {
+    ) -> Result<(), HNSWErr> {
         let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
         for node in cands {
             let neighs = match index.neighbors(node, layer) {
                 Ok(n) => n,
-                Err(_) => return Err(Error::Other),
+                Err(_) => return Err(HNSWErr::Other),
             };
             for neighbor in neighs.iter() {
-                let dist = Dist::new(*neighbor, index.distance(id, *neighbor).unwrap().unwrap());
+                let dist = Dist::new(*neighbor, index.distance(id, *neighbor).unwrap());
                 self.insert_candidate(dist);
             }
         }
