@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use graph::NodeID;
 use graph::dist::Dist;
 use log::{info, trace};
@@ -10,6 +12,21 @@ use crate::{
     hnsw::results::Results,
     index::{HNSWErr, Index},
 };
+
+macro_rules! timeit {
+    ($f:expr) => {
+        let s = Instant::now();
+        $f;
+        let e = s.elapsed();
+        println!("Executed {} in {e:?}", stringify!($f));
+    };
+    (let $x:ident = $f:expr) => {
+        let s = Instant::now();
+        let $x = $f;
+        let e = s.elapsed();
+        println!("Executed {} in {e:?}", stringify!($f));
+    };
+}
 
 enum Query {
     ID(INT),
@@ -32,7 +49,6 @@ impl Traverser {
     pub fn insert(&mut self, index: &mut impl Index, id: INT) -> Result<(), HNSWErr> {
         self.build_insertion_results(index, id)?;
         self.make_connections(index)?;
-        index.write_entries();
         Ok(())
     }
 
@@ -88,9 +104,9 @@ impl Traverser {
         for level_nb in (0..level + 1).rev() {
             trace!("Searching NNs for {id} at level {level_nb}",);
             trace!("Entry point is {:?}", self.results.selected);
-            self.search_level(level_nb, &Query::ID(id), index, index.get_ef_cons())?;
             // self.select_simple(&mut self.results, index.get_m());
-            self.select_heuristic(index, level_nb, id, index.get_m(), true, true)?;
+            self.search_level(level_nb, &Query::ID(id), index, index.get_ef_cons())?;
+            self.select_heuristic(index, level_nb, id, index.get_m(), false, false)?;
             self.results.save_layer_results(level_nb, id);
         }
         Ok(())

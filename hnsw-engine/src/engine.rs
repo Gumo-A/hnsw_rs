@@ -1,10 +1,10 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     fs::{File, create_dir, create_dir_all, remove_file},
     io::{self, BufReader, ErrorKind, Read, Write},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, RwLock},
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -20,7 +20,7 @@ use vectors::VecBase;
 use crate::{
     get_rand_file_name,
     hnsw::{HNSW, traverser::Traverser},
-    index::{HNSWErr, Index, IndexEntry, map_io_err, map_json_err},
+    index::{CachedEntry, CachedPoint, HNSWErr, Index, IndexEntry, map_io_err, map_json_err},
     manifest::{Manifest, ManifestList},
 };
 
@@ -48,8 +48,8 @@ const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 
 pub struct Engine {
     loc: PathBuf,
-    point_cache: Cache<INT, Arc<Point>>,
-    entry_cache: Cache<INT, Arc<IndexEntry>>,
+    point_cache: Cache<INT, CachedPoint>,
+    entry_cache: HashMap<INT, CachedEntry>,
     params: HNSW,
 }
 
@@ -60,10 +60,7 @@ impl Engine {
             .max_capacity(params.cache_cap as u64)
             .eviction_policy(EvictionPolicy::lru())
             .build();
-        let entry_cache = Cache::builder()
-            .max_capacity(params.cache_cap as u64)
-            .eviction_policy(EvictionPolicy::lru())
-            .build();
+        let entry_cache = HashMap::new();
         let engine = Self {
             loc: loc.clone(),
             point_cache,
@@ -191,7 +188,7 @@ impl Engine {
     }
 
     /// Also caches points stored in the same data file
-    fn load_point(&mut self, id: INT) -> Result<Arc<Point>, HNSWErr> {
+    fn load_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
         let manifest_list = self.get_current_manifest_list()?;
         let points = manifest_list
             .get_manifest_from_id(id)
@@ -205,16 +202,16 @@ impl Engine {
         self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss)
     }
 
-    fn load_entry(&mut self, id: INT) -> Result<Arc<IndexEntry>, HNSWErr> {
+    fn load_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
         let manifest_entries = self
             .get_current_manifest_list()?
             .get_manifest_from_id(id)
             .unwrap()
             .read_entries();
         for entry in manifest_entries {
-            self.entry_cache.insert(entry.id, Arc::new(entry));
+            self.entry_cache.insert(entry.get_id(), Arc::new(entry));
         }
-        self.entry_cache.get(&id).ok_or(HNSWErr::CacheMiss)
+        self.entry_cache.get(&id).ok_or(HNSWErr::CacheMiss).cloned()
     }
 
     pub fn insert(&mut self, points: &[Point]) -> Result<Manifest, HNSWErr> {
@@ -280,11 +277,13 @@ impl Engine {
         self.insert(p2)
     }
 
-    fn add_points_to_index(&mut self, manifest: &Manifest) {
+    fn add_points_to_index(&mut self, manifest: &Manifest) -> Result<(), HNSWErr> {
         let mut inserter = Traverser::new();
+        self.entry_cache.clear();
         for id in manifest.ids() {
-            inserter.insert(self, id);
+            inserter.insert(self, id)?;
         }
+        self.commit_results()
     }
 
     pub fn get_current_manifest_list(&self) -> Result<ManifestList, HNSWErr> {
@@ -298,22 +297,18 @@ impl Engine {
     pub fn get_nb_points(&self) -> Result<INT, HNSWErr> {
         Ok(self.get_current_manifest_list()?.get_nb_points())
     }
-
-    pub fn write_entries(&self) -> Result<(), HNSWErr> {
-        todo!("persist changes to index entries to disk")
-    }
 }
 
 impl Index for Engine {
-    fn get_point(&mut self, id: INT) -> Result<Arc<Point>, HNSWErr> {
+    fn get_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
         match self.point_cache.get(&id) {
             Some(p) => Ok(p),
             None => self.load_point(id),
         }
     }
 
-    fn get_entry(&mut self, id: INT) -> Result<Arc<IndexEntry>, HNSWErr> {
-        match self.entry_cache.get(&id) {
+    fn get_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
+        match self.entry_cache.get(&id).cloned() {
             Some(p) => Ok(p),
             None => self.load_entry(id),
         }
@@ -350,67 +345,66 @@ impl Index for Engine {
     }
 
     fn degree(&mut self, id: INT, level: INT) -> Result<INT, HNSWErr> {
-        Ok(self
-            .get_entry(id)?
-            .levels
-            .get(level)
-            .expect("Could not get level while getting a degree")
-            .len())
+        self.get_entry(id)?.degree(level)
+    }
+
+    fn neighbors(&mut self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr> {
+        self.get_entry(id)?.get_neighbors_cloned(level)
+    }
+
+    fn get_nb_levels(&mut self) -> Result<INT, HNSWErr> {
+        self.get_entry(self.get_ep())?.nb_levels()
     }
 
     fn add_node(&mut self, id: INT, level: INT) -> Result<(), HNSWErr> {
         let mut entry = self.get_entry(id)?;
-        while entry.levels.len() <= level {
-            entry.levels.push(HashSet::new());
+        while entry.nb_levels()? <= level {
+            entry.add_level();
         }
         Ok(())
     }
 
     fn add_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
-        let mut a_entry = self.get_entry(a)?;
-        let a_neighbors = a_entry
-            .levels
-            .get_mut(level)
-            .expect("Could not get level of `a` while adding edge");
-        let mut b_entry = self.get_entry(b)?;
-        let b_neighbors = b_entry
-            .levels
-            .get_mut(level)
-            .expect("Could not get level of `b` while adding edge");
-        a_neighbors.insert(b);
-        b_neighbors.insert(a);
-        Ok(())
+        let a_entry = self.get_entry(a)?;
+        let b_entry = self.get_entry(b)?;
+        a_entry.add_neighbor(b, level)?;
+        match b_entry.add_neighbor(a, level) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let a_recovery = a_entry.remove_neighbor(b, level);
+                if a_recovery.is_ok() {
+                    Err(e)
+                } else {
+                    panic!(
+                        "adding edge failed: {a}->{b} was successful, {b}->{a} wasn't, and then reverting {a}->{b} failed."
+                    )
+                }
+            }
+        }
     }
 
     fn remove_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
-        let mut a_entry = self.get_entry(a)?;
-        let a_neighbors = a_entry
-            .levels
-            .get_mut(level)
-            .expect("Could not get level of `a` while removing edge");
-        let mut b_entry = self.get_entry(b)?;
-        let b_neighbors = b_entry
-            .levels
-            .get_mut(level)
-            .expect("Could not get level of `b` while removing edge");
-        a_neighbors.remove(&b);
-        b_neighbors.remove(&a);
+        // TODO recover like add_edge
+        let a_entry = self.get_entry(a)?;
+        a_entry.remove_neighbor(b, level);
+        let b_entry = self.get_entry(b)?;
+        b_entry.remove_neighbor(a, level);
         Ok(())
     }
 
-    fn neighbors(
-        &mut self,
-        id: INT,
-        level: INT,
-    ) -> Result<std::collections::HashSet<INT>, HNSWErr> {
-        let entry = self.get_entry(self.get_ep())?;
-        let neighs_vec = entry.levels.get(level).unwrap();
-        let neighbors = HashSet::from_iter(neighs_vec.iter().cloned());
-        Ok(neighbors)
-    }
-
-    fn get_nb_levels(&mut self) -> Result<INT, HNSWErr> {
-        Ok(self.get_entry(self.get_ep())?.levels.len())
+    fn commit_results(&self) -> Result<(), HNSWErr> {
+        let entries_to_commit = self
+            .entry_cache
+            .values()
+            .filter(|e| {
+                e.is_modified()
+                    .expect("Could not filter entries based on 'is_modified'")
+            })
+            .cloned()
+            .collect();
+        self.get_current_manifest_list()?
+            .write_entries(entries_to_commit);
+        Ok(())
     }
 }
 
@@ -608,7 +602,8 @@ mod tests {
         let mut e = init_engine(path);
 
         let mut rng = rand::thread_rng();
-        let n = 2_usize.pow(12);
+        let n = 100;
+        // let n = 2_usize.pow(12);
         timeit!(let points = gen_rand_points(n));
         timeit!(let sample = Uniform::new(0, points.len())
             .sample_iter(rng.clone())
@@ -621,7 +616,7 @@ mod tests {
             loop {
                 insertions += 1;
                 let jump = (len / 2) - rng.gen_range(0..(len / 2).max(1)) + 1;
-                e.insert(&points[cursor..cursor + jump]).unwrap();
+                timeit!(e.insert(&points[cursor..cursor + jump]).unwrap());
                 len -= jump;
                 cursor += jump;
                 if cursor == points.len() {

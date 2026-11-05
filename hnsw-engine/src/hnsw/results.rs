@@ -1,8 +1,5 @@
-use core::panic;
 use graph::NodeID;
 use graph::dist::Dist;
-use graph::errors::GraphError;
-use graph::graph::Graph;
 use log::trace;
 use nohash_hasher::{IntMap, IntSet};
 use points::point::Point;

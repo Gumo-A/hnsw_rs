@@ -1,8 +1,9 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     fs::{File, remove_file},
     io::{self, BufReader, BufWriter, Read, Write},
+    ops::Deref,
     path::PathBuf,
 };
 
@@ -15,7 +16,7 @@ use crate::{
     FileName,
     engine::{DATA_LAYER, INDEX_LAYER, INT, METADATA_LAYER, get_level},
     get_rand_file_name,
-    index::IndexEntry,
+    index::{CachedEntry, IndexEntry},
     path_to_f_name_str,
 };
 
@@ -128,7 +129,7 @@ impl Manifest {
     }
 
     fn write_entries(&self, entries: &[IndexEntry]) -> INT {
-        let mut file = match File::create_new(&self.index_loc) {
+        let mut file = match File::create(&self.index_loc) {
             Ok(f) => f,
             Err(e) => panic!("Could not create index file at {:?}: {e}", self.index_loc),
         };
@@ -221,7 +222,7 @@ impl ManifestList {
 
     pub fn add_data(&mut self, mut data: &[Point], ml: f32) -> io::Result<Manifest> {
         let new_manifest = self.write_new_data(&mut data, ml);
-        self.update(&new_manifest)?;
+        self.add_manifest(&new_manifest)?;
         Ok(new_manifest)
     }
 
@@ -336,7 +337,7 @@ impl ManifestList {
     }
 
     /// we assume we have the write lock here
-    pub fn update(&mut self, new_manifest: &Manifest) -> io::Result<()> {
+    fn add_manifest(&mut self, new_manifest: &Manifest) -> io::Result<()> {
         self.loc = Self::get_next_manifest_list_path(
             &self
                 .loc
@@ -453,5 +454,20 @@ impl ManifestList {
 
     fn get_index_layer(&self) -> PathBuf {
         self.get_root().join(INDEX_LAYER)
+    }
+
+    pub fn write_entries(&mut self, entries: Vec<CachedEntry>) -> io::Result<()> {
+        for e in entries {
+            let mod_manifest = self.get_manifest_from_id(e.get_id()).unwrap();
+            let mut old_entries = mod_manifest.read_entries();
+            for i in old_entries.iter_mut() {
+                if i.get_id() == e.get_id() {
+                    i.replace_levels(e.get_levels_cloned().unwrap()).unwrap()
+                }
+                i.set_is_not_modified().unwrap();
+            }
+            mod_manifest.write_entries(&old_entries);
+        }
+        Ok(())
     }
 }
