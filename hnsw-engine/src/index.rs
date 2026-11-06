@@ -4,6 +4,8 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+use graph::dist::Dist;
+use itertools::Itertools;
 use points::point::Point;
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +50,22 @@ pub trait Index {
     fn remove_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
     fn neighbors(&mut self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr>;
     fn commit_results(&self) -> Result<(), HNSWErr>;
+    fn len(&self) -> Result<INT, HNSWErr>;
+    fn ann(&mut self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr>;
+
+    fn cap_neighbors(&mut self, id: INT, level: INT, m: INT) -> Result<(), HNSWErr> {
+        let new_neighbors = self
+            .get_entry(id)?
+            .read_levels()?
+            .get(level)
+            .ok_or(HNSWErr::NodeNotInLevel(id, level))?
+            .iter()
+            .map(|n| Dist::new(*n, self.distance(*n, id).unwrap()))
+            .sorted()
+            .take(m)
+            .map(|dist| dist.id);
+        self.replace_neighbors(id, new_neighbors, level)
+    }
 
     fn get_level(&mut self, id: INT) -> Result<INT, HNSWErr> {
         Ok(self.get_point(id)?.level.into())
@@ -158,7 +176,7 @@ impl IndexEntry {
         self.id
     }
 
-    fn read_levels(&self) -> Result<RwLockReadGuard<Levels>, HNSWErr> {
+    pub fn read_levels(&self) -> Result<RwLockReadGuard<Levels>, HNSWErr> {
         self.levels.read().map_err(|_| HNSWErr::Other)
     }
 

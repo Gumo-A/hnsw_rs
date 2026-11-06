@@ -119,16 +119,7 @@ impl Traverser {
                 index.add_neighbors(*node, neighbors.iter().copied(), *layer_nb)?;
                 for n in neighbors {
                     if index.degree(*n, *layer_nb)? > index.get_m_at_level(*layer_nb) {
-                        let query = index.get_point(*n)?;
-                        let neighs = index.neighbors(*n, *layer_nb)?;
-                        let mut candidate_dists = Vec::new();
-                        for id in neighs.iter().copied() {
-                            candidate_dists
-                                .push(Dist::new(id, index.get_point(id)?.dist2other(&query)));
-                        }
-                        let new =
-                            Self::select_simple(candidate_dists, index.get_m_at_level(*layer_nb));
-                        index.replace_neighbors(*n, new.iter().copied(), *layer_nb)?;
+                        index.cap_neighbors(*n, *layer_nb, index.get_m_at_level(*layer_nb))?;
                     }
                 }
             }

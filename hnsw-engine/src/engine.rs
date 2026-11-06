@@ -418,6 +418,15 @@ impl Index for Engine {
             .write_entries(entries_to_commit);
         Ok(())
     }
+
+    fn ann(&mut self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr> {
+        let mut traverser = Traverser::new();
+        traverser.ann_by_point(self, point.clone(), n, ef)
+    }
+
+    fn len(&self) -> Result<INT, HNSWErr> {
+        Ok(self.get_current_manifest_list()?.get_nb_points())
+    }
 }
 
 pub fn get_level(ml: f32, rng: &mut ThreadRng) -> INT {
