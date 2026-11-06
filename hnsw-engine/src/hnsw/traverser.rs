@@ -1,7 +1,7 @@
-use std::time::Instant;
+use std::{env, time::Instant};
 
-use graph::NodeID;
 use graph::dist::Dist;
+use itertools::Itertools;
 use log::{info, trace};
 use nohash_hasher::IntSet;
 use points::point::Point;
@@ -104,9 +104,9 @@ impl Traverser {
         for level_nb in (0..level + 1).rev() {
             trace!("Searching NNs for {id} at level {level_nb}",);
             trace!("Entry point is {:?}", self.results.selected);
-            // self.select_simple(&mut self.results, index.get_m());
             self.search_level(level_nb, &Query::ID(id), index, index.get_ef_cons())?;
-            self.select_heuristic(index, level_nb, id, index.get_m(), false, false)?;
+            self.select_heuristic(index, level_nb, id, index.get_m())?;
+            // self.results.select_simple(index.get_m());
             self.results.save_layer_results(level_nb, id);
         }
         Ok(())
@@ -126,11 +126,6 @@ impl Traverser {
         }
         info!("Finished making connections");
         Ok(())
-    }
-
-    fn select_simple(mut cands: Vec<Dist>, m: usize) -> IntSet<INT> {
-        cands.sort();
-        IntSet::from_iter(cands.iter().take(m).map(|dist| dist.id))
     }
 
     fn search_level(
@@ -204,23 +199,19 @@ impl Traverser {
         Ok(())
     }
 
-    // pub fn select_simple(&self, results: &mut Results, m: usize) {
-    //     results.select_simple(m);
-    // }
-
     pub fn select_heuristic(
         &mut self,
         index: &mut impl Index,
         layer: INT,
         id: INT,
         m: usize,
-        extend_cands: bool,
-        keep_pruned: bool,
     ) -> Result<(), HNSWErr> {
         trace!(
             "Begin select_heuristic, selected is {:?}",
             self.results.selected
         );
+        let extend_cands = env::var("HNSW_EXT_CANDS").is_ok();
+        let keep_pruned = env::var("HNSW_KEEP_PRUNED").is_ok();
         self.results.select_setup();
         if extend_cands {
             self.results
@@ -264,9 +255,20 @@ impl Traverser {
         vector: &Vec<f32>,
         n: usize,
         ef: usize,
-    ) -> Result<Vec<NodeID>, HNSWErr> {
+    ) -> Result<Vec<INT>, HNSWErr> {
         info!("Start ANN search");
         let point = Point::new(vector);
+        self.ann_by_point(index, point, n, ef)
+    }
+
+    pub fn ann_by_point(
+        &mut self,
+        index: &mut impl Index,
+        point: Point,
+        n: usize,
+        ef: usize,
+    ) -> Result<Vec<INT>, HNSWErr> {
+        info!("Start ANN search");
         self.clear_results();
         self.results.insert_selected(Dist::new(
             index.get_ep(),
@@ -280,7 +282,7 @@ impl Traverser {
         }
         self.search_level(0, &query, index, ef)?;
 
-        let anns: Vec<NodeID> = self
+        let anns: Vec<INT> = self
             .results
             .get_top_selected(n)
             .iter()
