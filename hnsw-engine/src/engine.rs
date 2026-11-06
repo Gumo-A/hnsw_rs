@@ -10,7 +10,7 @@ use std::{
 };
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use graph::graph::Graph;
+use graph::{dist::Dist, graph::Graph};
 use hnsw::helpers::get_progress_bar;
 use itertools::Itertools;
 use moka::{policy::EvictionPolicy, sync::Cache};
@@ -190,7 +190,6 @@ impl Engine {
 
     /// Also caches points stored in the same data file
     fn load_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
-        println!("0");
         let manifest_list = self.get_current_manifest_list()?;
         let points = manifest_list
             .get_manifest_from_id(id)
@@ -205,7 +204,6 @@ impl Engine {
     }
 
     fn load_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
-        println!("0");
         let manifest_entries = self
             .get_current_manifest_list()?
             .get_manifest_from_id(id)
@@ -281,12 +279,12 @@ impl Engine {
     }
 
     fn add_points_to_index(&mut self, manifest: &Manifest) -> Result<(), HNSWErr> {
-        let mut inserter = Traverser::new();
+        let mut traverser = Traverser::new();
         self.entry_cache.clear();
         let bar = get_progress_bar("inserting", manifest.ids().count());
         for id in manifest.ids() {
             bar.inc(1);
-            inserter.insert(self, id)?;
+            traverser.insert(self, id)?;
         }
         self.commit_results();
         Ok(())
@@ -299,29 +297,19 @@ impl Engine {
     pub fn get_number_of_manifests(&self) -> Result<INT, HNSWErr> {
         Ok(self.get_current_manifest_list()?.manifests.len())
     }
-
-    pub fn get_nb_points(&self) -> Result<INT, HNSWErr> {
-        Ok(self.get_current_manifest_list()?.get_nb_points())
-    }
 }
 
 impl Index for Engine {
     fn get_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
         match self.point_cache.get(&id) {
-            Some(p) => {
-                println!("1");
-                Ok(p)
-            }
+            Some(p) => Ok(p),
             None => self.load_point(id),
         }
     }
 
     fn get_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
         match self.entry_cache.get(&id).cloned() {
-            Some(p) => {
-                println!("1");
-                Ok(p)
-            }
+            Some(p) => Ok(p),
             None => self.load_entry(id),
         }
     }
@@ -446,7 +434,8 @@ pub fn get_level(ml: f32, rng: &mut ThreadRng) -> INT {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::remove_dir_all,
+        collections::HashSet,
+        fs::{File, remove_dir_all},
         path::{Path, PathBuf},
         sync::Arc,
         time::Instant,
@@ -454,6 +443,9 @@ mod tests {
     };
 
     use env_logger::init;
+    use graph::dist::Dist;
+    use hnsw::helpers::glove::load_glove_array;
+    use itertools::Itertools;
     use log::trace;
     use points::point::Point;
     use rand::{
@@ -665,5 +657,57 @@ mod tests {
         check_sample(&mut e);
 
         // remove_dir_all(path).unwrap();
+    }
+
+    fn get_glove_data() -> (Vec<Point>, Vec<Point>) {
+        let file = File::open("/home/gamal/hnsw_rs/test-data/store.txt").unwrap();
+        let (_, stored) = load_glove_array(0, file, false).expect("Could not load store vectors");
+        let file = File::open("/home/gamal/hnsw_rs/test-data/queries.txt").unwrap();
+        let (_, queries) = load_glove_array(0, file, false).expect("Could not load query vectors");
+        let mut f = |vectors: Vec<Vec<f32>>| -> Vec<Point> {
+            vectors
+                .iter()
+                .enumerate()
+                .map(|(idx, v)| Point::with_level_and_id(v, 0, idx))
+                .collect()
+        };
+        return (f(stored), f(queries));
+    }
+
+    fn get_actual_nn(queries: &Vec<Point>, index: &mut impl Index) -> Vec<Vec<INT>> {
+        let mut queries_nn: Vec<Vec<INT>> = Vec::new();
+        for query_point in queries.iter() {
+            let query_true_nn = (0..index.len().unwrap())
+                .map(|idx| Dist::new(idx, index.distance2point(idx, query_point).unwrap()))
+                .sorted()
+                .map(|dist| dist.id)
+                .take(10)
+                .collect();
+            queries_nn.push(query_true_nn);
+        }
+        queries_nn
+    }
+
+    #[test]
+    fn glove_accuracy() {
+        let path = "./glove-test";
+        let mut e = init_engine(path);
+        let (stored, queries) = get_glove_data();
+        e.insert(&stored).unwrap();
+
+        let queries_nn = get_actual_nn(&queries, &mut e);
+
+        let mut total_hits = 0;
+        for (idx, query) in queries.iter().enumerate() {
+            let query_ann = e.ann(query, 10, 100).unwrap();
+            let query_ann: HashSet<INT> = HashSet::from_iter(query_ann.iter().copied());
+
+            let query_true_nn = HashSet::from_iter(queries_nn.get(idx).unwrap().iter().copied());
+            let hits = query_true_nn.intersection(&query_ann).count();
+            total_hits += hits;
+        }
+        let final_acc = total_hits as f32 / (queries.len() * 10) as f32;
+        println!("Final accuracy was {final_acc}");
+        assert!(final_acc > 0.99);
     }
 }
