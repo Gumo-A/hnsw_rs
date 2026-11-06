@@ -11,6 +11,7 @@ use std::{
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use graph::graph::Graph;
+use hnsw::helpers::get_progress_bar;
 use itertools::Itertools;
 use moka::{policy::EvictionPolicy, sync::Cache};
 use points::point::{Point, VecType};
@@ -189,6 +190,7 @@ impl Engine {
 
     /// Also caches points stored in the same data file
     fn load_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
+        println!("0");
         let manifest_list = self.get_current_manifest_list()?;
         let points = manifest_list
             .get_manifest_from_id(id)
@@ -203,6 +205,7 @@ impl Engine {
     }
 
     fn load_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
+        println!("0");
         let manifest_entries = self
             .get_current_manifest_list()?
             .get_manifest_from_id(id)
@@ -280,10 +283,13 @@ impl Engine {
     fn add_points_to_index(&mut self, manifest: &Manifest) -> Result<(), HNSWErr> {
         let mut inserter = Traverser::new();
         self.entry_cache.clear();
+        let bar = get_progress_bar("inserting", manifest.ids().count());
         for id in manifest.ids() {
+            bar.inc(1);
             inserter.insert(self, id)?;
         }
-        self.commit_results()
+        self.commit_results();
+        Ok(())
     }
 
     pub fn get_current_manifest_list(&self) -> Result<ManifestList, HNSWErr> {
@@ -302,14 +308,20 @@ impl Engine {
 impl Index for Engine {
     fn get_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
         match self.point_cache.get(&id) {
-            Some(p) => Ok(p),
+            Some(p) => {
+                println!("1");
+                Ok(p)
+            }
             None => self.load_point(id),
         }
     }
 
     fn get_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
         match self.entry_cache.get(&id).cloned() {
-            Some(p) => Ok(p),
+            Some(p) => {
+                println!("1");
+                Ok(p)
+            }
             None => self.load_entry(id),
         }
     }
@@ -602,21 +614,20 @@ mod tests {
         let mut e = init_engine(path);
 
         let mut rng = rand::thread_rng();
-        let n = 100;
-        // let n = 2_usize.pow(12);
-        timeit!(let points = gen_rand_points(n));
-        timeit!(let sample = Uniform::new(0, points.len())
+        let n = 2_usize.pow(12);
+        let points = gen_rand_points(n);
+        let sample = Uniform::new(0, points.len())
             .sample_iter(rng.clone())
             .take(1000)
-            .collect::<Vec<INT>>());
+            .collect::<Vec<INT>>();
         let mut cursor = 0;
         let mut len = points.len();
         let mut insertions = 0;
         let mut insert_loop = |e: &mut Engine| {
             loop {
                 insertions += 1;
-                let jump = (len / 2) - rng.gen_range(0..(len / 2).max(1)) + 1;
-                timeit!(e.insert(&points[cursor..cursor + jump]).unwrap());
+                let jump = (len / 2) - rng.gen_range((len / 4)..(len / 2).max(1)) + 1;
+                e.insert(&points[cursor..cursor + jump]).unwrap();
                 len -= jump;
                 cursor += jump;
                 if cursor == points.len() {
@@ -636,13 +647,13 @@ mod tests {
             }
         };
 
-        timeit!(insert_loop(&mut e));
+        insert_loop(&mut e);
 
         assert_eq!(e.get_number_of_manifests().expect(IOMSG), insertions);
-        timeit!(e.optimize().unwrap());
+        e.optimize().unwrap();
         assert_eq!(e.get_number_of_manifests().expect(IOMSG), 1);
 
-        timeit!(check_sample(&mut e));
+        check_sample(&mut e);
 
         // remove_dir_all(path).unwrap();
     }

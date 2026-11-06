@@ -7,6 +7,7 @@ use std::{
     path::PathBuf,
 };
 
+use hnsw::helpers::get_progress_bar;
 use itertools::Itertools;
 use points::point::{Point, VecType};
 use rand::thread_rng;
@@ -457,7 +458,9 @@ impl ManifestList {
     }
 
     pub fn write_entries(&mut self, entries: Vec<CachedEntry>) -> io::Result<()> {
+        let bar = get_progress_bar("writting entries", entries.len());
         for e in entries {
+            bar.inc(1);
             let mod_manifest = self.get_manifest_from_id(e.get_id()).unwrap();
             let mut old_entries = mod_manifest.read_entries();
             for i in old_entries.iter_mut() {
