@@ -6,7 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-hnsw = { path = "../hnsw"}
+hnsw= {path = "../hnsw"}
+hnsw-engine = {path = "../hnsw-engine"}
 vectors = {path = "../vectors"}
 points = {path = "../points"}
 indicatif = "0.17.8"

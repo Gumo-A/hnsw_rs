@@ -8,9 +8,10 @@ use std::time::Instant;
 
 use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::glove::load_glove_array;
-
-use hnsw::template::HNSW;
-
+use hnsw_engine::engine::Engine;
+use hnsw_engine::index::Index;
+use points::point::Point;
+use vectors::QuantVec;
 use vectors::VecBase;
 
 const DEFAULT_HNSW_THREADS: usize = 4;
@@ -43,55 +44,21 @@ fn main() -> std::io::Result<()> {
     if tmp_path.exists() {
         remove_dir_all(tmp_path).unwrap();
     }
-    let mut store = HNSW::new("./persistance", m, None, embeddings[0].len());
+    let mut store = Engine::new(Path::new("./persistance").to_path_buf(), m).unwrap();
     let s = Instant::now();
-    store = store
-        .insert_bulk(embeddings.clone(), nb_threads, true)
-        .unwrap();
+    let embeddings: Vec<Point> = embeddings
+        .iter()
+        .enumerate()
+        .map(|(idx, v)| Point::with_vec_and_id(&QuantVec::new(v), idx))
+        .collect();
+    store.insert(&embeddings).unwrap();
     let e = s.elapsed().as_secs_f32();
     println!(
         "took {0}s to build index with {1} points and M {2}",
         e,
-        store.len(),
-        store.params.m
+        store.len().unwrap(),
+        store.get_m()
     );
-    // let chunk_size = 10_000;
-    // let mut i = 0;
-    // let nb_chunks = embeddings.len() / chunk_size;
-    // for _ in 0..nb_chunks {
-    //     let j = i + chunk_size;
-    //     println!("Inserting up to {j}");
-    //     store = store
-    //         .insert_bulk(embeddings[i..j].to_vec().clone(), nb_threads, true)
-    //         .unwrap();
-    //     i += chunk_size;
-    // }
-
-    let path = Path::new("./index_eval_test");
-    if path.exists() {
-        remove_dir_all(path).unwrap();
-    }
-
-    let s = Instant::now();
-    store.save(path);
-    let e = s.elapsed().as_millis();
-    println!(
-        "took {0} ms to save index with {1} points and M {2}",
-        e,
-        store.len(),
-        store.params.m
-    );
-
-    let s = Instant::now();
-    let store = HNSW::load(path).unwrap();
-    let e = s.elapsed().as_millis();
-    println!(
-        "took {0} ms to load index with {1} points and M {2}",
-        e,
-        store.len(),
-        store.params.m
-    );
-
     // {
     //     use text_io::read;
 

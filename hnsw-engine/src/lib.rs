@@ -1,7 +1,7 @@
 #[allow(unused)]
-mod engine;
+pub mod engine;
 mod hnsw;
-mod index;
+pub mod index;
 mod manifest;
 
 use std::path::PathBuf;

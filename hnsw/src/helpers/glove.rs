@@ -1,14 +1,8 @@
 use core::panic;
-use graph::dist::Dist;
-use graph::NodeID;
 use indicatif::{ProgressBar, ProgressStyle};
-use points::point::Point;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
 use std::str::FromStr;
-use std::sync::Arc;
-use vectors::VecBase;
 
 pub fn load_glove_array(
     lim: usize,

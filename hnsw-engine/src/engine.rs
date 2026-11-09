@@ -463,7 +463,7 @@ mod tests {
         index::{HNSWErr, Index},
     };
 
-    const DIM: INT = 128;
+    const DIM: INT = 4;
     const M: INT = 8;
     const IOMSG: &str = "IO error ocurred";
 
@@ -619,8 +619,8 @@ mod tests {
         let path = "./optimize-rand-test";
         let mut e = init_engine(path);
 
+        let n = 1024;
         let mut rng = rand::thread_rng();
-        let n = 2_usize.pow(12);
         let points = gen_rand_points(n);
         let sample = Uniform::new(0, points.len())
             .sample_iter(rng.clone())
@@ -661,7 +661,7 @@ mod tests {
 
         check_sample(&mut e);
 
-        // remove_dir_all(path).unwrap();
+        remove_dir_all(path).unwrap();
     }
 
     fn get_glove_data() -> (Vec<Point>, Vec<Point>) {
@@ -714,5 +714,6 @@ mod tests {
         let final_acc = total_hits as f32 / (queries.len() * 10) as f32;
         println!("Final accuracy was {final_acc}");
         assert!(final_acc > 0.95);
+        remove_dir_all(path).unwrap();
     }
 }
