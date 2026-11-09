@@ -400,6 +400,10 @@ impl Index for Engine {
                 e.is_modified()
                     .expect("Could not filter entries based on 'is_modified'")
             })
+            .map(|e| {
+                e.set_is_not_modified().unwrap_or_default();
+                e
+            })
             .cloned()
             .collect();
         self.get_current_manifest_list()?

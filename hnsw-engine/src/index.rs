@@ -115,7 +115,7 @@ pub trait Index {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Levels {
     levels: Vec<HashSet<INT>>,
     is_modified: bool,
@@ -162,6 +162,15 @@ impl Levels {
 pub struct IndexEntry {
     id: INT,
     levels: RwLock<Levels>,
+}
+
+impl Clone for IndexEntry {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            levels: RwLock::new(self.read_levels().unwrap().clone()),
+        }
+    }
 }
 
 impl IndexEntry {

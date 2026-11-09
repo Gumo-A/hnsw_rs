@@ -3,8 +3,8 @@ use std::{
     env,
     fs::{File, remove_file},
     io::{self, BufReader, BufWriter, Read, Write},
-    ops::Deref,
     path::PathBuf,
+    sync::Arc,
 };
 
 use hnsw::helpers::get_progress_bar;
@@ -458,19 +458,26 @@ impl ManifestList {
     }
 
     pub fn write_entries(&mut self, entries: Vec<CachedEntry>) -> io::Result<()> {
-        let bar = get_progress_bar("writting entries", entries.len());
-        for e in entries {
-            bar.inc(1);
-            let mod_manifest = self.get_manifest_from_id(e.get_id()).unwrap();
-            let mut old_entries = mod_manifest.read_entries();
-            for i in old_entries.iter_mut() {
-                if i.get_id() == e.get_id() {
-                    i.replace_levels(e.get_levels_cloned().unwrap()).unwrap()
-                }
-                i.set_is_not_modified().unwrap();
-            }
-            mod_manifest.write_entries(&old_entries);
-        }
+        let grouping_bar = get_progress_bar("grouping entries", entries.len());
+        let mut grouped: HashMap<PathBuf, (&Manifest, Vec<IndexEntry>)> = HashMap::new();
+        entries
+            .iter()
+            .map(|e| {
+                let manifest = self.get_manifest_from_id(e.get_id()).unwrap();
+                ((manifest, manifest.index_loc.clone()), e.clone())
+            })
+            .for_each(|((manifest, key), val)| {
+                grouping_bar.inc(1);
+                grouped
+                    .entry(key)
+                    .and_modify(|e| e.1.push(Arc::unwrap_or_clone(val.clone())))
+                    .or_insert((manifest, vec![Arc::unwrap_or_clone(val.clone())]));
+            });
+        let writting_bar = get_progress_bar("writting manifests", grouped.len());
+        grouped.values().for_each(|(manifest, entries)| {
+            writting_bar.inc(1);
+            manifest.write_entries(entries);
+        });
         Ok(())
     }
 }
