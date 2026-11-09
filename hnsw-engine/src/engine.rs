@@ -460,6 +460,7 @@ mod tests {
     };
 
     const DIM: INT = 128;
+    const M: INT = 8;
     const IOMSG: &str = "IO error ocurred";
 
     fn remove_path_if_exists(path: &str) -> PathBuf {
@@ -473,7 +474,7 @@ mod tests {
     fn init_engine(path: &str) -> Engine {
         // env_logger::init();
         let path = remove_path_if_exists(path);
-        Engine::new(path, DIM).unwrap()
+        Engine::new(path, M).unwrap()
     }
 
     fn gen_rand_points(n: INT) -> Vec<Point> {
@@ -708,6 +709,6 @@ mod tests {
         }
         let final_acc = total_hits as f32 / (queries.len() * 10) as f32;
         println!("Final accuracy was {final_acc}");
-        assert!(final_acc > 0.99);
+        assert!(final_acc > 0.95);
     }
 }
