@@ -21,7 +21,8 @@ pub struct HNSW {
 const CACHE_SIZE_BYTES: INT = 134217728; // 128MiB
 const DEFAULT_CACHE_CAP: INT = 130056; // 128MiB worth of dim-1024 QuantVecs
 fn get_cache_cap(dim: INT) -> INT {
-    CACHE_SIZE_BYTES / (8 + dim)
+    // CACHE_SIZE_BYTES / (8 + dim)
+    DEFAULT_CACHE_CAP
 }
 
 impl HNSW {
@@ -40,6 +41,6 @@ impl HNSW {
 
     pub fn set_dim(&mut self, dim: INT) {
         self.dim = Some(dim);
-        self.cache_cap = get_cache_cap(dim);
+        // self.cache_cap = get_cache_cap(dim);
     }
 }

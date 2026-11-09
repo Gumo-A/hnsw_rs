@@ -49,7 +49,7 @@ const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 
 pub struct Engine {
     loc: PathBuf,
-    point_cache: Cache<INT, CachedPoint>,
+    point_cache: HashMap<INT, CachedPoint>,
     entry_cache: HashMap<INT, CachedEntry>,
     params: HNSW,
 }
@@ -57,10 +57,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(loc: PathBuf, m: INT) -> Result<Self, HNSWErr> {
         let params = Self::init_at_loc(&loc, m)?;
-        let point_cache = Cache::builder()
-            .max_capacity(params.cache_cap as u64)
-            .eviction_policy(EvictionPolicy::lru())
-            .build();
+        let point_cache = HashMap::new();
         let entry_cache = HashMap::new();
         let engine = Self {
             loc: loc.clone(),
@@ -195,24 +192,32 @@ impl Engine {
             .get_manifest_from_id(id)
             .ok_or(HNSWErr::IDNotFound(id))?
             .read_data();
+        let bar = get_progress_bar("caching points", points.len());
         for p in points {
-            if !self.point_cache.contains_key(&(p.id as INT)) {
-                self.point_cache.insert(p.id as INT, Arc::new(p));
-            }
+            bar.inc(1);
+            self.point_cache.insert(p.id as INT, Arc::new(p));
         }
-        self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss)
+        self.point_cache
+            .get(&id)
+            .ok_or(HNSWErr::PointCacheMiss)
+            .cloned()
     }
 
     fn load_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
-        let manifest_entries = self
+        let entries = self
             .get_current_manifest_list()?
             .get_manifest_from_id(id)
             .unwrap()
             .read_entries();
-        for entry in manifest_entries {
+        let bar = get_progress_bar("caching entries", entries.len());
+        for entry in entries {
+            bar.inc(1);
             self.entry_cache.insert(entry.get_id(), Arc::new(entry));
         }
-        self.entry_cache.get(&id).ok_or(HNSWErr::CacheMiss).cloned()
+        self.entry_cache
+            .get(&id)
+            .ok_or(HNSWErr::EntryCacheMiss)
+            .cloned()
     }
 
     pub fn insert(&mut self, points: &[Point]) -> Result<Manifest, HNSWErr> {
@@ -221,11 +226,13 @@ impl Engine {
             self.divide_and_insert(points)
         } else {
             self.write_lock();
+            self.point_cache.clear();
+            self.entry_cache.clear();
             let manifest = self
                 .get_current_manifest_list()?
                 .add_data(points, self.params.ml)
                 .map_err(map_io_err)?;
-            self.add_points_to_index(&manifest);
+            self.add_points_to_index(&manifest)?;
             self.write_unlock();
             Ok(manifest)
         }
@@ -271,6 +278,7 @@ impl Engine {
     }
 
     fn divide_and_insert(&mut self, points: &[Point]) -> Result<Manifest, HNSWErr> {
+        println!("called divide");
         let mid = points.len() / 2;
         let p1 = &points[..mid];
         let p2 = &points[mid..];
@@ -280,9 +288,8 @@ impl Engine {
 
     fn add_points_to_index(&mut self, manifest: &Manifest) -> Result<(), HNSWErr> {
         let mut traverser = Traverser::new();
-        self.entry_cache.clear();
         let bar = get_progress_bar("inserting", manifest.ids().count());
-        for id in manifest.ids() {
+        for id in manifest.ordered_ids() {
             bar.inc(1);
             traverser.insert(self, id)?;
         }
@@ -302,7 +309,7 @@ impl Engine {
 impl Index for Engine {
     fn get_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
         match self.point_cache.get(&id) {
-            Some(p) => Ok(p),
+            Some(p) => Ok(p.clone()),
             None => self.load_point(id),
         }
     }
@@ -588,7 +595,7 @@ mod tests {
 
         assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
 
-        e.point_cache.invalidate_all();
+        // e.point_cache.invalidate_all();
 
         let mut check_cache_updates = |idx| {
             assert_eq!(e.point_cache.contains_key(&idx), false);

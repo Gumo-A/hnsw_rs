@@ -40,18 +40,24 @@ fn main() -> std::io::Result<()> {
 
     let (words, embeddings) = load_glove_array(lim, file, true).unwrap();
 
-    let tmp_path = Path::new("./persistance");
+    let tmp_path = Path::new("/tmp/glove-test");
     if tmp_path.exists() {
         remove_dir_all(tmp_path).unwrap();
     }
-    let mut store = Engine::new(Path::new("./persistance").to_path_buf(), m).unwrap();
+    let mut store = Engine::new(tmp_path.to_path_buf(), m).unwrap();
     let s = Instant::now();
     let embeddings: Vec<Point> = embeddings
         .iter()
         .enumerate()
         .map(|(idx, v)| Point::with_vec_and_id(&QuantVec::new(v), idx))
         .collect();
-    store.insert(&embeddings).unwrap();
+    match store.insert(&embeddings) {
+        Err(e) => {
+            println!("{e:?}, exiting");
+            return Ok(());
+        }
+        Ok(_) => (),
+    };
     let e = s.elapsed().as_secs_f32();
     println!(
         "took {0}s to build index with {1} points and M {2}",

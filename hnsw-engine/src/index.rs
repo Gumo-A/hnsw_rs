@@ -20,7 +20,8 @@ pub enum HNSWErr {
     JSONErr(serde_json::Error),
     NothingToInsert,
     InvalidDimension,
-    CacheMiss,
+    PointCacheMiss,
+    EntryCacheMiss,
     NodeNotInLevel(INT, INT),
 }
 

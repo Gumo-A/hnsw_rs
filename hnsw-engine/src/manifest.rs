@@ -27,7 +27,7 @@ pub struct Manifest {
     pub index_loc: PathBuf,
     pub id_ranges: Vec<(INT, INT)>,
     #[serde(skip)]
-    pub ids: HashSet<INT>,
+    ids: HashSet<INT>,
 }
 
 impl Manifest {
@@ -458,7 +458,6 @@ impl ManifestList {
     }
 
     pub fn write_entries(&mut self, entries: Vec<CachedEntry>) -> io::Result<()> {
-        let grouping_bar = get_progress_bar("grouping entries", entries.len());
         let mut grouped: HashMap<PathBuf, (&Manifest, Vec<IndexEntry>)> = HashMap::new();
         entries
             .iter()
@@ -467,15 +466,12 @@ impl ManifestList {
                 ((manifest, manifest.index_loc.clone()), e.clone())
             })
             .for_each(|((manifest, key), val)| {
-                grouping_bar.inc(1);
                 grouped
                     .entry(key)
                     .and_modify(|e| e.1.push(Arc::unwrap_or_clone(val.clone())))
                     .or_insert((manifest, vec![Arc::unwrap_or_clone(val.clone())]));
             });
-        let writting_bar = get_progress_bar("writting manifests", grouped.len());
         grouped.values().for_each(|(manifest, entries)| {
-            writting_bar.inc(1);
             manifest.write_entries(entries);
         });
         Ok(())
