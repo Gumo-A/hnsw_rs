@@ -49,7 +49,7 @@ const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 
 pub struct Engine {
     loc: PathBuf,
-    point_cache: Cache<INT, CachedPoint>,
+    point_cache: HashMap<INT, CachedPoint>,
     entry_cache: HashMap<INT, CachedEntry>,
     params: HNSW,
 }
@@ -57,10 +57,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(loc: PathBuf, m: INT) -> Result<Self, HNSWErr> {
         let params = Self::init_at_loc(&loc, m)?;
-        let point_cache = Cache::builder()
-            .max_capacity(params.cache_cap as u64)
-            .eviction_policy(EvictionPolicy::lru())
-            .build();
+        let point_cache = HashMap::new();
         let entry_cache = HashMap::new();
         let engine = Self {
             loc: loc.clone(),
@@ -200,7 +197,7 @@ impl Engine {
                 self.point_cache.insert(p.id as INT, Arc::new(p));
             }
         }
-        self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss)
+        self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss).cloned()
     }
 
     fn load_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
@@ -301,7 +298,7 @@ impl Engine {
 
 impl Index for Engine {
     fn get_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
-        match self.point_cache.get(&id) {
+        match self.point_cache.get(&id).cloned() {
             Some(p) => Ok(p),
             None => self.load_point(id),
         }
@@ -588,7 +585,7 @@ mod tests {
 
         assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
 
-        e.point_cache.invalidate_all();
+        e.point_cache.clear();
 
         let mut check_cache_updates = |idx| {
             assert_eq!(e.point_cache.contains_key(&idx), false);
