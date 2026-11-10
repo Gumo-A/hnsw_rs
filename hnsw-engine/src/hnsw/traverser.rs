@@ -1,9 +1,7 @@
-use std::{env, time::Instant};
+use std::env;
 
 use graph::dist::Dist;
-use itertools::Itertools;
 use log::{info, trace};
-use nohash_hasher::IntSet;
 use points::point::Point;
 use vectors::VecBase;
 
@@ -12,21 +10,6 @@ use crate::{
     hnsw::results::Results,
     index::{HNSWErr, Index},
 };
-
-macro_rules! timeit {
-    ($f:expr) => {
-        let s = Instant::now();
-        $f;
-        let e = s.elapsed();
-        println!("Executed {} in {e:?}", stringify!($f));
-    };
-    (let $x:ident = $f:expr) => {
-        let s = Instant::now();
-        let $x = $f;
-        let e = s.elapsed();
-        println!("Executed {} in {e:?}", stringify!($f));
-    };
-}
 
 enum Query {
     ID(INT),

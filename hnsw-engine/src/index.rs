@@ -185,11 +185,11 @@ impl IndexEntry {
         self.id
     }
 
-    pub fn read_levels(&self) -> Result<RwLockReadGuard<Levels>, HNSWErr> {
+    pub fn read_levels(&self) -> Result<RwLockReadGuard<'_, Levels>, HNSWErr> {
         self.levels.read().map_err(|_| HNSWErr::Other)
     }
 
-    fn write_levels(&self) -> Result<RwLockWriteGuard<Levels>, HNSWErr> {
+    fn write_levels(&self) -> Result<RwLockWriteGuard<'_, Levels>, HNSWErr> {
         let mut guard = self.levels.write().map_err(|_| HNSWErr::Other)?;
         guard.is_modified = true;
         Ok(guard)
