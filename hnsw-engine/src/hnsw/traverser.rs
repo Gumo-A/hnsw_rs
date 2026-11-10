@@ -53,9 +53,12 @@ impl Traverser {
                 format!("Inserting at level {level}").as_str(),
                 level_ids.len(),
             );
-            let chunks = ((level_ids.len() as f64) / (nb_threads as f64)).ceil() as usize;
+            let chunk_size = ((level_ids.len() as f64) / (nb_threads as f64)).ceil() as usize;
+            if chunk_size == 0 {
+                dbg!(chunk_size, level_ids.len(), level);
+            }
             let mut level_ids: Vec<Vec<INT>> = level_ids
-                .chunks(chunks)
+                .chunks(chunk_size)
                 .map(|chunk| Vec::from(chunk))
                 .collect();
 
@@ -66,7 +69,7 @@ impl Traverser {
                 let index_2 = index_1.clone();
                 let bar_cp = bar.clone();
                 let thread = Builder::new()
-                    .name(format!("worker {idx}"))
+                    .name(format!("thread {idx}"))
                     .spawn(move || {
                         let mut inserter = Self::new();
                         for id in ids_split.iter() {

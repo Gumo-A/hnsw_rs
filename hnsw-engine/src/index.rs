@@ -1,12 +1,11 @@
 use std::{
-    collections::HashSet,
-    fmt::Display,
     io,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use graph::dist::Dist;
 use itertools::Itertools;
+use nohash_hasher::IntSet;
 use points::point::Point;
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +49,7 @@ pub trait IndexFacade {
     fn add_node(&self, id: INT, level: INT) -> Result<(), HNSWErr>;
     fn add_edge(&self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
     fn remove_edge(&self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
-    fn neighbors(&self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr>;
+    fn neighbors(&self, id: INT, level: INT) -> Result<IntSet<INT>, HNSWErr>;
     fn commit_results(&self) -> Result<(), HNSWErr>;
     fn len(&self) -> Result<INT, HNSWErr>;
     fn ann(&self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr>;
@@ -107,7 +106,7 @@ pub trait IndexFacade {
     where
         I: Iterator<Item = INT>,
     {
-        let new_neighbors = HashSet::from_iter(new_neighbors);
+        let new_neighbors = IntSet::from_iter(new_neighbors);
         let current_neighbors = self.neighbors(id, level)?;
         let to_remove = current_neighbors.difference(&new_neighbors).copied();
         let to_add = new_neighbors.difference(&current_neighbors).copied();
@@ -119,23 +118,23 @@ pub trait IndexFacade {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Levels {
-    levels: Vec<HashSet<INT>>,
+    levels: Vec<IntSet<INT>>,
     is_modified: bool,
 }
 
 impl Levels {
     pub fn new(level: INT) -> Self {
         Self {
-            levels: Vec::from_iter((0..level + 1).map(|_| HashSet::new())),
+            levels: Vec::from_iter((0..level + 1).map(|_| IntSet::default())),
             is_modified: false,
         }
     }
 
-    pub fn get_levels_cloned(&self) -> Vec<HashSet<INT>> {
+    pub fn get_levels_cloned(&self) -> Vec<IntSet<INT>> {
         self.levels.clone()
     }
 
-    pub fn replace_levels(&mut self, levels: Vec<HashSet<INT>>) {
+    pub fn replace_levels(&mut self, levels: Vec<IntSet<INT>>) {
         self.levels = levels;
     }
 
@@ -143,16 +142,16 @@ impl Levels {
         self.levels.len()
     }
 
-    pub fn get(&self, level: INT) -> Option<&HashSet<INT>> {
+    pub fn get(&self, level: INT) -> Option<&IntSet<INT>> {
         self.levels.get(level)
     }
 
-    pub fn get_mut(&mut self, level: INT) -> Option<&mut HashSet<INT>> {
+    pub fn get_mut(&mut self, level: INT) -> Option<&mut IntSet<INT>> {
         self.levels.get_mut(level)
     }
 
     pub fn push(&mut self) {
-        self.levels.push(HashSet::new())
+        self.levels.push(IntSet::default())
     }
 
     pub fn set_is_not_modified(&mut self) {
@@ -232,7 +231,7 @@ impl IndexEntry {
         Ok(self.read_levels()?.len())
     }
 
-    pub fn get_neighbors_cloned(&self, level: INT) -> Result<HashSet<INT>, HNSWErr> {
+    pub fn get_neighbors_cloned(&self, level: INT) -> Result<IntSet<INT>, HNSWErr> {
         Ok(self
             .read_levels()?
             .get(level)
@@ -248,11 +247,11 @@ impl IndexEntry {
         Ok(self.write_levels()?.set_is_not_modified())
     }
 
-    pub fn get_levels_cloned(&self) -> Result<Vec<HashSet<INT>>, HNSWErr> {
+    pub fn get_levels_cloned(&self) -> Result<Vec<IntSet<INT>>, HNSWErr> {
         Ok(self.read_levels()?.get_levels_cloned())
     }
 
-    pub fn replace_levels(&self, levels: Vec<HashSet<INT>>) -> Result<(), HNSWErr> {
+    pub fn replace_levels(&self, levels: Vec<IntSet<INT>>) -> Result<(), HNSWErr> {
         self.write_levels()?.replace_levels(levels);
         Ok(())
     }

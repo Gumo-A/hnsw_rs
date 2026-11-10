@@ -1,5 +1,4 @@
 use std::{
-    collections::{HashMap, HashSet},
     env,
     fs::{File, create_dir, create_dir_all, remove_file},
     io::{self, BufReader, ErrorKind, Read, Write},
@@ -17,6 +16,7 @@ use moka::{
     policy::EvictionPolicy,
     sync::{Cache, CacheBuilder},
 };
+use nohash_hasher::{BuildNoHashHasher, IntSet, NoHashHasher};
 use points::point::{Point, VecType};
 use rand::{Rng, rngs::ThreadRng, thread_rng};
 use vectors::VecBase;
@@ -55,16 +55,18 @@ const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 #[derive(Clone)]
 pub struct Engine {
     loc: PathBuf,
-    point_cache: Cache<INT, CachedPoint>,
-    entry_cache: Cache<INT, CachedEntry>,
+    point_cache: Cache<INT, CachedPoint, BuildNoHashHasher<INT>>,
+    entry_cache: Cache<INT, CachedEntry, BuildNoHashHasher<INT>>,
     params: HNSW,
 }
 
 impl Engine {
     pub fn new(loc: PathBuf, m: INT) -> Result<Self, HNSWErr> {
         let params = Self::init_at_loc(&loc, m)?;
-        let point_cache = CacheBuilder::new(1_000_000).build();
-        let entry_cache = CacheBuilder::new(1_000_000).build();
+        let point_cache =
+            CacheBuilder::new(1_000_000).build_with_hasher(BuildNoHashHasher::default());
+        let entry_cache =
+            CacheBuilder::new(1_000_000).build_with_hasher(BuildNoHashHasher::default());
         let engine = Self {
             loc: loc.clone(),
             point_cache,
@@ -350,7 +352,7 @@ impl IndexFacade for Engine {
         self.get_entry(id)?.degree(level)
     }
 
-    fn neighbors(&self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr> {
+    fn neighbors(&self, id: INT, level: INT) -> Result<IntSet<INT>, HNSWErr> {
         self.get_entry(id)?.get_neighbors_cloned(level)
     }
 
