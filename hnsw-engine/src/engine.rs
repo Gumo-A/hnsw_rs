@@ -13,7 +13,10 @@ use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use graph::{dist::Dist, graph::Graph};
 use hnsw::helpers::get_progress_bar;
 use itertools::Itertools;
-use moka::{policy::EvictionPolicy, sync::Cache};
+use moka::{
+    policy::EvictionPolicy,
+    sync::{Cache, CacheBuilder},
+};
 use points::point::{Point, VecType};
 use rand::{Rng, rngs::ThreadRng, thread_rng};
 use vectors::VecBase;
@@ -49,16 +52,16 @@ const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 
 pub struct Engine {
     loc: PathBuf,
-    point_cache: HashMap<INT, CachedPoint>,
-    entry_cache: HashMap<INT, CachedEntry>,
+    point_cache: Cache<INT, CachedPoint>,
+    entry_cache: Cache<INT, CachedEntry>,
     params: HNSW,
 }
 
 impl Engine {
     pub fn new(loc: PathBuf, m: INT) -> Result<Self, HNSWErr> {
         let params = Self::init_at_loc(&loc, m)?;
-        let point_cache = HashMap::new();
-        let entry_cache = HashMap::new();
+        let point_cache = CacheBuilder::new(1_000_000).build();
+        let entry_cache = CacheBuilder::new(1_000_000).build();
         let engine = Self {
             loc: loc.clone(),
             point_cache,
@@ -197,7 +200,7 @@ impl Engine {
                 self.point_cache.insert(p.id as INT, Arc::new(p));
             }
         }
-        self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss).cloned()
+        self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss)
     }
 
     fn load_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
@@ -209,7 +212,7 @@ impl Engine {
         for entry in manifest_entries {
             self.entry_cache.insert(entry.get_id(), Arc::new(entry));
         }
-        self.entry_cache.get(&id).ok_or(HNSWErr::CacheMiss).cloned()
+        self.entry_cache.get(&id).ok_or(HNSWErr::CacheMiss)
     }
 
     pub fn insert(&mut self, points: &[Point]) -> Result<Manifest, HNSWErr> {
@@ -277,7 +280,7 @@ impl Engine {
 
     fn add_points_to_index(&mut self, manifest: &Manifest) -> Result<(), HNSWErr> {
         let mut traverser = Traverser::new();
-        self.entry_cache.clear();
+        self.entry_cache.invalidate_all();
         let bar = get_progress_bar("inserting", manifest.ids().count());
         for id in manifest.ids() {
             bar.inc(1);
@@ -298,14 +301,14 @@ impl Engine {
 
 impl Index for Engine {
     fn get_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
-        match self.point_cache.get(&id).cloned() {
+        match self.point_cache.get(&id) {
             Some(p) => Ok(p),
             None => self.load_point(id),
         }
     }
 
     fn get_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
-        match self.entry_cache.get(&id).cloned() {
+        match self.entry_cache.get(&id) {
             Some(p) => Ok(p),
             None => self.load_entry(id),
         }
@@ -392,7 +395,8 @@ impl Index for Engine {
     fn commit_results(&self) -> Result<(), HNSWErr> {
         let entries_to_commit = self
             .entry_cache
-            .values()
+            .iter()
+            .map(|(_, v)| v)
             .filter(|e| {
                 e.is_modified()
                     .expect("Could not filter entries based on 'is_modified'")
@@ -401,7 +405,6 @@ impl Index for Engine {
                 e.set_is_not_modified().unwrap_or_default();
                 e
             })
-            .cloned()
             .collect();
         self.get_current_manifest_list()?
             .write_entries(entries_to_commit);
@@ -585,7 +588,7 @@ mod tests {
 
         assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
 
-        e.point_cache.clear();
+        e.point_cache.invalidate_all();
 
         let mut check_cache_updates = |idx| {
             assert_eq!(e.point_cache.contains_key(&idx), false);
