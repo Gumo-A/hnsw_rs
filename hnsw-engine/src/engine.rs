@@ -283,7 +283,10 @@ impl Engine {
 
     fn add_points_to_index(&self, manifest: &Manifest) -> Result<(), HNSWErr> {
         self.entry_cache.invalidate_all();
-        Traverser::insert_bulk(self, manifest.ids().collect());
+        Traverser::insert_bulk(
+            Self::new(self.loc.clone(), self.get_m())?,
+            manifest.ids().collect(),
+        );
         self.commit_results();
         Ok(())
     }

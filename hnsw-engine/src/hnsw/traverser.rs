@@ -29,7 +29,7 @@ impl Traverser {
         }
     }
 
-    pub fn insert_bulk(index: &impl Index, ids: Vec<INT>) -> Result<(), HNSWErr> {
+    pub fn insert_bulk(index: impl Index, ids: Vec<INT>) -> Result<(), HNSWErr> {
         let nb_threads = 1;
         let index_0 = Arc::new(index);
         let nb_levels = index_0.get_nb_levels()?;
@@ -70,12 +70,12 @@ impl Traverser {
         Ok(())
     }
 
-    pub fn insert(&mut self, index: Arc<&impl Index>, id: INT) -> Result<(), HNSWErr> {
+    pub fn insert(&mut self, index: Arc<impl Index>, id: INT) -> Result<(), HNSWErr> {
         self.build_insertion_results(Arc::clone(&index), id)?;
         self.make_connections(Arc::clone(&index))
     }
 
-    fn build_insertion_results(&mut self, index: Arc<&impl Index>, id: INT) -> Result<(), HNSWErr> {
+    fn build_insertion_results(&mut self, index: Arc<impl Index>, id: INT) -> Result<(), HNSWErr> {
         trace!("Begin insertion results");
         let level = index.get_level(id)?;
         self.setup_insert(Arc::clone(&index), id)?;
@@ -89,7 +89,7 @@ impl Traverser {
         self.results.clear_all();
     }
 
-    fn setup_insert(&mut self, index: Arc<&impl Index>, id: INT) -> Result<(), HNSWErr> {
+    fn setup_insert(&mut self, index: Arc<impl Index>, id: INT) -> Result<(), HNSWErr> {
         trace!("Setting up insertion");
         self.clear_results();
         let ep = index.get_ep();
@@ -101,7 +101,7 @@ impl Traverser {
 
     fn traverse_layers_above(
         &mut self,
-        index: Arc<&impl Index>,
+        index: Arc<impl Index>,
         id: INT,
         level: INT,
     ) -> Result<(), HNSWErr> {
@@ -117,7 +117,7 @@ impl Traverser {
 
     fn traverse_layers_below(
         &mut self,
-        index: Arc<&impl Index>,
+        index: Arc<impl Index>,
         id: INT,
         level: INT,
     ) -> Result<(), HNSWErr> {
@@ -141,7 +141,7 @@ impl Traverser {
         Ok(())
     }
 
-    fn make_connections(&self, index: Arc<&impl Index>) -> Result<(), HNSWErr> {
+    fn make_connections(&self, index: Arc<impl Index>) -> Result<(), HNSWErr> {
         info!("Making connections using results");
         for (layer_nb, node_data) in self.results.insertion_results.iter() {
             for (node, neighbors) in node_data.iter() {
@@ -161,7 +161,7 @@ impl Traverser {
         &mut self,
         layer: INT,
         query: &Query,
-        index: Arc<&impl Index>,
+        index: Arc<impl Index>,
         ef: usize,
     ) -> Result<(), HNSWErr> {
         trace!("Searching Layer");
@@ -230,7 +230,7 @@ impl Traverser {
 
     pub fn select_heuristic(
         &mut self,
-        index: Arc<&impl Index>,
+        index: Arc<impl Index>,
         layer: INT,
         id: INT,
         m: usize,
@@ -282,7 +282,7 @@ impl Traverser {
 
     pub fn ann_by_vec(
         &mut self,
-        index: Arc<&impl Index>,
+        index: Arc<impl Index>,
         vector: &Vec<f32>,
         n: usize,
         ef: usize,
@@ -294,7 +294,7 @@ impl Traverser {
 
     pub fn ann_by_point(
         &mut self,
-        index: Arc<&impl Index>,
+        index: Arc<impl Index>,
         point: Point,
         n: usize,
         ef: usize,

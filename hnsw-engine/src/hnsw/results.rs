@@ -61,7 +61,7 @@ impl Results {
         }
     }
 
-    pub fn get_nearest_from_selected(&self, point: &Point, points: Arc<&impl Index>) -> Dist {
+    pub fn get_nearest_from_selected(&self, point: &Point, points: Arc<impl Index>) -> Dist {
         let selected_points = self
             .selected
             .iter()
@@ -110,7 +110,7 @@ impl Results {
     pub fn extend_candidates_with_neighbors(
         &mut self,
         id: INT,
-        index: Arc<&impl Index>,
+        index: Arc<impl Index>,
         layer: INT,
     ) -> Result<(), HNSWErr> {
         let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
