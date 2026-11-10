@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    fmt::Display,
     io,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
@@ -34,7 +35,8 @@ pub fn map_json_err(e: serde_json::Error) -> HNSWErr {
 
 pub type CachedPoint = Arc<Point>;
 pub type CachedEntry = Arc<IndexEntry>;
-pub trait Index {
+pub trait Index: IndexFacade + Clone + Send + Sync {}
+pub trait IndexFacade {
     fn distance(&self, a: INT, b: INT) -> Result<f32, HNSWErr>;
     fn distance2point(&self, id: INT, point: &Point) -> Result<f32, HNSWErr>;
     fn get_point(&self, id: INT) -> Result<CachedPoint, HNSWErr>;

@@ -24,7 +24,9 @@ use vectors::VecBase;
 use crate::{
     get_rand_file_name,
     hnsw::{HNSW, traverser::Traverser},
-    index::{CachedEntry, CachedPoint, HNSWErr, Index, IndexEntry, map_io_err, map_json_err},
+    index::{
+        CachedEntry, CachedPoint, HNSWErr, Index, IndexEntry, IndexFacade, map_io_err, map_json_err,
+    },
     manifest::{Manifest, ManifestList},
 };
 
@@ -50,6 +52,7 @@ pub const DATA_LAYER: &str = "data-layer";
 pub const INDEX_LAYER: &str = "index-layer";
 const LAYERS: [&str; 3] = [METADATA_LAYER, DATA_LAYER, INDEX_LAYER];
 
+#[derive(Clone)]
 pub struct Engine {
     loc: PathBuf,
     point_cache: Cache<INT, CachedPoint>,
@@ -215,7 +218,7 @@ impl Engine {
         self.entry_cache.get(&id).ok_or(HNSWErr::CacheMiss)
     }
 
-    pub fn insert(&mut self, points: &[Point]) -> Result<Manifest, HNSWErr> {
+    pub fn insert(&self, points: &[Point]) -> Result<Manifest, HNSWErr> {
         self.check_points(points)?;
         if points.len() > self.params.cache_cap as INT {
             self.divide_and_insert(points)
@@ -231,20 +234,20 @@ impl Engine {
         }
     }
 
-    pub fn optimize(&mut self) -> Result<(), HNSWErr> {
+    pub fn optimize(&self) -> Result<(), HNSWErr> {
         self.get_current_manifest_list()?
             .optimize(self.params.cache_cap)
             .map_err(map_io_err)
     }
 
-    fn check_points(&mut self, points: &[Point]) -> Result<(), HNSWErr> {
+    fn check_points(&self, points: &[Point]) -> Result<(), HNSWErr> {
         if points.len() == 0 {
             return Err(HNSWErr::NothingToInsert);
-        } else if self.params.dim.is_none() {
+        } else if self.params.dim_is_none() {
             self.update_dim(points)?;
         }
 
-        let dim = self.params.dim.unwrap();
+        let dim = self.params.get_dim().unwrap();
         let nb_valid = points.iter().filter(|p| p.dim() == dim).count();
         if nb_valid != points.len() {
             Err(HNSWErr::InvalidDimension)
@@ -253,7 +256,7 @@ impl Engine {
         }
     }
 
-    fn update_dim(&mut self, points: &[Point]) -> Result<(), HNSWErr> {
+    fn update_dim(&self, points: &[Point]) -> Result<(), HNSWErr> {
         self.params.set_dim(points[0].dim());
         Self::write_params(&self.loc.join(METADATA_LAYER), &self.params, true)
     }
@@ -270,7 +273,7 @@ impl Engine {
         Ok(())
     }
 
-    fn divide_and_insert(&mut self, points: &[Point]) -> Result<Manifest, HNSWErr> {
+    fn divide_and_insert(&self, points: &[Point]) -> Result<Manifest, HNSWErr> {
         let mid = points.len() / 2;
         let p1 = &points[..mid];
         let p2 = &points[mid..];
@@ -278,14 +281,9 @@ impl Engine {
         self.insert(p2)
     }
 
-    fn add_points_to_index(&mut self, manifest: &Manifest) -> Result<(), HNSWErr> {
-        let mut traverser = Traverser::new();
+    fn add_points_to_index(&self, manifest: &Manifest) -> Result<(), HNSWErr> {
         self.entry_cache.invalidate_all();
-        let bar = get_progress_bar("inserting", manifest.ids().count());
-        for id in manifest.ids() {
-            bar.inc(1);
-            traverser.insert(self, id)?;
-        }
+        Traverser::insert_bulk(self, manifest.ids().collect());
         self.commit_results();
         Ok(())
     }
@@ -299,7 +297,8 @@ impl Engine {
     }
 }
 
-impl Index for Engine {
+impl Index for Engine {}
+impl IndexFacade for Engine {
     fn get_point(&self, id: INT) -> Result<CachedPoint, HNSWErr> {
         match self.point_cache.get(&id) {
             Some(p) => Ok(p),
@@ -413,7 +412,7 @@ impl Index for Engine {
 
     fn ann(&self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr> {
         let mut traverser = Traverser::new();
-        traverser.ann_by_point(self, point.clone(), n, ef)
+        traverser.ann_by_point(Arc::new(self), point.clone(), n, ef)
     }
 
     fn len(&self) -> Result<INT, HNSWErr> {
@@ -460,7 +459,7 @@ mod tests {
 
     use crate::{
         engine::{Engine, INT},
-        index::{HNSWErr, Index},
+        index::{HNSWErr, Index, IndexFacade},
     };
 
     const DIM: INT = 4;
@@ -503,11 +502,11 @@ mod tests {
     fn different_dimension_not_allowed() {
         let path = "./diff-dim-test";
         let mut e = init_engine(path);
-        assert!(e.params.dim.is_none());
+        assert!(e.params.dim_is_none());
 
         let r = e.insert(&vec![gen_rand_point(4)[0].clone()]);
         assert!(r.is_ok());
-        assert_eq!(e.params.dim, Some(4));
+        assert_eq!(e.params.get_dim().unwrap(), 4);
 
         let r = e.insert(&vec![gen_rand_point(8)[0].clone()]);
         assert!(r.is_err());

@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, sync::Arc, thread::Builder};
 
 use graph::dist::Dist;
 use log::{info, trace};
@@ -29,17 +29,57 @@ impl Traverser {
         }
     }
 
-    pub fn insert(&mut self, index: &impl Index, id: INT) -> Result<(), HNSWErr> {
-        self.build_insertion_results(index, id)?;
-        self.make_connections(index)?;
+    pub fn insert_bulk(index: &impl Index, ids: Vec<INT>) -> Result<(), HNSWErr> {
+        let nb_threads = 1;
+        let index_0 = Arc::new(index);
+        let nb_levels = index_0.get_nb_levels()?;
+        for level in (0..nb_levels).rev() {
+            let index_1 = index_0.clone();
+            let level_ids: Vec<INT> = ids
+                .iter()
+                .filter(|id| index_1.get_level(**id).unwrap() == level)
+                .copied()
+                .collect();
+            let chunks = ((level_ids.len() as f64) / (nb_threads as f64)).ceil() as usize;
+            let mut level_ids: Vec<Vec<INT>> = level_ids
+                .chunks(chunks)
+                .map(|chunk| Vec::from(chunk))
+                .collect();
+
+            let mut handlers = Vec::new();
+            let mut idx = 0;
+            while let Some(ids_split) = level_ids.pop() {
+                info!("Sending {} node IDs to thread {idx}", ids_split.len());
+                let index_2 = index_1.clone();
+                let thread = Builder::new()
+                    .name(format!("worker {idx}"))
+                    .spawn(move || {
+                        let mut inserter = Self::new();
+                        for id in ids_split.iter() {
+                            inserter.insert(index_2.clone(), *id);
+                        }
+                    })
+                    .expect("Could not spawn a thread");
+                handlers.push(thread);
+                idx += 1;
+            }
+            for handle in handlers {
+                handle.join().unwrap();
+            }
+        }
         Ok(())
     }
 
-    fn build_insertion_results(&mut self, index: &impl Index, id: INT) -> Result<(), HNSWErr> {
+    pub fn insert(&mut self, index: Arc<&impl Index>, id: INT) -> Result<(), HNSWErr> {
+        self.build_insertion_results(Arc::clone(&index), id)?;
+        self.make_connections(Arc::clone(&index))
+    }
+
+    fn build_insertion_results(&mut self, index: Arc<&impl Index>, id: INT) -> Result<(), HNSWErr> {
         trace!("Begin insertion results");
         let level = index.get_level(id)?;
-        self.setup_insert(index, id)?;
-        self.traverse_layers_above(index, id, level)?;
+        self.setup_insert(Arc::clone(&index), id)?;
+        self.traverse_layers_above(Arc::clone(&index), id, level)?;
         self.traverse_layers_below(index, id, level)?;
         trace!("Finish insertion results");
         Ok(())
@@ -49,7 +89,7 @@ impl Traverser {
         self.results.clear_all();
     }
 
-    fn setup_insert(&mut self, index: &impl Index, id: INT) -> Result<(), HNSWErr> {
+    fn setup_insert(&mut self, index: Arc<&impl Index>, id: INT) -> Result<(), HNSWErr> {
         trace!("Setting up insertion");
         self.clear_results();
         let ep = index.get_ep();
@@ -61,7 +101,7 @@ impl Traverser {
 
     fn traverse_layers_above(
         &mut self,
-        index: &impl Index,
+        index: Arc<&impl Index>,
         id: INT,
         level: INT,
     ) -> Result<(), HNSWErr> {
@@ -70,32 +110,38 @@ impl Traverser {
         for level_nb in (level + 1..nb_levels).rev() {
             trace!("Searching NNs for {id} at level {level_nb}",);
             trace!("Entry point is {:?}", self.results.selected);
-            self.search_level(level_nb, &Query::ID(id), index, 1)?;
+            self.search_level(level_nb, &Query::ID(id), Arc::clone(&index), 1)?;
         }
         Ok(())
     }
 
     fn traverse_layers_below(
         &mut self,
-        index: &impl Index,
+        index: Arc<&impl Index>,
         id: INT,
         level: INT,
     ) -> Result<(), HNSWErr> {
         trace!("Traversing levels below or equal to query point");
         // let bound = level.min(index.get_nb_levels()? - 1);
         // for level_nb in (0..=bound).rev() {
+        let index_cp = Arc::clone(&index);
         for level_nb in (0..level + 1).rev() {
             trace!("Searching NNs for {id} at level {level_nb}",);
             trace!("Entry point is {:?}", self.results.selected);
-            self.search_level(level_nb, &Query::ID(id), index, index.get_ef_cons())?;
-            self.select_heuristic(index, level_nb, id, index.get_m())?;
+            self.search_level(
+                level_nb,
+                &Query::ID(id),
+                Arc::clone(&index_cp),
+                index_cp.get_ef_cons(),
+            )?;
+            self.select_heuristic(Arc::clone(&index_cp), level_nb, id, index.get_m())?;
             // self.results.select_simple(index.get_m());
             self.results.save_layer_results(level_nb, id);
         }
         Ok(())
     }
 
-    fn make_connections(&self, index: &impl Index) -> Result<(), HNSWErr> {
+    fn make_connections(&self, index: Arc<&impl Index>) -> Result<(), HNSWErr> {
         info!("Making connections using results");
         for (layer_nb, node_data) in self.results.insertion_results.iter() {
             for (node, neighbors) in node_data.iter() {
@@ -115,7 +161,7 @@ impl Traverser {
         &mut self,
         layer: INT,
         query: &Query,
-        index: &impl Index,
+        index: Arc<&impl Index>,
         ef: usize,
     ) -> Result<(), HNSWErr> {
         trace!("Searching Layer");
@@ -184,7 +230,7 @@ impl Traverser {
 
     pub fn select_heuristic(
         &mut self,
-        index: &impl Index,
+        index: Arc<&impl Index>,
         layer: INT,
         id: INT,
         m: usize,
@@ -198,7 +244,7 @@ impl Traverser {
         self.results.select_setup();
         if extend_cands {
             self.results
-                .extend_candidates_with_neighbors(id, index, layer)?;
+                .extend_candidates_with_neighbors(id, Arc::clone(&index), layer)?;
         }
 
         let node_e = self.results.candidates.pop_first().unwrap();
@@ -208,7 +254,9 @@ impl Traverser {
             let node_e = self.results.candidates.pop_first().unwrap();
             let e_point = index.get_point(node_e.id)?;
 
-            let nearest_selected = self.results.get_nearest_from_selected(&e_point, index);
+            let nearest_selected = self
+                .results
+                .get_nearest_from_selected(&e_point, Arc::clone(&index));
 
             if node_e < nearest_selected {
                 self.results.insert_selected(node_e);
@@ -234,7 +282,7 @@ impl Traverser {
 
     pub fn ann_by_vec(
         &mut self,
-        index: &impl Index,
+        index: Arc<&impl Index>,
         vector: &Vec<f32>,
         n: usize,
         ef: usize,
@@ -246,7 +294,7 @@ impl Traverser {
 
     pub fn ann_by_point(
         &mut self,
-        index: &impl Index,
+        index: Arc<&impl Index>,
         point: Point,
         n: usize,
         ef: usize,
@@ -261,7 +309,7 @@ impl Traverser {
 
         let query = Query::Point(point);
         for layer_nb in (1..nb_layers).rev() {
-            self.search_level(layer_nb, &query, index, 1)?;
+            self.search_level(layer_nb, &query, Arc::clone(&index), 1)?;
         }
         self.search_level(0, &query, index, ef)?;
 
@@ -274,62 +322,4 @@ impl Traverser {
         info!("Finished ANN search");
         Ok(anns)
     }
-
-    // pub fn insert_bulk(
-    //     mut self,
-    //     vectors: Vec<Vec<f32>>,
-    //     nb_threads: usize,
-    //     verbose: bool,
-    // ) -> Result<impl Index, String> {
-    //     info!("inserting {0} vectors to index in bulk", vectors.len());
-    //     let stored_ids: HashSet<NodeID> =
-    //         HashSet::from_iter(self.store_points(vectors).iter().cloned());
-
-    //     let bar = get_progress_bar("Building index".to_string(), stored_ids.len(), verbose);
-    //     let bar_arc = Arc::new(bar);
-
-    //     let index_arc = Arc::new(self);
-
-    //     for layer_nb in (0..index_arc.get_nb_layers()).rev() {
-    //         let layer = index_arc.get_layer(layer_nb);
-    //         info!("Connecting nodes in layer {layer_nb}, using {nb_threads} threads",);
-    //         let chunks = ((layer.nb_nodes() as f64) / (nb_threads as f64)).ceil() as usize;
-    //         let mut ids: Vec<Vec<NodeID>> = layer
-    //             .iter_nodes()
-    //             .filter(|id| {
-    //                 stored_ids.contains(id)
-    //                     & (index_arc.get_point(*id).unwrap().level == layer_nb as u8)
-    //             })
-    //             .collect::<Vec<NodeID>>()
-    //             .chunks(chunks)
-    //             .map(|chunk| Vec::from(chunk))
-    //             .collect();
-
-    //         let mut handlers = Vec::new();
-    //         let mut idx = 0;
-    //         while let Some(ids_split) = ids.pop() {
-    //             info!("Sending {} node IDs to thread {idx}", ids_split.len());
-    //             let index_copy = Arc::clone(&index_arc);
-    //             let bar_ref = bar_arc.clone();
-    //             let thread = Builder::new()
-    //                 .name(format!("worker {idx}"))
-    //                 .spawn(move || {
-    //                     let mut inserter = Inserter::new();
-    //                     for id in ids_split.iter() {
-    //                         index_copy.insert(*id, &mut inserter).unwrap();
-    //                         bar_ref.inc(1);
-    //                     }
-    //                 })
-    //                 .expect("Could not spawn a thread");
-    //             handlers.push(thread);
-    //             idx += 1;
-    //         }
-    //         for handle in handlers {
-    //             handle.join().unwrap();
-    //         }
-    //     }
-
-    //     let index = Arc::into_inner(index_arc).expect("Could not get index out of Arc reference");
-    //     Ok(index)
-    // }
 }

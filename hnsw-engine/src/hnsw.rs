@@ -1,6 +1,8 @@
 mod results;
 pub mod traverser;
 
+use std::sync::{Arc, Mutex, MutexGuard};
+
 use graph::NodeID;
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +17,7 @@ pub struct HNSW {
     pub ml: f32,
     pub ef_cons: INT,
     pub cache_cap: INT,
-    pub dim: Option<INT>,
+    pub dim: Arc<Mutex<Option<INT>>>,
 }
 
 const CACHE_SIZE_BYTES: INT = 134217728; // 128MiB
@@ -32,14 +34,22 @@ impl HNSW {
             mmax0: m * 2,
             ml: 1.0 / (m as f32).ln(),
             ef_cons: m * 2,
-            dim: None,
+            dim: Arc::new(Mutex::new(None)),
             ep: 0,
             cache_cap: DEFAULT_CACHE_CAP,
         }
     }
 
-    pub fn set_dim(&mut self, dim: INT) {
-        self.dim = Some(dim);
-        self.cache_cap = get_cache_cap(dim);
+    pub fn set_dim(&self, dim: INT) {
+        self.dim.lock().unwrap().replace(dim);
+        // self.cache_cap = get_cache_cap(dim);
+    }
+
+    pub fn dim_is_none(&self) -> bool {
+        self.dim.lock().unwrap().is_none()
+    }
+
+    pub fn get_dim(&self) -> MutexGuard<Option<INT>> {
+        self.dim.lock().unwrap()
     }
 }
