@@ -415,7 +415,12 @@ impl IndexFacade for Engine {
 
     fn ann(&self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr> {
         let mut traverser = Traverser::new();
-        traverser.ann_by_point(Arc::new(self), point.clone(), n, ef)
+        traverser.ann_by_point(
+            Arc::new(Self::new(self.loc.clone(), self.get_m())?),
+            point.clone(),
+            n,
+            ef,
+        )
     }
 
     fn len(&self) -> Result<INT, HNSWErr> {

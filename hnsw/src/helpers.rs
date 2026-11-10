@@ -7,7 +7,7 @@ pub mod data;
 pub mod glove;
 
 pub fn get_progress_bar(message: &str, remaining: usize) -> ProgressBar {
-    let bar = if env::var("HNSW_DEBUG").is_ok() {
+    let bar = if env::var("HNSW_DEBUG").is_ok() | env::var("HNSW_PB").is_ok() {
         ProgressBar::new(remaining as u64).with_finish(ProgressFinish::AndLeave)
     } else {
         return ProgressBar::hidden();

@@ -1,6 +1,7 @@
 use std::{env, sync::Arc, thread::Builder};
 
 use graph::dist::Dist;
+use hnsw::helpers::get_progress_bar;
 use log::{info, trace};
 use points::point::Point;
 use vectors::VecBase;
@@ -10,6 +11,8 @@ use crate::{
     hnsw::results::Results,
     index::{HNSWErr, Index},
 };
+
+const DEFAULT_HNSW_THREADS: usize = 4;
 
 enum Query {
     ID(INT),
@@ -29,8 +32,14 @@ impl Traverser {
         }
     }
 
-    pub fn insert_bulk(index: impl Index, ids: Vec<INT>) -> Result<(), HNSWErr> {
-        let nb_threads = 1;
+    pub fn insert_bulk(
+        index: impl Index + 'static,
+        ids: Vec<INT>,
+    ) -> Result<Arc<impl Index>, HNSWErr> {
+        let nb_threads = env::var("HNSW_THREADS")
+            .ok()
+            .and_then(|nb_threads| nb_threads.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_HNSW_THREADS);
         let index_0 = Arc::new(index);
         let nb_levels = index_0.get_nb_levels()?;
         for level in (0..nb_levels).rev() {
@@ -40,6 +49,10 @@ impl Traverser {
                 .filter(|id| index_1.get_level(**id).unwrap() == level)
                 .copied()
                 .collect();
+            let bar = get_progress_bar(
+                format!("Inserting at level {level}").as_str(),
+                level_ids.len(),
+            );
             let chunks = ((level_ids.len() as f64) / (nb_threads as f64)).ceil() as usize;
             let mut level_ids: Vec<Vec<INT>> = level_ids
                 .chunks(chunks)
@@ -51,12 +64,14 @@ impl Traverser {
             while let Some(ids_split) = level_ids.pop() {
                 info!("Sending {} node IDs to thread {idx}", ids_split.len());
                 let index_2 = index_1.clone();
+                let bar_cp = bar.clone();
                 let thread = Builder::new()
                     .name(format!("worker {idx}"))
                     .spawn(move || {
                         let mut inserter = Self::new();
                         for id in ids_split.iter() {
-                            inserter.insert(index_2.clone(), *id);
+                            inserter.insert(index_2.clone(), *id).unwrap();
+                            bar_cp.inc(1);
                         }
                     })
                     .expect("Could not spawn a thread");
@@ -67,7 +82,7 @@ impl Traverser {
                 handle.join().unwrap();
             }
         }
-        Ok(())
+        Ok(index_0)
     }
 
     pub fn insert(&mut self, index: Arc<impl Index>, id: INT) -> Result<(), HNSWErr> {

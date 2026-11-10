@@ -9,12 +9,10 @@ use std::time::Instant;
 use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw_engine::engine::Engine;
-use hnsw_engine::index::Index;
+use hnsw_engine::index::IndexFacade;
 use points::point::Point;
 use vectors::QuantVec;
 use vectors::VecBase;
-
-const DEFAULT_HNSW_THREADS: usize = 4;
 
 fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -27,11 +25,6 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
     };
-
-    let nb_threads = env::var("HNSW_THREADS")
-        .ok()
-        .and_then(|nb_threads| nb_threads.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_HNSW_THREADS);
 
     let file = File::open(format!("/home/gamal/glove/300d.txt"))?;
     // let file = File::open(format!(
