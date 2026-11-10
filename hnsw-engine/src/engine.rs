@@ -189,7 +189,7 @@ impl Engine {
     }
 
     /// Also caches points stored in the same data file
-    fn load_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
+    fn load_point(&self, id: INT) -> Result<CachedPoint, HNSWErr> {
         let manifest_list = self.get_current_manifest_list()?;
         let points = manifest_list
             .get_manifest_from_id(id)
@@ -203,7 +203,7 @@ impl Engine {
         self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss)
     }
 
-    fn load_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
+    fn load_entry(&self, id: INT) -> Result<CachedEntry, HNSWErr> {
         let manifest_entries = self
             .get_current_manifest_list()?
             .get_manifest_from_id(id)
@@ -300,27 +300,27 @@ impl Engine {
 }
 
 impl Index for Engine {
-    fn get_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr> {
+    fn get_point(&self, id: INT) -> Result<CachedPoint, HNSWErr> {
         match self.point_cache.get(&id) {
             Some(p) => Ok(p),
             None => self.load_point(id),
         }
     }
 
-    fn get_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr> {
+    fn get_entry(&self, id: INT) -> Result<CachedEntry, HNSWErr> {
         match self.entry_cache.get(&id) {
             Some(p) => Ok(p),
             None => self.load_entry(id),
         }
     }
 
-    fn distance(&mut self, a: INT, b: INT) -> Result<f32, HNSWErr> {
+    fn distance(&self, a: INT, b: INT) -> Result<f32, HNSWErr> {
         let p_a = self.get_point(a)?;
         let p_b = self.get_point(b)?;
         Ok(p_a.dist2other(&p_b))
     }
 
-    fn distance2point(&mut self, id: INT, point: &Point) -> Result<f32, HNSWErr> {
+    fn distance2point(&self, id: INT, point: &Point) -> Result<f32, HNSWErr> {
         Ok(self.get_point(id)?.dist2other(point))
     }
 
@@ -344,19 +344,19 @@ impl Index for Engine {
         self.params.ef_cons
     }
 
-    fn degree(&mut self, id: INT, level: INT) -> Result<INT, HNSWErr> {
+    fn degree(&self, id: INT, level: INT) -> Result<INT, HNSWErr> {
         self.get_entry(id)?.degree(level)
     }
 
-    fn neighbors(&mut self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr> {
+    fn neighbors(&self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr> {
         self.get_entry(id)?.get_neighbors_cloned(level)
     }
 
-    fn get_nb_levels(&mut self) -> Result<INT, HNSWErr> {
+    fn get_nb_levels(&self) -> Result<INT, HNSWErr> {
         self.get_entry(self.get_ep())?.nb_levels()
     }
 
-    fn add_node(&mut self, id: INT, level: INT) -> Result<(), HNSWErr> {
+    fn add_node(&self, id: INT, level: INT) -> Result<(), HNSWErr> {
         let mut entry = self.get_entry(id)?;
         while entry.nb_levels()? <= level {
             entry.add_level();
@@ -364,7 +364,7 @@ impl Index for Engine {
         Ok(())
     }
 
-    fn add_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
+    fn add_edge(&self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
         let a_entry = self.get_entry(a)?;
         let b_entry = self.get_entry(b)?;
         a_entry.add_neighbor(b, level)?;
@@ -383,7 +383,7 @@ impl Index for Engine {
         }
     }
 
-    fn remove_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
+    fn remove_edge(&self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
         // TODO recover like add_edge
         let a_entry = self.get_entry(a)?;
         a_entry.remove_neighbor(b, level);
@@ -411,7 +411,7 @@ impl Index for Engine {
         Ok(())
     }
 
-    fn ann(&mut self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr> {
+    fn ann(&self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr> {
         let mut traverser = Traverser::new();
         traverser.ann_by_point(self, point.clone(), n, ef)
     }

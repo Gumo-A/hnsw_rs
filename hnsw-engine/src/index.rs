@@ -35,25 +35,25 @@ pub fn map_json_err(e: serde_json::Error) -> HNSWErr {
 pub type CachedPoint = Arc<Point>;
 pub type CachedEntry = Arc<IndexEntry>;
 pub trait Index {
-    fn distance(&mut self, a: INT, b: INT) -> Result<f32, HNSWErr>;
-    fn distance2point(&mut self, id: INT, point: &Point) -> Result<f32, HNSWErr>;
-    fn get_point(&mut self, id: INT) -> Result<CachedPoint, HNSWErr>;
-    fn get_entry(&mut self, id: INT) -> Result<CachedEntry, HNSWErr>;
+    fn distance(&self, a: INT, b: INT) -> Result<f32, HNSWErr>;
+    fn distance2point(&self, id: INT, point: &Point) -> Result<f32, HNSWErr>;
+    fn get_point(&self, id: INT) -> Result<CachedPoint, HNSWErr>;
+    fn get_entry(&self, id: INT) -> Result<CachedEntry, HNSWErr>;
     fn get_ep(&self) -> INT;
     fn get_m(&self) -> INT;
     fn get_m_at_level(&self, level: INT) -> INT;
     fn get_ef_cons(&self) -> INT;
-    fn get_nb_levels(&mut self) -> Result<INT, HNSWErr>;
-    fn degree(&mut self, id: INT, level: INT) -> Result<INT, HNSWErr>;
-    fn add_node(&mut self, id: INT, level: INT) -> Result<(), HNSWErr>;
-    fn add_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
-    fn remove_edge(&mut self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
-    fn neighbors(&mut self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr>;
+    fn get_nb_levels(&self) -> Result<INT, HNSWErr>;
+    fn degree(&self, id: INT, level: INT) -> Result<INT, HNSWErr>;
+    fn add_node(&self, id: INT, level: INT) -> Result<(), HNSWErr>;
+    fn add_edge(&self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
+    fn remove_edge(&self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr>;
+    fn neighbors(&self, id: INT, level: INT) -> Result<HashSet<INT>, HNSWErr>;
     fn commit_results(&self) -> Result<(), HNSWErr>;
     fn len(&self) -> Result<INT, HNSWErr>;
-    fn ann(&mut self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr>;
+    fn ann(&self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr>;
 
-    fn cap_neighbors(&mut self, id: INT, level: INT, m: INT) -> Result<(), HNSWErr> {
+    fn cap_neighbors(&self, id: INT, level: INT, m: INT) -> Result<(), HNSWErr> {
         let new_neighbors = self
             .get_entry(id)?
             .read_levels()?
@@ -67,11 +67,11 @@ pub trait Index {
         self.replace_neighbors(id, new_neighbors, level)
     }
 
-    fn get_level(&mut self, id: INT) -> Result<INT, HNSWErr> {
+    fn get_level(&self, id: INT) -> Result<INT, HNSWErr> {
         Ok(self.get_point(id)?.level.into())
     }
 
-    fn add_neighbors<I>(&mut self, id: INT, new_neighbors: I, level: INT) -> Result<(), HNSWErr>
+    fn add_neighbors<I>(&self, id: INT, new_neighbors: I, level: INT) -> Result<(), HNSWErr>
     where
         I: Iterator<Item = INT>,
     {
@@ -82,7 +82,7 @@ pub trait Index {
         Ok(())
     }
 
-    fn remove_neighbors<I>(&mut self, id: INT, old_neighbors: I, level: INT) -> Result<(), HNSWErr>
+    fn remove_neighbors<I>(&self, id: INT, old_neighbors: I, level: INT) -> Result<(), HNSWErr>
     where
         I: Iterator<Item = INT>,
     {
@@ -101,7 +101,7 @@ pub trait Index {
         Ok(())
     }
 
-    fn replace_neighbors<I>(&mut self, id: INT, new_neighbors: I, level: INT) -> Result<(), HNSWErr>
+    fn replace_neighbors<I>(&self, id: INT, new_neighbors: I, level: INT) -> Result<(), HNSWErr>
     where
         I: Iterator<Item = INT>,
     {
