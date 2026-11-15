@@ -55,11 +55,11 @@ impl HNSW {
         self.dim.read().unwrap().is_none()
     }
 
-    pub fn get_dim(&self) -> RwLockReadGuard<Option<INT>> {
+    pub fn get_dim(&self) -> RwLockReadGuard<'_, Option<INT>> {
         self.dim.read().unwrap()
     }
 
-    pub fn get_ep(&self) -> RwLockReadGuard<INT> {
+    pub fn get_ep(&self) -> RwLockReadGuard<'_, INT> {
         self.ep.read().unwrap()
     }
 }
