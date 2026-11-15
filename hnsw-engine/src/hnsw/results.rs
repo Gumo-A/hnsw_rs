@@ -128,25 +128,25 @@ impl Results {
     }
 
     pub fn extend_candidates_with_selected(&mut self) {
-        trace!("Extending candidates from selected");
-        trace!("Selected: {:?}", self.selected);
-        trace!("Candidates: {:?}", self.candidates);
+        trace!(
+            "Extending candidates from selected | Selected: {:?} | Candidates {:?}",
+            self.selected, self.candidates
+        );
         for node in self.selected.iter() {
             self.candidates.insert(node.clone());
         }
-        trace!("Extended candidates");
-        trace!("Candidates: {:?}", self.candidates);
+        trace!("Extended candidates | Candidates: {:?}", self.candidates);
     }
 
     pub fn extend_visited_with_selected(&mut self) {
-        trace!("Extending visited from selected");
-        trace!("Selected: {:?}", self.selected);
-        trace!("Visited: {:?}", self.visited);
+        trace!(
+            "Extending visited from selected | Selected: {:?} | Visited: {:?}",
+            self.selected, self.visited
+        );
         for node in self.selected.iter() {
             self.visited.insert(node.id);
         }
-        trace!("Extended visited");
-        trace!("Visited: {:?}", self.visited);
+        trace!("Extended visited | Visited: {:?}", self.visited);
     }
 
     pub fn clear_candidates(&mut self) {

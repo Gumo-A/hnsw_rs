@@ -33,7 +33,8 @@ pub fn gen_rand_vecs(dim: usize, n: usize) -> Vec<Vec<f32>> {
     let mut vecs = vec![];
     assert!(n > 0);
     for _ in 0..n {
-        vecs.push((0..dim).map(|_| rng.r#gen::<f32>()).collect())
+        vecs.push((0..dim).map(|_| rng.gen_range(-1.0..=1.0)).collect())
+        // vecs.push((0..dim).map(|_| rng.r#gen::<f32>()).collect())
     }
     vecs
 }

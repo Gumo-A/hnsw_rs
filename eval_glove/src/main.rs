@@ -37,7 +37,7 @@ fn main() -> std::io::Result<()> {
     if tmp_path.exists() {
         remove_dir_all(tmp_path).unwrap();
     }
-    let mut store = Engine::new(Path::new("./persistance").to_path_buf(), m).unwrap();
+    let store = Engine::new(Path::new("./persistance").to_path_buf(), m).unwrap();
     let s = Instant::now();
     let embeddings: Vec<Point> = embeddings
         .iter()

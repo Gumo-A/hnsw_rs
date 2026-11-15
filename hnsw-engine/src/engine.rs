@@ -12,6 +12,7 @@ use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use graph::{dist::Dist, graph::Graph};
 use hnsw::helpers::get_progress_bar;
 use itertools::Itertools;
+use log::{debug, error, trace};
 use moka::{
     policy::EvictionPolicy,
     sync::{Cache, CacheBuilder},
@@ -27,7 +28,7 @@ use crate::{
     index::{
         CachedEntry, CachedPoint, HNSWErr, Index, IndexEntry, IndexFacade, map_io_err, map_json_err,
     },
-    manifest::{Manifest, ManifestList},
+    manifest::{Manifest, ManifestList, NewEP},
 };
 
 macro_rules! timeit {
@@ -205,7 +206,7 @@ impl Engine {
                 self.point_cache.insert(p.id as INT, Arc::new(p));
             }
         }
-        self.point_cache.get(&id).ok_or(HNSWErr::CacheMiss)
+        self.point_cache.get(&id).ok_or(HNSWErr::PointCacheMiss(id))
     }
 
     fn load_entry(&self, id: INT) -> Result<CachedEntry, HNSWErr> {
@@ -215,23 +216,27 @@ impl Engine {
             .unwrap()
             .read_entries();
         for entry in manifest_entries {
-            self.entry_cache.insert(entry.get_id(), Arc::new(entry));
+            let e_id = entry.get_id();
+            trace!("Caching entry with id {e_id}");
+            self.entry_cache.insert(e_id, Arc::new(entry));
         }
-        self.entry_cache.get(&id).ok_or(HNSWErr::CacheMiss)
+        self.entry_cache.get(&id).ok_or(HNSWErr::EntryCacheMiss(id))
     }
 
     pub fn insert(&self, points: &[Point]) -> Result<Manifest, HNSWErr> {
+        debug!("Inserting {} points", points.len());
         self.check_points(points)?;
         if points.len() > self.params.cache_cap as INT {
             self.divide_and_insert(points)
         } else {
             self.write_lock();
-            let manifest = self
+            let (manifest, new_ep) = self
                 .get_current_manifest_list()?
                 .add_data(points, self.params.ml)
                 .map_err(map_io_err)?;
-            self.add_points_to_index(&manifest);
+            self.add_points_to_index(&manifest)?;
             self.write_unlock();
+            debug!("Inserted {} points", points.len());
             Ok(manifest)
         }
     }
@@ -276,6 +281,7 @@ impl Engine {
     }
 
     fn divide_and_insert(&self, points: &[Point]) -> Result<Manifest, HNSWErr> {
+        debug!("Requested insert had too many points");
         let mid = points.len() / 2;
         let p1 = &points[..mid];
         let p2 = &points[mid..];
@@ -284,13 +290,7 @@ impl Engine {
     }
 
     fn add_points_to_index(&self, manifest: &Manifest) -> Result<(), HNSWErr> {
-        self.entry_cache.invalidate_all();
-        Traverser::insert_bulk(
-            Self::new(self.loc.clone(), self.get_m())?,
-            manifest.ids().collect(),
-        );
-        self.commit_results();
-        Ok(())
+        Traverser::new().insert_bulk(self.clone(), manifest.ids().collect())
     }
 
     pub fn get_current_manifest_list(&self) -> Result<ManifestList, HNSWErr> {
@@ -329,7 +329,7 @@ impl IndexFacade for Engine {
     }
 
     fn get_ep(&self) -> INT {
-        self.params.ep
+        *self.params.get_ep()
     }
 
     fn get_m(&self) -> INT {
@@ -369,11 +369,17 @@ impl IndexFacade for Engine {
     }
 
     fn add_edge(&self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
+        if a == b {
+            return Err(HNSWErr::SelfConnection);
+        }
         let a_entry = self.get_entry(a)?;
         let b_entry = self.get_entry(b)?;
         a_entry.add_neighbor(b, level)?;
         match b_entry.add_neighbor(a, level) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                trace!("Level {level}: Added connection {a}-{b}");
+                Ok(())
+            }
             Err(e) => {
                 let a_recovery = a_entry.remove_neighbor(b, level);
                 if a_recovery.is_ok() {
@@ -388,30 +394,57 @@ impl IndexFacade for Engine {
     }
 
     fn remove_edge(&self, a: INT, b: INT, level: INT) -> Result<(), HNSWErr> {
-        // TODO recover like add_edge
         let a_entry = self.get_entry(a)?;
-        a_entry.remove_neighbor(b, level);
         let b_entry = self.get_entry(b)?;
-        b_entry.remove_neighbor(a, level);
-        Ok(())
+        if a_entry.degree(level)? == 1 {
+            return Err(HNSWErr::WouldIsolate(a));
+        }
+        if b_entry.degree(level)? == 1 {
+            return Err(HNSWErr::WouldIsolate(b));
+        }
+        a_entry.remove_neighbor(b, level)?;
+        match b_entry.remove_neighbor(a, level) {
+            Ok(_) => {
+                trace!("Level {level}: Removed connection {a}-{b}");
+                Ok(())
+            }
+            Err(e) => {
+                let a_recovery = a_entry.add_neighbor(b, level);
+                if a_recovery.is_ok() {
+                    Err(e)
+                } else {
+                    panic!(
+                        "removing edge failed: {a}->{b} was successful, {b}->{a} wasn't, and then reverting {a}->{b} failed."
+                    )
+                }
+            }
+        }
     }
 
     fn commit_results(&self) -> Result<(), HNSWErr> {
-        let entries_to_commit = self
+        debug!("Committing insertion results");
+        let entries_to_commit: Vec<CachedEntry> = self
             .entry_cache
             .iter()
             .map(|(_, v)| v)
             .filter(|e| {
-                e.is_modified()
-                    .expect("Could not filter entries based on 'is_modified'")
-            })
-            .map(|e| {
-                e.set_is_not_modified().unwrap_or_default();
-                e
+                if e.is_modified()
+                    .expect("Could determine if the entry was modified")
+                {
+                    trace!("Entry {} was modified", e.get_id());
+                    true
+                } else {
+                    false
+                }
             })
             .collect();
+        debug!(
+            "Found {} modified entries to commit",
+            entries_to_commit.len()
+        );
         self.get_current_manifest_list()?
-            .write_entries(entries_to_commit);
+            .update_entries(entries_to_commit)
+            .map_err(map_io_err)?;
         Ok(())
     }
 
@@ -427,6 +460,11 @@ impl IndexFacade for Engine {
 
     fn len(&self) -> Result<INT, HNSWErr> {
         Ok(self.get_current_manifest_list()?.get_nb_points())
+    }
+
+    fn set_ep(&self, id: INT) -> Result<(), HNSWErr> {
+        self.params.set_ep(id);
+        Self::write_params(&self.loc.join(METADATA_LAYER), &self.params, true)
     }
 }
 
@@ -459,18 +497,29 @@ mod tests {
     use graph::dist::Dist;
     use hnsw::helpers::glove::load_glove_array;
     use itertools::Itertools;
-    use log::trace;
+    use log::{debug, trace};
     use points::point::Point;
     use rand::{
         Rng,
         distributions::{Distribution, Uniform, uniform::UniformSampler},
     };
-    use vectors::{VecBase, gen_rand_vecs};
+    use vectors::{QuantVec, VecBase, gen_rand_vecs};
 
     use crate::{
         engine::{Engine, INT},
         index::{HNSWErr, Index, IndexFacade},
     };
+
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    /// Setup function that is only run once, even if called multiple times.
+    fn setup() {
+        INIT.call_once(|| {
+            env_logger::init();
+        });
+    }
 
     const DIM: INT = 4;
     const M: INT = 8;
@@ -484,14 +533,13 @@ mod tests {
         path
     }
 
-    fn init_engine(path: &str) -> Engine {
-        // env_logger::init();
+    fn init_engine(path: &str, m: INT) -> Engine {
         let path = remove_path_if_exists(path);
-        Engine::new(path, M).unwrap()
+        Engine::new(path, m).unwrap()
     }
 
-    fn gen_rand_points(n: INT) -> Vec<Point> {
-        let vs = gen_rand_vecs(DIM, n);
+    fn gen_rand_points(n: INT, dim: INT) -> Vec<Point> {
+        let vs = gen_rand_vecs(dim, n);
         let mut points = vec![];
         for (idx, v) in vs.iter().enumerate() {
             points.push(Point::with_level_and_id(v, 0, idx));
@@ -510,127 +558,184 @@ mod tests {
 
     #[test]
     fn different_dimension_not_allowed() {
-        let path = "./diff-dim-test";
-        let mut e = init_engine(path);
-        assert!(e.params.dim_is_none());
+        setup();
+        for _ in 0..10 {
+            let path = "./test_results/diff-dim-test";
+            let mut e = init_engine(path, M);
+            assert!(e.params.dim_is_none());
 
-        let r = e.insert(&vec![gen_rand_point(4)[0].clone()]);
-        assert!(r.is_ok());
-        assert_eq!(e.params.get_dim().unwrap(), 4);
+            let r = e.insert(&vec![gen_rand_point(4)[0].clone()]);
+            assert!(r.is_ok());
+            assert_eq!(e.params.get_dim().unwrap(), 4);
 
-        let r = e.insert(&vec![gen_rand_point(8)[0].clone()]);
-        assert!(r.is_err());
-        remove_dir_all(path).unwrap()
+            let r = e.insert(&vec![gen_rand_point(8)[0].clone()]);
+            assert!(r.is_err());
+            remove_dir_all(path).unwrap()
+        }
     }
 
     #[test]
-    fn add_payloads() {
-        let path = "./add-payloads-test";
-        let mut e = init_engine(path);
-        let n = 8;
-        for _ in 0..4 {
-            let p = gen_rand_points(n);
-            let r = e.insert(&p);
-            assert!(r.is_ok());
-            assert_eq!(r.unwrap().get_nb_points(), n as INT);
+    fn add_points() {
+        setup();
+        for i in 0..10 {
+            debug!("Test {i}");
+            let path = "./test_results/add-points-test";
+            let mut e = init_engine(path, M);
+            let n = 8;
+            for _ in 0..4 {
+                let p = gen_rand_points(n, DIM);
+                let r = e.insert(&p);
+                assert!(r.is_ok());
+                assert_eq!(r.unwrap().get_nb_points(), n as INT);
+            }
+            remove_dir_all(path).unwrap();
         }
-        remove_dir_all(path).unwrap();
     }
 
     #[test]
-    fn add_one_payload() {
-        let path = "./add-one-payload-test";
-        let mut e = init_engine(path);
-        for _ in 0..4 {
-            let p = gen_rand_points(1);
-            let r = e.insert(&p);
-            assert!(r.is_ok());
+    fn add_one_point() {
+        setup();
+        for _ in 0..10 {
+            let path = "./test_results/add-one-point-test";
+            let mut e = init_engine(path, M);
+            for _ in 0..4 {
+                let p = gen_rand_points(1, DIM);
+                let r = e.insert(&p);
+                assert!(r.is_ok());
+            }
+            remove_dir_all(path).unwrap();
         }
-        remove_dir_all(path).unwrap();
     }
 
     #[test]
     fn get_points_simple() {
-        let path = "./get-points-test";
-        let mut e = init_engine(path);
+        setup();
+        for _ in 0..10 {
+            let path = "./test_results/get-points-test";
+            let mut e = init_engine(path, M);
 
-        let points = gen_rand_points(8);
-        let _ = e.insert(&points[..4]).unwrap();
-        let _ = e.insert(&points[4..]).unwrap();
+            let points = gen_rand_points(8, DIM);
+            let _ = e.insert(&points[..4]).unwrap();
+            let _ = e.insert(&points[4..]).unwrap();
+            e.point_cache.invalidate_all();
 
-        assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
+            assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
 
-        for i in 0..8 {
-            let a = e.get_point(i).expect("Error getting point");
-            let b = points[i as INT].clone();
-            assert_eq!(a.get_vals(), b.get_vals());
-            assert_eq!(a.id, b.id);
-            assert_eq!(a.level, b.level);
-        }
-
-        let mut f = |e: &mut Engine, id: INT| -> bool {
-            match e.get_point(id) {
-                Err(e) => match e {
-                    HNSWErr::IDNotFound(other_id) => id == other_id,
-                    _ => false,
-                },
-                Ok(_) => false,
+            for i in 0..8 {
+                let a = e.get_point(i).expect("Error getting point");
+                let b = points[i as INT].clone();
+                assert_eq!(a.get_vals(), b.get_vals());
+                assert_eq!(a.id, b.id);
+                assert_eq!(a.level, b.level);
             }
-        };
 
-        assert!(f(&mut e, 8));
-        assert!(f(&mut e, 16));
-        assert!(f(&mut e, 1024));
-        assert!(f(&mut e, INT::MAX));
+            let mut f = |e: &mut Engine, id: INT| -> bool {
+                match e.get_point(id) {
+                    Err(e) => match e {
+                        HNSWErr::IDNotFound(other_id) => id == other_id,
+                        _ => false,
+                    },
+                    Ok(_) => false,
+                }
+            };
 
-        remove_dir_all(path).unwrap();
+            assert!(f(&mut e, 8));
+            assert!(f(&mut e, 16));
+            assert!(f(&mut e, 1024));
+            assert!(f(&mut e, INT::MAX));
+
+            remove_dir_all(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn get_entries_simple() {
+        setup();
+        for _ in 0..10 {
+            let path = "./test_results/get-entries-test";
+            let mut e = init_engine(path, M);
+
+            let points = gen_rand_points(8, DIM);
+            let _ = e.insert(&points[..4]).unwrap();
+            let _ = e.insert(&points[4..]).unwrap();
+            e.entry_cache.invalidate_all();
+
+            assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
+
+            for i in 0..8 {
+                let a = e.get_entry(i).expect("Error getting point");
+                assert!(a.nb_levels().unwrap() > 0);
+                assert!(a.degree(0).unwrap() > 0);
+            }
+
+            let mut f = |e: &mut Engine, id: INT| -> bool {
+                match e.get_point(id) {
+                    Err(e) => match e {
+                        HNSWErr::IDNotFound(other_id) => id == other_id,
+                        _ => false,
+                    },
+                    Ok(_) => false,
+                }
+            };
+
+            assert!(f(&mut e, 8));
+            assert!(f(&mut e, 16));
+            assert!(f(&mut e, 1024));
+            assert!(f(&mut e, INT::MAX));
+
+            remove_dir_all(path).unwrap();
+        }
     }
 
     #[test]
     fn get_points_uses_cache() {
-        let path = "./get-points-cache-test";
-        let mut e = init_engine(path);
+        setup();
+        for _ in 0..10 {
+            let path = "./test_results/get-points-cache-test";
+            let mut e = init_engine(path, M);
 
-        let points = gen_rand_points(8);
-        let _ = e.insert(&points[..4]).unwrap();
-        let _ = e.insert(&points[4..]).unwrap();
+            let points = gen_rand_points(8, DIM);
+            let _ = e.insert(&points[..4]).unwrap();
+            let _ = e.insert(&points[4..]).unwrap();
 
-        assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
+            assert_eq!(e.get_current_manifest_list().unwrap().get_nb_points(), 8);
 
-        e.point_cache.invalidate_all();
+            e.point_cache.invalidate_all();
 
-        let mut check_cache_updates = |idx| {
-            assert_eq!(e.point_cache.contains_key(&idx), false);
-            assert_eq!(e.point_cache.contains_key(&(idx + 1)), false);
-            assert_eq!(e.point_cache.contains_key(&(idx + 2)), false);
-            assert_eq!(e.point_cache.contains_key(&(idx + 3)), false);
-            e.get_point(idx);
-            assert_eq!(e.point_cache.contains_key(&idx), true);
-            assert_eq!(e.point_cache.contains_key(&(idx + 1)), true);
-            assert_eq!(e.point_cache.contains_key(&(idx + 2)), true);
-            assert_eq!(e.point_cache.contains_key(&(idx + 3)), true);
-        };
+            let mut check_cache_updates = |idx| {
+                assert_eq!(e.point_cache.contains_key(&idx), false);
+                assert_eq!(e.point_cache.contains_key(&(idx + 1)), false);
+                assert_eq!(e.point_cache.contains_key(&(idx + 2)), false);
+                assert_eq!(e.point_cache.contains_key(&(idx + 3)), false);
+                e.get_point(idx);
+                assert_eq!(e.point_cache.contains_key(&idx), true);
+                assert_eq!(e.point_cache.contains_key(&(idx + 1)), true);
+                assert_eq!(e.point_cache.contains_key(&(idx + 2)), true);
+                assert_eq!(e.point_cache.contains_key(&(idx + 3)), true);
+            };
 
-        check_cache_updates(0);
-        check_cache_updates(4);
+            check_cache_updates(0);
+            check_cache_updates(4);
 
-        remove_dir_all(path).unwrap();
+            remove_dir_all(path).unwrap();
+        }
     }
 
-    #[test]
     /// Inserts a number of points in the store
-    /// via a random number of insertions until all
+    /// for _ in 0..10 { } via a random number of insertions until all
     /// points are inserted. This creates many manifests
     /// and data files. After optimize() is called,
     /// it should reduce the number of manifests
     /// and the number of data files to 1
+    #[test]
     fn optimize_rand_additions() {
-        let path = "./optimize-rand-test";
-        let mut e = init_engine(path);
+        setup();
+        let path = "./test_results/optimize-rand-test";
+        let mut e = init_engine(path, M);
 
         let n = 1024;
         let mut rng = rand::thread_rng();
-        let points = gen_rand_points(n);
+        let points = gen_rand_points(n, DIM);
         let sample = Uniform::new(0, points.len())
             .sample_iter(rng.clone())
             .take(1000)
@@ -673,10 +778,65 @@ mod tests {
         remove_dir_all(path).unwrap();
     }
 
+    #[test]
+    fn entries_are_updated() {
+        setup();
+        for _ in 0..10 {
+            let path = "./test_results/entries-updated";
+            let mut e = init_engine(path, M);
+            let n = 10;
+            let points = gen_rand_points(n, 128);
+            e.insert(&points[..n / 2]).unwrap();
+            e.insert(&points[n / 2..]).unwrap();
+            e.point_cache.invalidate_all();
+            e.entry_cache.invalidate_all();
+
+            for i in 0..n {
+                let entry = e.get_entry(i).unwrap();
+                assert!(entry.nb_levels().unwrap() > 0);
+                assert!(entry.degree(0).unwrap() != 0);
+            }
+            remove_dir_all(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn one_dim_accuracy() {
+        setup();
+        let mut misses = 0;
+        let mut total = 0;
+        let n = 10;
+        for _ in 0..100 {
+            let path = "./test_results/one-dim-acc";
+            let mut e = init_engine(path, 128);
+            let mut points = gen_rand_points(100, 1);
+            e.insert(&points).unwrap();
+
+            points.sort_by(|a, b| a.get_vals()[0].partial_cmp(&b.get_vals()[0]).unwrap());
+
+            let min = Point::with_vec_and_id(&QuantVec::new(&vec![-1.0]), 100);
+            let max = Point::with_vec_and_id(&QuantVec::new(&vec![1.0]), 101);
+            let nearest_to_min: HashSet<INT> =
+                HashSet::from_iter(points.iter().map(|p| p.id).take(n));
+            let nearest_to_max: HashSet<INT> =
+                HashSet::from_iter(points.iter().rev().map(|p| p.id).take(n));
+
+            let min_res = HashSet::from_iter(e.ann(&min, n, 100).unwrap().iter().copied());
+            let max_res = HashSet::from_iter(e.ann(&max, n, 100).unwrap().iter().copied());
+            misses += min_res.difference(&nearest_to_min).count();
+            misses += max_res.difference(&nearest_to_max).count();
+            total += n * 2;
+            remove_dir_all(path).unwrap();
+        }
+        let acc = (total - misses) as f32 / total as f32;
+        dbg!(acc, total, misses);
+        assert!(acc >= 0.98);
+    }
+
     fn get_glove_data() -> (Vec<Point>, Vec<Point>) {
-        let file = File::open("/home/gamal/hnsw_rs/test-data/store.txt").unwrap();
+        let file = File::open("/home/gamal/repos/vector-store/test-data/store.txt").unwrap();
         let (_, stored) = load_glove_array(0, file, false).expect("Could not load store vectors");
-        let file = File::open("/home/gamal/hnsw_rs/test-data/queries.txt").unwrap();
+        let file = File::open("/home/gamal/repos/vector-store/test-data/queries.txt").unwrap();
         let (_, queries) = load_glove_array(0, file, false).expect("Could not load query vectors");
         let mut f = |vectors: Vec<Vec<f32>>| -> Vec<Point> {
             vectors
@@ -688,8 +848,8 @@ mod tests {
         return (f(stored), f(queries));
     }
 
-    fn get_actual_nn(queries: &Vec<Point>, index: &mut impl Index) -> Vec<Vec<INT>> {
-        let mut queries_nn: Vec<Vec<INT>> = Vec::new();
+    fn get_actual_nn(queries: &Vec<Point>, index: &impl Index) -> Vec<HashSet<INT>> {
+        let mut queries_nn = Vec::new();
         for query_point in queries.iter() {
             let query_true_nn = (0..index.len().unwrap())
                 .map(|idx| Dist::new(idx, index.distance2point(idx, query_point).unwrap()))
@@ -704,19 +864,16 @@ mod tests {
 
     #[test]
     fn glove_accuracy() {
-        let path = "./glove-test";
-        let mut e = init_engine(path);
+        setup();
+        let path = "./test_results/glove-test";
+        let e = init_engine(path, 24);
         let (stored, queries) = get_glove_data();
         e.insert(&stored).unwrap();
 
-        let queries_nn = get_actual_nn(&queries, &mut e);
-
+        let queries_nn = get_actual_nn(&queries, &e);
         let mut total_hits = 0;
-        for (idx, query) in queries.iter().enumerate() {
-            let query_ann = e.ann(query, 10, 100).unwrap();
-            let query_ann: HashSet<INT> = HashSet::from_iter(query_ann.iter().copied());
-
-            let query_true_nn = HashSet::from_iter(queries_nn.get(idx).unwrap().iter().copied());
+        for (query, query_true_nn) in queries.iter().zip(queries_nn.iter()) {
+            let query_ann = e.ann(query, 10, 100).unwrap().iter().copied().collect();
             let hits = query_true_nn.intersection(&query_ann).count();
             total_hits += hits;
         }

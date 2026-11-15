@@ -7,8 +7,8 @@ use std::{
     sync::Arc,
 };
 
-use hnsw::helpers::get_progress_bar;
 use itertools::Itertools;
+use log::{debug, trace};
 use points::point::{Point, VecType};
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,8 @@ use crate::{
     index::{CachedEntry, IndexEntry},
     path_to_f_name_str,
 };
+
+pub struct NewEP(pub Option<INT>, pub INT);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
@@ -221,28 +223,38 @@ impl ManifestList {
         Ok(s)
     }
 
-    pub fn add_data(&mut self, mut data: &[Point], ml: f32) -> io::Result<Manifest> {
-        let new_manifest = self.write_new_data(&mut data, ml);
+    pub fn add_data(&mut self, mut data: &[Point], ml: f32) -> io::Result<(Manifest, NewEP)> {
+        debug!("Adding data");
+        let (new_manifest, new_ep) = self.write_new_data(&mut data, ml);
         self.add_manifest(&new_manifest)?;
-        Ok(new_manifest)
+        Ok((new_manifest, new_ep))
     }
 
-    fn write_new_data(&self, data: &[Point], ml: f32) -> Manifest {
+    fn write_new_data(&self, data: &[Point], ml: f32) -> (Manifest, NewEP) {
         let first = self.get_nb_points();
         let last = first + data.len() as INT - 1;
         let data_path = self.get_data_layer().join(get_rand_file_name());
         let index_path = self.get_index_layer().join(get_rand_file_name());
         let manifest = Manifest::new(data_path, index_path, first, last);
         manifest.write_data(data);
-        manifest.write_entries(&self.gen_entries(data, ml));
-        manifest
+        let (new_entries, new_ep) = self.gen_entries(ml, first, last);
+        manifest.write_entries(&new_entries);
+        trace!("Wrote new data | ID range: {first}-{last}");
+        (manifest, new_ep)
     }
 
-    fn gen_entries(&self, data: &[Point], ml: f32) -> Vec<IndexEntry> {
-        Vec::from_iter(
-            data.iter()
-                .map(|p| IndexEntry::new(p.id, get_level(ml, &mut thread_rng()))),
-        )
+    fn gen_entries(&self, ml: f32, first: INT, last: INT) -> (Vec<IndexEntry>, NewEP) {
+        let mut potential_ep: Option<INT> = None;
+        let mut max_level: INT = 0;
+        let iter = (first..=last).map(|id| {
+            let level = get_level(ml, &mut thread_rng());
+            if level > max_level {
+                potential_ep = Some(id);
+                max_level = level;
+            }
+            IndexEntry::new(id, level)
+        });
+        (Vec::from_iter(iter), NewEP(potential_ep, max_level))
     }
 
     fn create_first_manifest_list(metadata_dir: PathBuf) -> io::Result<Self> {
@@ -348,6 +360,7 @@ impl ManifestList {
         )?;
         self.manifests.push(new_manifest.clone());
         Self::write_self(&self)?;
+        debug!("Added a new manifest: {new_manifest:?}");
         Ok(())
     }
 
@@ -457,27 +470,35 @@ impl ManifestList {
         self.get_root().join(INDEX_LAYER)
     }
 
-    pub fn write_entries(&mut self, entries: Vec<CachedEntry>) -> io::Result<()> {
-        let grouping_bar = get_progress_bar("grouping entries", entries.len());
+    pub fn update_entries(&mut self, entries: Vec<CachedEntry>) -> io::Result<()> {
+        trace!("Updating {} entries", entries.len());
+        let modified_ids: HashSet<INT> = HashSet::from_iter(entries.iter().map(|e| e.get_id()));
         let mut grouped: HashMap<PathBuf, (&Manifest, Vec<IndexEntry>)> = HashMap::new();
-        entries
-            .iter()
-            .map(|e| {
-                let manifest = self.get_manifest_from_id(e.get_id()).unwrap();
-                ((manifest, manifest.index_loc.clone()), e.clone())
-            })
-            .for_each(|((manifest, key), val)| {
-                grouping_bar.inc(1);
-                grouped
-                    .entry(key)
-                    .and_modify(|e| e.1.push(Arc::unwrap_or_clone(val.clone())))
-                    .or_insert((manifest, vec![Arc::unwrap_or_clone(val.clone())]));
-            });
-        let writting_bar = get_progress_bar("writting manifests", grouped.len());
-        grouped.values().for_each(|(manifest, entries)| {
-            writting_bar.inc(1);
-            manifest.write_entries(entries);
-        });
+        for e in entries.iter().cloned() {
+            let manifest = self.get_manifest_from_id(e.get_id()).unwrap();
+            let group_key = manifest.index_loc.clone();
+            trace!("Adding entry {} to group {group_key:?}", e.get_id());
+            grouped
+                .entry(group_key)
+                .and_modify(|(_, val)| val.push(Arc::unwrap_or_clone(e.clone())))
+                .or_insert((manifest, vec![Arc::unwrap_or_clone(e)]));
+        }
+        debug!("Modifying {} manifests", grouped.len());
+        for (manifest, modified_entries) in grouped.values() {
+            trace!(
+                "Updating {} entries at {:?}",
+                modified_entries.len(),
+                manifest.index_loc
+            );
+            let mut all_entries: Vec<IndexEntry> = manifest
+                .read_entries()
+                .iter()
+                .filter(|e| !modified_ids.contains(&e.get_id()))
+                .cloned()
+                .collect();
+            all_entries.extend_from_slice(&modified_entries);
+            manifest.write_entries(&all_entries);
+        }
         Ok(())
     }
 }
