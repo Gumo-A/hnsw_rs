@@ -20,6 +20,13 @@ pub trait VecBase {
             .sum::<f32>()
             .sqrt()
     }
+    fn distance2vec(&self, other: &Vec<f32>) -> f32 {
+        self.iter_vals()
+            .zip(other.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
     fn dist2many<I>(&self, others: I) -> impl Iterator<Item = f32>
     where
         I: Iterator<Item = Arc<Self>>,
