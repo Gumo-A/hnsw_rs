@@ -58,7 +58,7 @@ pub trait IndexFacade {
     fn neighbors(&self, id: INT, level: INT) -> Result<IntSet<INT>, HNSWErr>;
     fn commit_results(&self) -> Result<(), HNSWErr>;
     fn len(&self) -> Result<INT, HNSWErr>;
-    fn ann(&self, point: &Point, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr>;
+    fn ann(&self, vector: &Vec<f32>, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr>;
 
     fn cap_neighbors(&self, id: INT, level: INT, m: INT) -> Result<isize, HNSWErr> {
         trace!("Capping neighbors for {id} at level {level} to max of {m}");

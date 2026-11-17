@@ -1,17 +1,15 @@
 #[allow(unused_imports)]
 use std::collections::HashMap;
-use std::env;
 use std::fs::remove_dir_all;
 use std::fs::File;
 use std::path::Path;
+use std::process::Command;
 use std::time::Instant;
 
 use hnsw::helpers::args::parse_args_eval;
 use hnsw::helpers::glove::load_glove_array;
 use hnsw_engine::engine::Engine;
 use hnsw_engine::index::IndexFacade;
-use points::point::Point;
-use vectors::QuantVec;
 use vectors::VecBase;
 
 fn main() -> std::io::Result<()> {
@@ -37,21 +35,23 @@ fn main() -> std::io::Result<()> {
     if tmp_path.exists() {
         remove_dir_all(tmp_path).unwrap();
     }
-    let store = Engine::new(Path::new("./persistance").to_path_buf(), m).unwrap();
+    // let _ = Command::new("cp")
+    //     .arg("-r")
+    //     .arg("./persistance-cp")
+    //     .arg("./persistance")
+    //     .output()
+    //     .unwrap();
+    let store = Engine::new(tmp_path.to_path_buf(), m).unwrap();
     let s = Instant::now();
-    let embeddings: Vec<Point> = embeddings
-        .iter()
-        .enumerate()
-        .map(|(idx, v)| Point::with_vec_and_id(&QuantVec::new(v), idx))
-        .collect();
-    store.insert(&embeddings).unwrap();
+    store.insert(&embeddings[..100_000]).unwrap();
+    // store.insert(&embeddings[100_000..110_000]).unwrap();
     let e = s.elapsed().as_secs_f32();
-    println!(
-        "took {0}s to build index with {1} points and M {2}",
-        e,
-        store.len().unwrap(),
-        store.get_m()
-    );
+    // println!(
+    //     "took {0}s to build index with {1} points and M {2}",
+    //     e,
+    //     store.len().unwrap(),
+    //     store.get_m()
+    // );
     // {
     //     use text_io::read;
 
@@ -67,10 +67,10 @@ fn main() -> std::io::Result<()> {
     //             continue;
     //         }
 
-    //         let word_idx = *words_map.get(&query).unwrap() as u32;
+    //         let word_idx = *words_map.get(&query).unwrap();
     //         let vector = store.get_point(word_idx).unwrap().get_vals();
 
-    //         let anns = store.ann_by_vector(&vector, 10, ef).unwrap();
+    //         let anns = store.ann(&vector, 10, ef).unwrap();
     //         let anns_words: Vec<String> = anns.iter().map(|x| words[*x as usize].clone()).collect();
     //         println!("ANNs of {query} (ef={ef})");
     //         println!("{:?}", anns_words);

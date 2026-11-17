@@ -1,7 +1,10 @@
 mod results;
 pub mod traverser;
 
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::{
+    env,
+    sync::{Arc, RwLock, RwLockReadGuard},
+};
 
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -15,28 +18,39 @@ pub struct HNSW {
     pub mmax0: INT,
     pub ml: f32,
     pub ef_cons: INT,
-    pub cache_cap: INT,
+    pub block_size: INT,
     pub dim: Arc<RwLock<Option<INT>>>,
     pub ep: Arc<RwLock<INT>>,
 }
 
-const CACHE_SIZE_BYTES: INT = 134217728; // 128MiB
-const DEFAULT_CACHE_CAP: INT = 130056; // 128MiB worth of dim-1024 QuantVecs
-fn get_cache_cap(dim: INT) -> INT {
-    CACHE_SIZE_BYTES / (8 + dim)
-}
+const DEFAULT_BLOCK_SIZE: INT = 16384; // QuantVecs per file
 
 impl HNSW {
     pub fn new(m: INT) -> HNSW {
         HNSW {
             m,
-            mmax: m,
-            mmax0: m * 2,
-            ml: 1.0 / (m as f32).ln(),
-            ef_cons: m * 2,
+            mmax: env::var("HNSW_MMAX")
+                .ok()
+                .and_then(|v| v.parse::<INT>().ok())
+                .unwrap_or(m),
+            mmax0: env::var("HNSW_MMAX0")
+                .ok()
+                .and_then(|v| v.parse::<INT>().ok())
+                .unwrap_or(m * 2),
+            ml: env::var("HNSW_ML")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(1.0 / (m as f32).ln()),
+            ef_cons: env::var("HNSW_EF_CONS")
+                .ok()
+                .and_then(|v| v.parse::<INT>().ok())
+                .unwrap_or(m * 2),
             dim: Arc::new(RwLock::new(None)),
             ep: Arc::new(RwLock::new(0)),
-            cache_cap: DEFAULT_CACHE_CAP,
+            block_size: env::var("HNSW_BLOCK_SIZE")
+                .ok()
+                .and_then(|t| t.parse::<INT>().ok())
+                .unwrap_or(DEFAULT_BLOCK_SIZE),
         }
     }
 
