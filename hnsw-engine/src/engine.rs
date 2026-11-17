@@ -35,14 +35,14 @@ macro_rules! timeit {
     ($f:expr) => {
         let s = Instant::now();
         $f;
-        let e = s.elapsed();
-        println!("Executed {} in {e:?}", stringify!($f));
+        let e = s.elapsed().as_millis();
+        info!("Executed {} in {e:?} ms", stringify!($f));
     };
     (let $x:ident = $f:expr) => {
         let s = Instant::now();
         let $x = $f;
-        let e = s.elapsed();
-        println!("Executed {} in {e:?}", stringify!($f));
+        let e = s.elapsed().as_millis();
+        info!("Executed {} in {e:?} ms", stringify!($f));
     };
 }
 
