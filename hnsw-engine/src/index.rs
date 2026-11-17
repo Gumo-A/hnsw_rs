@@ -26,6 +26,7 @@ pub enum HNSWErr {
     NodeNotInLevel(INT, INT),
     SelfConnection,
     WouldIsolate(INT),
+    NoMatchingManifest(INT),
 }
 
 pub fn map_io_err(e: io::Error) -> HNSWErr {
