@@ -5,7 +5,7 @@ use std::{
 
 use graph::dist::Dist;
 use itertools::Itertools;
-use log::{trace, warn};
+use log::{debug, trace};
 use nohash_hasher::IntSet;
 use points::point::Point;
 use serde::{Deserialize, Serialize};
@@ -113,7 +113,7 @@ pub trait IndexFacade {
                 Ok(()) => removed += 1,
                 Err(e) => match e {
                     HNSWErr::WouldIsolate(a) => {
-                        warn!(
+                        debug!(
                             "Was going to remove edge {id}-{n}, but {a} would be isolated, ignoring request"
                         );
                     }
