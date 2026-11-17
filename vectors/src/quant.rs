@@ -84,11 +84,8 @@ impl VecBase for QuantVec {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use crate::gen_rand_vecs;
-
     use super::*;
+    use crate::gen_rand_vecs;
 
     #[test]
     fn serialization() {
@@ -105,11 +102,10 @@ mod tests {
         let mut others = Vec::new();
         for _ in 0..100 {
             let a = QuantVec::new(&gen_rand_vecs(128, 1)[0].clone());
-            others.push(Arc::new(a));
+            others.push(a);
         }
         let a = QuantVec::new(&gen_rand_vecs(128, 1)[0].clone());
-        a.dist2many(others.iter().cloned())
-            .for_each(|dist| assert!(dist >= 0.0));
+        others.iter().for_each(|v| assert!(a.dist2other(v) >= 0.0));
 
         let a = QuantVec::new(&vec![0.5]);
         let b = QuantVec::new(&vec![0.25]);

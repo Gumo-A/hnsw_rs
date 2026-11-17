@@ -1,20 +1,17 @@
 use core::panic;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result};
 use std::str::FromStr;
 
-pub fn load_glove_array(
-    lim: usize,
-    file: File,
-    verbose: bool,
-) -> Result<(Vec<String>, Vec<Vec<f32>>)> {
+pub fn load_glove_array(lim: usize, file: File) -> Result<(Vec<String>, Vec<Vec<f32>>)> {
     let reader = BufReader::new(file);
 
     let mut embeddings: Vec<Vec<f32>> = Vec::new();
     let mut words: Vec<String> = Vec::new();
 
-    let bar = if verbose {
+    let bar = if env::var("HNSW_PB").is_ok() {
         let bar = ProgressBar::new(lim.try_into().unwrap());
         bar.set_style(
             ProgressStyle::with_template(

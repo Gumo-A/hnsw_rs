@@ -273,7 +273,7 @@ impl Traverser {
             {
                 let dist = match query {
                     Query::ID(id) => index.distance(node, *id)?,
-                    Query::Point(p) => index.get_point(node)?.dist2other(p),
+                    Query::Point(p) => index.distance2point(node, p)?,
                 };
                 q2cand_neighbors_dists.push(Dist::new(node, dist));
             }
@@ -338,11 +338,10 @@ impl Traverser {
 
         while (!self.results.candidates.is_empty()) & (self.results.selected.len() < m as usize) {
             let node_e = self.results.candidates.pop_first().unwrap();
-            let e_point = index.get_point(node_e.id)?;
 
             let nearest_selected = self
                 .results
-                .get_nearest_from_selected(&e_point, Arc::clone(&index));
+                .get_nearest_from_selected(node_e.id, Arc::clone(&index));
 
             if node_e < nearest_selected {
                 self.results.insert_selected(node_e);

@@ -22,7 +22,7 @@ fn insert_at_10k(c: &mut Criterion) {
     let mut group = c.benchmark_group(format!("Insert @ 10k nodes"));
     for m in M {
         let file = File::open(FILE_NAME).unwrap();
-        let (_, embeddings) = load_glove_array(10_000, file, false).unwrap();
+        let (_, embeddings) = load_glove_array(10_000, file).unwrap();
         let index = init_index(m, embeddings[0].len());
         let index = index
             .insert_bulk(embeddings[..9_999].to_vec(), 1, false)
@@ -46,7 +46,7 @@ fn build_10k(c: &mut Criterion) {
     group.sample_size(10);
     for m in M {
         let file = File::open(FILE_NAME).unwrap();
-        let (_, embeddings) = load_glove_array(10_000, file, false).unwrap();
+        let (_, embeddings) = load_glove_array(10_000, file).unwrap();
         group.bench_function(BenchmarkId::from_parameter(m), |b| {
             b.iter_batched(
                 || embeddings.clone(),

@@ -13,7 +13,7 @@ fn full_dist(c: &mut Criterion) {
         let v1 = FullVec::new(&vectors[1]);
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &(&v0, &v1), |b, i| {
-            b.iter(|| i.0.distance(i.1));
+            b.iter(|| i.0.dist2other(i.1));
         });
     }
     group.finish();
@@ -29,7 +29,7 @@ fn full_dist_to_many(c: &mut Criterion) {
             .collect();
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &(&v, &others), |b, i| {
-            b.iter(|| i.0.dist2many(i.1.iter().cloned()).collect::<Vec<f32>>());
+            b.iter(|| i.1.iter().map(|v| i.0.dist2other(v)).collect::<Vec<f32>>());
         });
     }
     group.finish();
@@ -59,7 +59,7 @@ fn quant_dist_to_many(c: &mut Criterion) {
             .collect();
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &(&v, &others), |b, i| {
-            b.iter(|| i.0.dist2many(i.1.iter().cloned()).collect::<Vec<f32>>());
+            b.iter(|| i.1.iter().map(|v| i.0.dist2other(v)).collect::<Vec<f32>>());
         });
     }
     group.finish();

@@ -21,8 +21,6 @@ use crate::{
     path_to_f_name_str,
 };
 
-pub struct NewEP(pub Option<INT>, pub INT);
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub data_loc: PathBuf,
@@ -223,27 +221,27 @@ impl ManifestList {
         Ok(s)
     }
 
-    pub fn add_data(&mut self, mut data: &[Point], ml: f32) -> io::Result<(Manifest, NewEP)> {
+    pub fn add_data(&mut self, mut data: &[Point], ml: f32) -> io::Result<Manifest> {
         debug!("Adding data");
-        let (new_manifest, new_ep) = self.write_new_data(&mut data, ml);
+        let new_manifest = self.write_new_data(&mut data, ml);
         self.add_manifest(&new_manifest)?;
-        Ok((new_manifest, new_ep))
+        Ok(new_manifest)
     }
 
-    fn write_new_data(&self, data: &[Point], ml: f32) -> (Manifest, NewEP) {
+    fn write_new_data(&self, data: &[Point], ml: f32) -> Manifest {
         let first = self.get_nb_points();
         let last = first + data.len() as INT - 1;
         let data_path = self.get_data_layer().join(get_rand_file_name());
         let index_path = self.get_index_layer().join(get_rand_file_name());
         let manifest = Manifest::new(data_path, index_path, first, last);
         manifest.write_data(data);
-        let (new_entries, new_ep) = self.gen_entries(ml, first, last);
+        let new_entries = self.gen_entries(ml, first, last);
         manifest.write_entries(&new_entries);
         trace!("Wrote new data | ID range: {first}-{last}");
-        (manifest, new_ep)
+        manifest
     }
 
-    fn gen_entries(&self, ml: f32, first: INT, last: INT) -> (Vec<IndexEntry>, NewEP) {
+    fn gen_entries(&self, ml: f32, first: INT, last: INT) -> Vec<IndexEntry> {
         let mut potential_ep: Option<INT> = None;
         let mut max_level: INT = 0;
         let iter = (first..=last).map(|id| {
@@ -254,7 +252,7 @@ impl ManifestList {
             }
             IndexEntry::new(id, level)
         });
-        (Vec::from_iter(iter), NewEP(potential_ep, max_level))
+        Vec::from_iter(iter)
     }
 
     fn create_first_manifest_list(metadata_dir: PathBuf) -> io::Result<Self> {

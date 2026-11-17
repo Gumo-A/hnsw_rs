@@ -1,18 +1,14 @@
-use graph::NodeID;
-use graph::dist::Dist;
-use log::trace;
-use nohash_hasher::{IntMap, IntSet};
-use points::point::Point;
-use std::{collections::BTreeSet, sync::Arc};
-use vectors::VecBase;
-
 use crate::{
     engine::INT,
     index::{HNSWErr, Index},
 };
+use graph::dist::Dist;
+use log::trace;
+use nohash_hasher::{IntMap, IntSet};
+use std::{collections::BTreeSet, sync::Arc};
 
 type OrderedDists = BTreeSet<Dist>;
-pub type LayerResult = IntMap<NodeID, IntSet<NodeID>>;
+pub type LayerResult = IntMap<INT, IntSet<INT>>;
 type LayersResults = IntMap<usize, LayerResult>;
 
 /// A wrapper around many helper data structures
@@ -27,7 +23,7 @@ type LayersResults = IntMap<usize, LayerResult>;
 pub struct Results {
     pub selected: OrderedDists,
     pub candidates: OrderedDists,
-    pub visited: IntSet<NodeID>,
+    pub visited: IntSet<INT>,
     pub visited_h: OrderedDists,
     pub insertion_results: LayersResults,
     pub prune_results: LayersResults,
@@ -61,20 +57,15 @@ impl Results {
         }
     }
 
-    pub fn get_nearest_from_selected(&self, point: &Point, points: Arc<impl Index>) -> Dist {
-        let selected_points = self
-            .selected
+    pub fn get_nearest_from_selected(&self, id: INT, index: Arc<impl Index>) -> Dist {
+        self.selected
             .iter()
-            .map(|n| points.get_point(n.id).unwrap());
-        let distances = point.dist2many(selected_points);
-        distances
-            .zip(self.selected.iter().map(|n| n.id))
-            .map(|(dist, id)| Dist::new(id, dist))
+            .map(|d| Dist::new(d.id, index.distance(d.id, id).unwrap()))
             .min()
             .unwrap()
     }
 
-    pub fn save_layer_results(&mut self, layer_nb: usize, point_id: NodeID) {
+    pub fn save_layer_results(&mut self, layer_nb: usize, point_id: INT) {
         trace!("Saving layer results for Layer {layer_nb} and point {point_id}");
         let point_neighbors = IntSet::from_iter(self.selected.iter().map(|dist| dist.id));
         let layer_result = self.get_insertion_result(layer_nb);
@@ -86,7 +77,7 @@ impl Results {
         self.selected.insert(dist);
     }
 
-    pub fn insert_visited(&mut self, idx: NodeID) -> bool {
+    pub fn insert_visited(&mut self, idx: INT) -> bool {
         self.visited.insert(idx)
     }
 
@@ -113,7 +104,7 @@ impl Results {
         index: Arc<impl Index>,
         layer: INT,
     ) -> Result<(), HNSWErr> {
-        let cands: Vec<NodeID> = self.candidates.iter().map(|dist| dist.id).collect();
+        let cands: Vec<INT> = self.candidates.iter().map(|dist| dist.id).collect();
         for node in cands {
             let neighs = match index.neighbors(node, layer) {
                 Ok(n) => n,

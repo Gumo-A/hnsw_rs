@@ -89,7 +89,7 @@ mod test {
 
         let dist = a.dist2other(&b);
         assert_eq!(dist, vec_dist);
-        let dist = a.distance(&b);
+        let dist = a.dist2other(&b);
         assert_eq!(dist, vec_dist);
     }
 }

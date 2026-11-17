@@ -23,7 +23,11 @@ impl VecBase for FullVec {
         }
     }
     fn dist2other(&self, other: &Self) -> f32 {
-        self.distance(other)
+        self.iter_vals()
+            .zip(other.iter_vals())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
     }
 
     fn iter_vals(&self) -> impl Iterator<Item = f32> {
@@ -37,11 +41,8 @@ impl VecBase for FullVec {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use crate::gen_rand_vecs;
-
     use super::*;
+    use crate::gen_rand_vecs;
 
     #[test]
     fn serialization() {
@@ -58,11 +59,10 @@ mod tests {
         let mut others = Vec::new();
         for _ in 0..100 {
             let a = FullVec::new(&gen_rand_vecs(128, 1)[0].clone());
-            others.push(Arc::new(a));
+            others.push(a);
         }
         let a = FullVec::new(&gen_rand_vecs(128, 1)[0].clone());
-        a.dist2many(others.iter().cloned())
-            .for_each(|dist| assert!(dist >= 0.0));
+        others.iter().for_each(|v| assert!(v.dist2other(&a) >= 0.0));
 
         let a = FullVec::new(&vec![0.5]);
         let b = FullVec::new(&vec![0.25]);

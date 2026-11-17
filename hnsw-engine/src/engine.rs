@@ -1,34 +1,24 @@
 use std::{
     env,
     fs::{File, create_dir, create_dir_all, remove_file},
-    io::{self, BufReader, ErrorKind, Read, Write},
+    io::{self, BufReader, ErrorKind, Write},
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::Arc,
     thread::sleep,
     time::{Duration, Instant},
 };
 
-use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use graph::{dist::Dist, graph::Graph};
-use hnsw::helpers::get_progress_bar;
-use itertools::Itertools;
-use log::{debug, error, info, trace};
-use moka::{
-    policy::EvictionPolicy,
-    sync::{Cache, CacheBuilder},
-};
-use nohash_hasher::{BuildNoHashHasher, IntSet, NoHashHasher};
-use points::point::{Point, VecType};
-use rand::{Rng, rngs::ThreadRng, thread_rng};
+use log::{debug, trace};
+use moka::sync::Cache;
+use nohash_hasher::{BuildNoHashHasher, IntSet};
+use points::point::Point;
+use rand::{Rng, rngs::ThreadRng};
 use vectors::VecBase;
 
 use crate::{
-    get_rand_file_name,
     hnsw::{HNSW, traverser::Traverser},
-    index::{
-        CachedEntry, CachedPoint, HNSWErr, Index, IndexEntry, IndexFacade, map_io_err, map_json_err,
-    },
-    manifest::{Manifest, ManifestList, NewEP},
+    index::{CachedEntry, CachedPoint, HNSWErr, Index, IndexFacade, map_io_err, map_json_err},
+    manifest::{Manifest, ManifestList},
 };
 
 macro_rules! timeit {
@@ -236,7 +226,7 @@ impl Engine {
             let points: Vec<Point> = vectors.iter().map(|v| Point::new(v)).collect();
             self.check_points(&points)?;
             self.write_lock();
-            let (manifest, new_ep) = self
+            let manifest = self
                 .get_current_manifest_list()?
                 .add_data(&points, self.params.ml)
                 .map_err(map_io_err)?;
@@ -282,7 +272,7 @@ impl Engine {
         } else {
             File::create_new(&param_file).map_err(map_io_err)?
         };
-        f.write_all(&params_ser);
+        f.write_all(&params_ser).map_err(map_io_err)?;
         Ok(())
     }
 
@@ -373,9 +363,9 @@ impl IndexFacade for Engine {
     }
 
     fn add_node(&self, id: INT, level: INT) -> Result<(), HNSWErr> {
-        let mut entry = self.get_entry(id)?;
+        let entry = self.get_entry(id)?;
         while entry.nb_levels()? <= level {
-            entry.add_level();
+            entry.add_level()?;
         }
         Ok(())
     }
@@ -500,22 +490,18 @@ mod tests {
         collections::HashSet,
         fs::{File, remove_dir_all},
         path::{Path, PathBuf},
-        sync::Arc,
-        time::Instant,
-        u64,
     };
 
-    use env_logger::init;
     use graph::dist::Dist;
     use hnsw::helpers::glove::load_glove_array;
     use itertools::Itertools;
-    use log::{debug, trace};
+    use log::debug;
     use points::point::Point;
     use rand::{
         Rng,
-        distributions::{Distribution, Uniform, uniform::UniformSampler},
+        distributions::{Distribution, Uniform},
     };
-    use vectors::{QuantVec, VecBase, gen_rand_vecs};
+    use vectors::{VecBase, gen_rand_vecs};
 
     use crate::{
         engine::{Engine, INT},
@@ -550,21 +536,12 @@ mod tests {
         Engine::new(path, m).unwrap()
     }
 
-    fn gen_rand_point(dim: INT) -> Vec<Point> {
-        let vs = gen_rand_vecs(dim, 1);
-        let mut points = vec![];
-        for (idx, v) in vs.iter().enumerate() {
-            points.push(Point::with_level_and_id(v, 0, idx));
-        }
-        points
-    }
-
     #[test]
     fn different_dimension_not_allowed() {
         setup();
         for _ in 0..10 {
             let path = "./test_results/diff-dim-test";
-            let mut e = init_engine(path, M);
+            let e = init_engine(path, M);
             assert!(e.params.dim_is_none());
 
             let r = e.insert(&gen_rand_vecs(4, 1));
@@ -583,7 +560,7 @@ mod tests {
         for i in 0..10 {
             debug!("Test {i}");
             let path = "./test_results/add-points-test";
-            let mut e = init_engine(path, M);
+            let e = init_engine(path, M);
             let n = 8;
             for _ in 0..4 {
                 let p = gen_rand_vecs(DIM, n);
@@ -600,7 +577,7 @@ mod tests {
         setup();
         for _ in 0..10 {
             let path = "./test_results/add-one-point-test";
-            let mut e = init_engine(path, M);
+            let e = init_engine(path, M);
             for _ in 0..4 {
                 let p = gen_rand_vecs(DIM, 1);
                 let r = e.insert(&p);
@@ -632,7 +609,7 @@ mod tests {
                 assert!(dist < 0.01);
             }
 
-            let mut f = |e: &mut Engine, id: INT| -> bool {
+            let f = |e: &mut Engine, id: INT| -> bool {
                 match e.get_point(id) {
                     Err(e) => match e {
                         HNSWErr::IDNotFound(other_id) => id == other_id,
@@ -671,7 +648,7 @@ mod tests {
                 assert!(a.degree(0).unwrap() > 0);
             }
 
-            let mut f = |e: &mut Engine, id: INT| -> bool {
+            let f = |e: &mut Engine, id: INT| -> bool {
                 match e.get_point(id) {
                     Err(e) => match e {
                         HNSWErr::IDNotFound(other_id) => id == other_id,
@@ -695,7 +672,7 @@ mod tests {
         setup();
         for _ in 0..10 {
             let path = "./test_results/get-points-cache-test";
-            let mut e = init_engine(path, M);
+            let e = init_engine(path, M);
 
             let points = gen_rand_vecs(DIM, 8);
             let _ = e.insert(&points[..4]).unwrap();
@@ -705,12 +682,12 @@ mod tests {
 
             e.point_cache.invalidate_all();
 
-            let mut check_cache_updates = |idx| {
+            let check_cache_updates = |idx| {
                 assert_eq!(e.point_cache.contains_key(&idx), false);
                 assert_eq!(e.point_cache.contains_key(&(idx + 1)), false);
                 assert_eq!(e.point_cache.contains_key(&(idx + 2)), false);
                 assert_eq!(e.point_cache.contains_key(&(idx + 3)), false);
-                e.get_point(idx);
+                e.get_point(idx).unwrap();
                 assert_eq!(e.point_cache.contains_key(&idx), true);
                 assert_eq!(e.point_cache.contains_key(&(idx + 1)), true);
                 assert_eq!(e.point_cache.contains_key(&(idx + 2)), true);
@@ -758,7 +735,7 @@ mod tests {
                 }
             }
         };
-        let mut check_sample = |e: &mut Engine| {
+        let check_sample = |e: &mut Engine| {
             for id in sample.iter().copied() {
                 let p = points.get(id).unwrap();
                 let a = e.get_point(id as INT).expect("The point was not found");
@@ -784,7 +761,7 @@ mod tests {
         setup();
         for _ in 0..10 {
             let path = "./test_results/entries-updated";
-            let mut e = init_engine(path, M);
+            let e = init_engine(path, M);
             let n = 10;
             let points = gen_rand_vecs(128, n);
             e.insert(&points[..n / 2]).unwrap();
@@ -809,8 +786,8 @@ mod tests {
         let n = 10;
         for _ in 0..100 {
             let path = "./test_results/one-dim-acc";
-            let mut e = init_engine(path, 128);
-            let mut points = gen_rand_vecs(1, 100);
+            let e = init_engine(path, 128);
+            let points = gen_rand_vecs(1, 100);
             e.insert(&points).unwrap();
 
             let mut points_ids: Vec<(INT, &Vec<f32>)> =
@@ -838,9 +815,9 @@ mod tests {
 
     fn get_glove_data() -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
         let file = File::open("/home/gamal/repos/vector-store/test-data/store.txt").unwrap();
-        let (_, stored) = load_glove_array(0, file, false).expect("Could not load store vectors");
+        let (_, stored) = load_glove_array(0, file).expect("Could not load store vectors");
         let file = File::open("/home/gamal/repos/vector-store/test-data/queries.txt").unwrap();
-        let (_, queries) = load_glove_array(0, file, false).expect("Could not load query vectors");
+        let (_, queries) = load_glove_array(0, file).expect("Could not load query vectors");
         return (stored, queries);
     }
 

@@ -1,4 +1,3 @@
-#[allow(unused)]
 pub mod engine;
 mod hnsw;
 pub mod index;
