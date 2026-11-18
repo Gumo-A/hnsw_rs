@@ -1,10 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-  "hnsw",
   "eval_glove",
   "vectors", 
-  "graph",
   "points",
   "hnsw-engine",
 ]

@@ -4,10 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-graph = {path = "../graph"}
 vectors = {path = "../vectors"}
 points = {path = "../points"}
-hnsw = {path = "../hnsw"}
 indicatif = "0.17.8"
 nohash-hasher = "0.2.0"
 rand = "0.8.5"
@@ -42,5 +40,5 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 bench = false
 
 [[bench]]
-name = "hnsw_benchmarks"
+name = "engine_benchmarks"
 harness = false

@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 log = "0.4.33"
-hnsw= {path = "../hnsw"}
 hnsw-engine = {path = "../hnsw-engine"}
 vectors = {path = "../vectors"}
 points = {path = "../points"}

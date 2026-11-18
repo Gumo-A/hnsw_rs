@@ -492,8 +492,6 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use graph::dist::Dist;
-    use hnsw::helpers::glove::load_glove_array;
     use itertools::Itertools;
     use log::debug;
     use points::point::Point;
@@ -505,7 +503,8 @@ mod tests {
 
     use crate::{
         engine::{Engine, INT},
-        index::{HNSWErr, Index, IndexFacade},
+        helpers::glove::load_glove_array,
+        index::{Dist, HNSWErr, Index, IndexFacade},
     };
 
     use std::sync::Once;

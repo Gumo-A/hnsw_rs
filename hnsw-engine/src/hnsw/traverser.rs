@@ -1,15 +1,14 @@
 use std::{env, sync::Arc, thread::Builder};
 
-use graph::dist::Dist;
-use hnsw::helpers::get_progress_bar;
 use log::{debug, trace};
 use points::point::Point;
 use vectors::VecBase;
 
 use crate::{
     engine::INT,
+    helpers::get_progress_bar,
     hnsw::results::Results,
-    index::{HNSWErr, Index},
+    index::{Dist, HNSWErr, Index},
 };
 
 const DEFAULT_HNSW_THREADS: usize = 4;

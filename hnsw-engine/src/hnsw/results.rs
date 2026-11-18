@@ -1,8 +1,7 @@
 use crate::{
     engine::INT,
-    index::{HNSWErr, Index},
+    index::{Dist, HNSWErr, Index},
 };
-use graph::dist::Dist;
 use log::trace;
 use nohash_hasher::{IntMap, IntSet};
 use std::{collections::BTreeSet, sync::Arc};
@@ -161,9 +160,7 @@ impl Results {
 
 #[cfg(test)]
 mod test {
-    use graph::dist::Dist;
-
-    use crate::hnsw::results::Results;
+    use crate::{hnsw::results::Results, index::Dist};
 
     fn get_results() -> Results {
         let mut r = Results::new();
