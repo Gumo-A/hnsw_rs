@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::remove_dir_all;
 use std::fs::File;
 use std::path::Path;
@@ -10,7 +9,6 @@ use hnsw::helpers::glove::load_glove_array;
 use hnsw_engine::engine::Engine;
 use hnsw_engine::index::IndexFacade;
 use log::info;
-use vectors::VecBase;
 
 macro_rules! timeit {
     ($f:expr) => {

@@ -34,3 +34,13 @@ panic = "abort"
 
 [build]
 rustflags = ["-C", "target-cpu=native"]
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[lib]
+bench = false
+
+[[bench]]
+name = "hnsw_benchmarks"
+harness = false
