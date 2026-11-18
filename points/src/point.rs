@@ -1,31 +1,11 @@
 use serde::{Deserialize, Serialize};
 use vectors::{QuantVec, VecBase};
 
-type NodeID = usize;
 pub type VecType = QuantVec;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
-    pub id: NodeID,
-    pub level: u8,
     pub vector: VecType,
-}
-
-impl Point {
-    pub fn with_level_and_id(vector: &Vec<f32>, level: usize, id: NodeID) -> Point {
-        let mut point = Self::new(vector);
-        point.id = id;
-        point.level = level as u8;
-        point
-    }
-
-    pub fn with_vec_and_id(vector: &VecType, id: NodeID) -> Point {
-        Self {
-            id,
-            level: 0,
-            vector: vector.clone(),
-        }
-    }
 }
 
 impl VecBase for Point {
@@ -33,8 +13,6 @@ impl VecBase for Point {
     /// Use new_with to specify these values.
     fn new(vector: &Vec<f32>) -> Point {
         Point {
-            id: 0,
-            level: 0,
             vector: VecType::new(vector),
         }
     }
@@ -62,22 +40,20 @@ mod test {
     #[test]
     fn serialization() {
         let rand_vecs = gen_rand_vecs(128, 1);
-        let level = 2;
-        let a = Point::with_level_and_id(&rand_vecs[0], level, 0);
+        let a = Point::new(&rand_vecs[0]);
         let a_vector = a.get_vals();
         let a_ser = rmp_serde::encode::to_vec(&a).unwrap();
         let a: Point = rmp_serde::decode::from_slice(&a_ser).unwrap();
-        assert_eq!(level, a.level as usize);
         assert_eq!(a_vector, a.vector.get_vals());
     }
 
     #[test]
     fn dist() {
         let rand_vecs = gen_rand_vecs(128, 2);
-        let a = Point::with_level_and_id(&rand_vecs[0], 0, 0);
+        let a = Point::new(&rand_vecs[0]);
         let a_vector = a.get_vals();
 
-        let b = Point::with_level_and_id(&rand_vecs[0], 0, 0);
+        let b = Point::new(&rand_vecs[0]);
         let b_vector = b.get_vals();
 
         let vec_dist: f32 = a_vector

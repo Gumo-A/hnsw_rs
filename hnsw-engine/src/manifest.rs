@@ -94,7 +94,7 @@ impl Manifest {
         }
     }
 
-    pub fn read_data(&self) -> Vec<Point> {
+    pub fn read_data(&self) -> Vec<(Point, INT)> {
         let mut bytes = vec![];
         File::open(&self.data_loc)
             .expect("Could not open data file")
@@ -166,22 +166,22 @@ impl Manifest {
         Ok(serde_json::to_vec_pretty(&data)?)
     }
 
-    fn deserialize_data(&self, bytes: &Vec<u8>) -> Vec<Point> {
+    fn deserialize_data(&self, bytes: &Vec<u8>) -> Vec<(Point, INT)> {
         let vecs: Vec<VecType> =
             rmp_serde::decode::from_slice(&bytes).expect("Could not decode data");
         Vec::from_iter(
             vecs.iter()
                 .zip_eq(self.ordered_ids())
-                .map(|(v, id)| Point::with_vec_and_id(v, id)),
+                .map(|(v, id)| (Point { vector: v.clone() }, id)),
         )
     }
 
-    fn deserialize_data_debug(&self, bytes: &Vec<u8>) -> io::Result<Vec<Point>> {
+    fn deserialize_data_debug(&self, bytes: &Vec<u8>) -> io::Result<Vec<(Point, INT)>> {
         let vecs: Vec<VecType> = serde_json::from_slice(bytes)?;
         Ok(Vec::from_iter(
             vecs.iter()
                 .zip_eq(self.ordered_ids())
-                .map(|(v, id)| Point::with_vec_and_id(v, id)),
+                .map(|(v, id)| (Point { vector: v.clone() }, id)),
         ))
     }
 
@@ -427,7 +427,12 @@ impl ManifestList {
         let data_path = self.get_data_layer().join(get_rand_file_name());
         let index_path = self.get_index_layer().join(get_rand_file_name());
         let manifest = Manifest::with_ranges(data_path, index_path, id_ranges);
-        manifest.write_data(&combined_points);
+        manifest.write_data(
+            &combined_points
+                .iter()
+                .map(|(p, _)| p.clone())
+                .collect::<Vec<Point>>(),
+        );
         manifest.write_entries(&combined_entries);
         manifest
     }

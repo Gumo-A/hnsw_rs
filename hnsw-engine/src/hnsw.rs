@@ -1,4 +1,3 @@
-mod results;
 pub mod traverser;
 
 use std::{

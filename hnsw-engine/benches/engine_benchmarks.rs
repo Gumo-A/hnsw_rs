@@ -1,6 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use hnsw::helpers::glove::load_glove_array;
-use hnsw_engine::engine::Engine;
+use hnsw_engine::{engine::Engine, helpers::glove::load_glove_array};
 use rand::{Rng, thread_rng};
 use std::fs::File;
 

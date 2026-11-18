@@ -53,6 +53,9 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(loc: PathBuf, m: INT) -> Result<Self, HNSWErr> {
+        if !loc.is_absolute() {
+            return Err(HNSWErr::RelativePath(loc));
+        }
         let params = Self::init_at_loc(&loc, m)?;
         let point_cache = Cache::builder()
             .time_to_idle(Duration::from_secs(
@@ -196,8 +199,8 @@ impl Engine {
             .get_manifest_from_id(id)
             .ok_or(HNSWErr::IDNotFound(id))?
             .read_data();
-        for p in points {
-            self.point_cache.insert(p.id as INT, Arc::new(p));
+        for (p, id) in points {
+            self.point_cache.insert(id as INT, Arc::new(p));
         }
         self.point_cache.get(&id).ok_or(HNSWErr::PointCacheMiss(id))
     }
@@ -450,9 +453,12 @@ impl IndexFacade for Engine {
         Ok(())
     }
 
-    fn ann(&self, vector: &Vec<f32>, n: usize, ef: usize) -> Result<Vec<INT>, HNSWErr> {
-        let mut traverser = Traverser::new();
-        traverser.ann_by_vec(
+    /// Approximate Nearest Neighbors
+    /// n: number of IDs to retreive
+    /// ef: exploration parameter, higher yields better results, but is slower.
+    /// A good default is M * 2
+    fn ann(&self, vector: &[Vec<f32>], n: usize, ef: usize) -> Result<Vec<Vec<INT>>, HNSWErr> {
+        Traverser::new().ann(
             Arc::new(Self::new(self.loc.clone(), self.get_m())?),
             vector,
             n,
@@ -539,7 +545,7 @@ mod tests {
     fn different_dimension_not_allowed() {
         setup();
         for _ in 0..10 {
-            let path = "./test_results/diff-dim-test";
+            let path = "/tmp/test_results/diff-dim-test";
             let e = init_engine(path, M);
             assert!(e.params.dim_is_none());
 
@@ -558,7 +564,7 @@ mod tests {
         setup();
         for i in 0..10 {
             debug!("Test {i}");
-            let path = "./test_results/add-points-test";
+            let path = "/tmp/test_results/add-points-test";
             let e = init_engine(path, M);
             let n = 8;
             for _ in 0..4 {
@@ -575,7 +581,7 @@ mod tests {
     fn add_one_point() {
         setup();
         for _ in 0..10 {
-            let path = "./test_results/add-one-point-test";
+            let path = "/tmp/test_results/add-one-point-test";
             let e = init_engine(path, M);
             for _ in 0..4 {
                 let p = gen_rand_vecs(DIM, 1);
@@ -590,7 +596,7 @@ mod tests {
     fn get_points_simple() {
         setup();
         for _ in 0..10 {
-            let path = "./test_results/get-points-test";
+            let path = "/tmp/test_results/get-points-test";
             let mut e = init_engine(path, M);
 
             let points = gen_rand_vecs(DIM, 8);
@@ -631,7 +637,7 @@ mod tests {
     fn get_entries_simple() {
         setup();
         for _ in 0..10 {
-            let path = "./test_results/get-entries-test";
+            let path = "/tmp/test_results/get-entries-test";
             let mut e = init_engine(path, M);
 
             let points = gen_rand_vecs(DIM, 8);
@@ -670,7 +676,7 @@ mod tests {
     fn get_points_uses_cache() {
         setup();
         for _ in 0..10 {
-            let path = "./test_results/get-points-cache-test";
+            let path = "/tmp/test_results/get-points-cache-test";
             let e = init_engine(path, M);
 
             let points = gen_rand_vecs(DIM, 8);
@@ -709,7 +715,7 @@ mod tests {
     #[test]
     fn optimize_rand_additions() {
         setup();
-        let path = "./test_results/optimize-rand-test";
+        let path = "/tmp/test_results/optimize-rand-test";
         let mut e = init_engine(path, M);
 
         let n = 1024;
@@ -759,7 +765,7 @@ mod tests {
     fn entries_are_updated() {
         setup();
         for _ in 0..10 {
-            let path = "./test_results/entries-updated";
+            let path = "/tmp/test_results/entries-updated";
             let e = init_engine(path, M);
             let n = 10;
             let points = gen_rand_vecs(128, n);
@@ -784,7 +790,7 @@ mod tests {
         let mut total = 0;
         let n = 10;
         for _ in 0..100 {
-            let path = "./test_results/one-dim-acc";
+            let path = "/tmp/test_results/one-dim-acc";
             let e = init_engine(path, 128);
             let points = gen_rand_vecs(1, 100);
             e.insert(&points).unwrap();
@@ -800,8 +806,8 @@ mod tests {
             let nearest_to_max: HashSet<INT> =
                 HashSet::from_iter(points_ids.iter().rev().map(|(id, _)| *id).take(n));
 
-            let min_res = HashSet::from_iter(e.ann(&min, n, 100).unwrap().iter().copied());
-            let max_res = HashSet::from_iter(e.ann(&max, n, 100).unwrap().iter().copied());
+            let min_res = HashSet::from_iter(e.ann(&vec![min], n, 100).unwrap()[0].iter().copied());
+            let max_res = HashSet::from_iter(e.ann(&vec![max], n, 100).unwrap()[0].iter().copied());
             misses += min_res.difference(&nearest_to_min).count();
             misses += max_res.difference(&nearest_to_max).count();
             total += n * 2;
@@ -842,19 +848,27 @@ mod tests {
     #[test]
     fn glove_accuracy() {
         setup();
-        let path = "./test_results/glove-test";
+        let path = "/tmp/test_results/glove-test";
         let e = init_engine(path, 24);
         let (stored, queries) = get_glove_data();
         e.insert(&stored).unwrap();
 
         let queries_nn = get_actual_nn(&queries, &e);
         let mut total_hits = 0;
-        for (query, query_true_nn) in queries.iter().zip(queries_nn.iter()) {
-            let query_ann = e.ann(query, 10, 100).unwrap().iter().copied().collect();
+        let mut total_reqs = 0;
+
+        for (query_ann, query_true_nn) in e
+            .ann(&queries, 10, 12)
+            .unwrap()
+            .iter()
+            .zip(queries_nn.iter())
+        {
+            let query_ann = query_ann.iter().copied().collect();
             let hits = query_true_nn.intersection(&query_ann).count();
+            total_reqs += query_true_nn.len();
             total_hits += hits;
         }
-        let final_acc = total_hits as f32 / (queries.len() * 10) as f32;
+        let final_acc = total_hits as f32 / total_reqs as f32;
         println!("Final accuracy was {final_acc}");
         assert!(final_acc > 0.95);
         remove_dir_all(path).unwrap();

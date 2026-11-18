@@ -1,5 +1,5 @@
 pub mod engine;
-mod helpers;
+pub mod helpers;
 mod hnsw;
 pub mod index;
 mod manifest;
